@@ -568,6 +568,9 @@ func (c *outboundCall) sipSignal(ctx context.Context) error {
 	if err = c.media.SetConfig(mc); err != nil {
 		return err
 	}
+	if err := c.lkRoom.EnableVideo(c.media, mc.Video); err != nil {
+		return err
+	}
 
 	c.c.cmu.Lock()
 	c.c.byRemote[c.cc.Tag()] = c

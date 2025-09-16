@@ -765,6 +765,9 @@ func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncrypt
 	if err = c.media.SetConfig(mconf); err != nil {
 		return nil, err
 	}
+	if err := c.lkRoom.EnableVideo(c.media, mconf.Video); err != nil {
+		return nil, err
+	}
 	if mconf.Audio.DTMFType != 0 {
 		c.media.HandleDTMF(c.handleDTMF)
 	}

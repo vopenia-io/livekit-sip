@@ -62,6 +62,7 @@ type Room struct {
 	roomLog    logger.Logger // deferred logger
 	room       *lksdk.Room
 	mix        *mixer.Mixer
+	video      *videoBridge
 	out        *msdk.SwitchWriter
 	outDtmf    atomic.Pointer[dtmf.Writer]
 	p          ParticipantInfo
@@ -160,16 +161,26 @@ func (r *Room) participantLeft(rp *lksdk.RemoteParticipant) {
 
 func (r *Room) subscribeTo(pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
 	log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID(), "trackID", pub.SID(), "trackName", pub.Name())
-	if pub.Kind() != lksdk.TrackKindAudio {
-		log.Debugw("skipping non-audio track")
-		return
+	switch pub.Kind() {
+	case lksdk.TrackKindAudio:
+		log.Debugw("subscribing to audio track")
+		if err := pub.SetSubscribed(true); err != nil {
+			log.Errorw("cannot subscribe to the track", err)
+			return
+		}
+		r.subscribed.Break()
+	case lksdk.TrackKindVideo:
+		if r.video == nil || r.video.conf == nil || !r.video.conf.Direction.Recv {
+			log.Debugw("skipping video track - bridge disabled")
+			return
+		}
+		log.Debugw("subscribing to video track")
+		if err := pub.SetSubscribed(true); err != nil {
+			log.Errorw("cannot subscribe to the track", err)
+		}
+	default:
+		log.Debugw("skipping unsupported track kind")
 	}
-	log.Debugw("subscribing to a track")
-	if err := pub.SetSubscribed(true); err != nil {
-		log.Errorw("cannot subscribe to the track", err)
-		return
-	}
-	r.subscribed.Break()
 }
 
 func (r *Room) Connect(conf *config.Config, rconf RoomConfig) error {
@@ -209,34 +220,46 @@ func (r *Room) Connect(conf *config.Config, rconf RoomConfig) error {
 					log.Warnw("ignoring track, room not ready", nil)
 					return
 				}
-				log.Infow("mixing track")
+				switch track.Kind() {
+				case webrtc.RTPCodecTypeAudio:
+					log.Infow("mixing audio track")
 
-				go func() {
-					mTrack := r.NewTrack()
-					if mTrack == nil {
-						return // closed
-					}
-					defer mTrack.Close()
+					go func() {
+						mTrack := r.NewTrack()
+						if mTrack == nil {
+							return // closed
+						}
+						defer mTrack.Close()
 
-					in := newRTPReaderCount(track, &r.stats.InputPackets, &r.stats.InputBytes)
-					out := newMediaWriterCount(mTrack, &r.stats.MixerFrames, &r.stats.MixerSamples)
+						in := newRTPReaderCount(track, &r.stats.InputPackets, &r.stats.InputBytes)
+						out := newMediaWriterCount(mTrack, &r.stats.MixerFrames, &r.stats.MixerSamples)
 
-					odec, err := opus.Decode(out, channels, log)
-					if err != nil {
-						log.Errorw("cannot create opus decoder", err)
+						odec, err := opus.Decode(out, channels, log)
+						if err != nil {
+							log.Errorw("cannot create opus decoder", err)
+							return
+						}
+						defer odec.Close()
+
+						var h rtp.HandlerCloser = rtp.NewNopCloser(rtp.NewMediaStreamIn[opus.Sample](odec))
+						if conf.EnableJitterBuffer {
+							h = rtp.HandleJitter(h)
+						}
+						err = rtp.HandleLoop(in, h)
+						if err != nil && !errors.Is(err, io.EOF) {
+							log.Infow("room track rtp handler returned with failure", "error", err)
+						}
+					}()
+				case webrtc.RTPCodecTypeVideo:
+					if r.video == nil {
+						log.Debugw("no video bridge configured, skipping track")
 						return
 					}
-					defer odec.Close()
-
-					var h rtp.HandlerCloser = rtp.NewNopCloser(rtp.NewMediaStreamIn[opus.Sample](odec))
-					if conf.EnableJitterBuffer {
-						h = rtp.HandleJitter(h)
-					}
-					err = rtp.HandleLoop(in, h)
-					if err != nil && !errors.Is(err, io.EOF) {
-						log.Infow("room track rtp handler returned with failure", "error", err)
-					}
-				}()
+					log.Infow("forwarding video track")
+					r.video.handleRemoteTrack(track, pub, rp)
+				default:
+					log.Debugw("ignoring unsupported track", "kind", track.Kind())
+				}
 			},
 			OnDataPacket: func(data lksdk.DataPacket, params lksdk.DataReceiveParams) {
 				switch data := data.(type) {
@@ -355,6 +378,31 @@ func (r *Room) SetDTMFOutput(w dtmf.Writer) {
 	r.outDtmf.Store(&w)
 }
 
+func (r *Room) EnableVideo(media *MediaPort, conf *VideoConfig) error {
+	if r == nil {
+		if media != nil {
+			media.SetVideoHandler(nil)
+		}
+		return nil
+	}
+	if r.video != nil {
+		r.video.Close()
+		r.video = nil
+	}
+	if media == nil || conf == nil {
+		if media != nil {
+			media.SetVideoHandler(nil)
+		}
+		return nil
+	}
+	vb, err := newVideoBridge(r, media, conf)
+	if err != nil {
+		return err
+	}
+	r.video = vb
+	return nil
+}
+
 func (r *Room) sendDTMF(msg *livekit.SipDTMF) {
 	outDTMF := r.outDtmf.Load()
 	if outDTMF == nil {
@@ -384,6 +432,10 @@ func (r *Room) CloseWithReason(reason livekit.DisconnectReason) error {
 	if r.room != nil {
 		r.room.DisconnectWithReason(reason)
 		r.room = nil
+	}
+	if r.video != nil {
+		r.video.Close()
+		r.video = nil
 	}
 	if r.mix != nil {
 		r.mix.Stop()

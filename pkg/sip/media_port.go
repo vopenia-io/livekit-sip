@@ -34,6 +34,7 @@ import (
 	"github.com/livekit/media-sdk/srtp"
 	"github.com/livekit/mediatransportutil/pkg/rtcconfig"
 	"github.com/livekit/protocol/logger"
+	prtp "github.com/pion/rtp"
 
 	"github.com/livekit/sip/pkg/mixer"
 	"github.com/livekit/sip/pkg/stats"
@@ -53,6 +54,11 @@ type PortStats struct {
 
 	DTMFPackets atomic.Uint64
 	DTMFBytes   atomic.Uint64
+
+	VideoPackets    atomic.Uint64
+	VideoBytes      atomic.Uint64
+	VideoOutPackets atomic.Uint64
+	VideoOutBytes   atomic.Uint64
 }
 
 type UDPConn interface {
@@ -113,6 +119,7 @@ func (c *udpConn) Write(b []byte) (n int, err error) {
 
 type MediaConf struct {
 	sdp.MediaConfig
+	Video     *VideoConfig
 	Processor msdk.PCM16Processor
 }
 
@@ -189,6 +196,7 @@ type MediaPort struct {
 
 	mu           sync.Mutex
 	conf         *MediaConf
+	offer        *sdp.Offer
 	sess         rtp.Session
 	hnd          atomic.Pointer[rtp.HandlerCloser]
 	dtmfOutRTP   *rtp.Stream
@@ -198,7 +206,13 @@ type MediaPort struct {
 	audioOut       *msdk.SwitchWriter // LK PCM -> SIP RTP
 	audioIn        *msdk.SwitchWriter // SIP RTP -> LK PCM
 	audioInHandler rtp.Handler        // for debug only
-	dtmfIn         atomic.Pointer[func(ev dtmf.Event)]
+
+	videoOut   rtp.WriteStream
+	videoConf  *VideoConfig
+	videoIn    atomic.Pointer[rtp.HandlerCloser]
+	videoOffer []videoCodecOffer
+
+	dtmfIn atomic.Pointer[func(ev dtmf.Event)]
 }
 
 func (p *MediaPort) DisableOut() {
@@ -298,6 +312,14 @@ func (p *MediaPort) Close() {
 			p.dtmfOutAudio = nil
 		}
 		p.dtmfIn.Store(nil)
+		prevVideo := p.videoIn.Swap(nil)
+		if prevVideo != nil && *prevVideo != nil {
+			(*prevVideo).Close()
+		}
+		p.videoOut = nil
+		p.videoConf = nil
+		p.videoOffer = nil
+		p.offer = nil
 		if p.sess != nil {
 			_ = p.sess.Close()
 		}
@@ -345,7 +367,21 @@ func (p *MediaPort) GetAudioWriter() msdk.PCM16Writer {
 
 // NewOffer generates an SDP offer for the media.
 func (p *MediaPort) NewOffer(encrypted sdp.Encryption) (*sdp.Offer, error) {
-	return sdp.NewOffer(p.externalIP, p.Port(), encrypted)
+	offer, err := sdp.NewOffer(p.externalIP, p.Port(), encrypted)
+	if err != nil {
+		return nil, err
+	}
+	p.offer = offer
+	p.videoOffer = nil
+
+	cryptoProfiles := offer.MediaDesc.CryptoProfiles
+	encryptedVideo := encrypted != sdp.EncryptionNone && len(cryptoProfiles) > 0
+	offers, video := offerVideoDescription(p.Port(), cryptoProfiles, encryptedVideo)
+	if video != nil {
+		offer.SDP.MediaDescriptions = append(offer.SDP.MediaDescriptions, video)
+		p.videoOffer = offers
+	}
+	return offer, nil
 }
 
 // SetAnswer decodes and applies SDP answer for offer from NewOffer. SetConfig must be called with the decoded configuration.
@@ -354,11 +390,36 @@ func (p *MediaPort) SetAnswer(offer *sdp.Offer, answerData []byte, enc sdp.Encry
 	if err != nil {
 		return nil, err
 	}
-	mc, err := answer.Apply(offer, enc)
+	audio, err := sdp.SelectAudio(answer.MediaDesc, true)
 	if err != nil {
 		return nil, err
 	}
-	return &MediaConf{MediaConfig: *mc}, nil
+
+	var sconf *srtp.Config
+	if enc != sdp.EncryptionNone {
+		sconf, _, err = sdp.SelectCrypto(offer.CryptoProfiles, answer.MediaDesc.CryptoProfiles, false)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if sconf == nil && enc == sdp.EncryptionRequire {
+		return nil, sdp.ErrNoCommonCrypto
+	}
+
+	conf := &MediaConf{MediaConfig: sdp.MediaConfig{
+		Local:  offer.Addr,
+		Remote: answer.Addr,
+		Audio:  *audio,
+		Crypto: sconf,
+	}}
+
+	if md := findVideoDescription(&answer.SDP); md != nil {
+		if cfg := mapVideoAnswer(md, p.videoOffer); cfg != nil {
+			conf.Video = cfg
+		}
+	}
+
+	return conf, nil
 }
 
 // SetOffer decodes the offer from another party and returns encoded answer. To accept the offer, call SetConfig.
@@ -367,11 +428,83 @@ func (p *MediaPort) SetOffer(offerData []byte, enc sdp.Encryption) (*sdp.Answer,
 	if err != nil {
 		return nil, nil, err
 	}
-	answer, mc, err := offer.Answer(p.externalIP, p.Port(), enc)
+	p.videoOffer = nil
+	audio, err := sdp.SelectAudio(offer.MediaDesc, false)
 	if err != nil {
 		return nil, nil, err
 	}
-	return answer, &MediaConf{MediaConfig: *mc}, nil
+
+	var (
+		sconf          *srtp.Config
+		sprof          *srtp.Profile
+		answerProfiles []srtp.Profile
+	)
+	if len(offer.CryptoProfiles) != 0 && enc != sdp.EncryptionNone {
+		answerProfiles, err = srtp.DefaultProfiles()
+		if err != nil {
+			return nil, nil, err
+		}
+		sconf, sprof, err = sdp.SelectCrypto(offer.CryptoProfiles, answerProfiles, true)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	if sprof == nil && enc == sdp.EncryptionRequire {
+		return nil, nil, sdp.ErrNoCommonCrypto
+	}
+
+	port := p.Port()
+	audioAnswer := sdp.AnswerMedia(port, audio, sprof)
+
+	encryptedVideo := enc != sdp.EncryptionNone && len(answerProfiles) > 0
+	answerSDP := sdp.SessionDescription{
+		Version: 0,
+		Origin: sdp.Origin{
+			Username:       "-",
+			SessionID:      offer.SDP.Origin.SessionID,
+			SessionVersion: offer.SDP.Origin.SessionID + 2,
+			NetworkType:    "IN",
+			AddressType:    "IP4",
+			UnicastAddress: p.externalIP.String(),
+		},
+		SessionName: "LiveKit",
+		ConnectionInformation: &sdp.ConnectionInformation{
+			NetworkType: "IN",
+			AddressType: "IP4",
+			Address:     &sdp.Address{Address: p.externalIP.String()},
+		},
+		TimeDescriptions:  []sdp.TimeDescription{{Timing: sdp.Timing{StartTime: 0, StopTime: 0}}},
+		MediaDescriptions: []*sdp.MediaDescription{audioAnswer},
+	}
+
+	var videoConf *VideoConfig
+	if md := findVideoDescription(&offer.SDP); md != nil {
+		if cfg, ok := parseVideoOffer(md); ok {
+			videoConf = cfg
+			if desc := answerVideoDescription(port, cfg, answerProfiles, encryptedVideo); desc != nil {
+				answerSDP.MediaDescriptions = append(answerSDP.MediaDescriptions, desc)
+			}
+		}
+	}
+
+	answer := &sdp.Answer{
+		SDP:  answerSDP,
+		Addr: netip.AddrPortFrom(p.externalIP, uint16(port)),
+		MediaDesc: sdp.MediaDesc{
+			Codecs:         []sdp.CodecInfo{{Type: audio.Type, Codec: audio.Codec}},
+			DTMFType:       audio.DTMFType,
+			CryptoProfiles: answerProfiles,
+		},
+	}
+
+	conf := &MediaConf{MediaConfig: sdp.MediaConfig{
+		Local:  netip.AddrPortFrom(p.externalIP, uint16(port)),
+		Remote: offer.Addr,
+		Audio:  *audio,
+		Crypto: sconf,
+	}, Video: videoConf}
+
+	return answer, conf, nil
 }
 
 func (p *MediaPort) SetConfig(c *MediaConf) error {
@@ -387,6 +520,14 @@ func (p *MediaPort) SetConfig(c *MediaConf) error {
 		"dtmf-rtp", c.Audio.DTMFType,
 		"srtp", crypto,
 	)
+	if vc := c.Video; vc != nil {
+		p.log.Infow("using video codec",
+			"video-codec", vc.CodecName,
+			"video-rtp", vc.Type,
+			"video-direction-send", vc.Direction.Send,
+			"video-direction-recv", vc.Direction.Recv,
+		)
+	}
 
 	p.port.SetDst(c.Remote)
 	var (
@@ -406,6 +547,7 @@ func (p *MediaPort) SetConfig(c *MediaConf) error {
 	defer p.mu.Unlock()
 	p.port.SetDst(c.Remote)
 	p.conf = c
+	p.videoConf = c.Video
 	p.sess = sess
 
 	if err = p.setupOutput(); err != nil {
@@ -529,6 +671,12 @@ func (p *MediaPort) setupOutput() error {
 	if w := p.audioOut.Swap(audioOut); w != nil {
 		_ = w.Close()
 	}
+
+	if vc := p.videoConf; vc != nil && vc.Direction.Recv {
+		p.videoOut = newRTPStatsWriter(p.mon, "video", w)
+	} else {
+		p.videoOut = nil
+	}
 	return nil
 }
 
@@ -563,6 +711,30 @@ func (p *MediaPort) setupInput() {
 			),
 		)
 	}
+	if vc := p.videoConf; vc != nil && vc.Direction.Send {
+		statsName := strings.ToLower(vc.CodecName)
+		mux.Register(
+			vc.Type, newRTPHandlerCount(
+				newRTPStatsHandler(p.mon, statsName, rtp.HandlerFunc(func(h *rtp.Header, payload []byte) error {
+					ptr := p.videoIn.Load()
+					if ptr == nil {
+						return nil
+					}
+					hnd := *ptr
+					if hnd == nil {
+						return nil
+					}
+					return hnd.HandleRTP(h, payload)
+				})),
+				&p.stats.VideoPackets, &p.stats.VideoBytes,
+			),
+		)
+	} else {
+		prev := p.videoIn.Swap(nil)
+		if prev != nil && *prev != nil {
+			(*prev).Close()
+		}
+	}
 	var hnd rtp.HandlerCloser = rtp.NewNopCloser(newRTPHandlerCount(mux, &p.stats.MuxPackets, &p.stats.MuxBytes))
 	if p.jitterEnabled {
 		hnd = rtp.HandleJitter(hnd)
@@ -582,6 +754,67 @@ func (p *MediaPort) HandleDTMF(h func(ev dtmf.Event)) {
 	} else {
 		p.dtmfIn.Store(&h)
 	}
+}
+
+func (p *MediaPort) SetVideoHandler(h rtp.HandlerCloser) {
+	if p == nil {
+		if h != nil {
+			h.Close()
+		}
+		return
+	}
+	p.mu.Lock()
+	vc := p.videoConf
+	p.mu.Unlock()
+	if vc == nil || !vc.Direction.Send {
+		if h != nil {
+			h.Close()
+		}
+		prev := p.videoIn.Swap(nil)
+		if prev != nil && *prev != nil {
+			(*prev).Close()
+		}
+		return
+	}
+	if h == nil {
+		prev := p.videoIn.Swap(nil)
+		if prev != nil && *prev != nil {
+			(*prev).Close()
+		}
+		return
+	}
+	ptr := &h
+	prev := p.videoIn.Swap(ptr)
+	if prev != nil && *prev != nil {
+		(*prev).Close()
+	}
+}
+
+func (p *MediaPort) WriteVideoRTP(h *prtp.Header, payload []byte) error {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	writer := p.videoOut
+	vc := p.videoConf
+	p.mu.Unlock()
+	if writer == nil || vc == nil || !vc.Direction.Recv {
+		return nil
+	}
+	header := *h
+	header.PayloadType = vc.Type
+	if _, err := writer.WriteRTP(&header, payload); err != nil {
+		return err
+	}
+	p.stats.VideoOutPackets.Add(1)
+	p.stats.VideoOutBytes.Add(uint64(len(payload)))
+	return nil
+}
+
+func (p *MediaPort) VideoConfig() *VideoConfig {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.videoConf
 }
 
 func (p *MediaPort) WriteDTMF(ctx context.Context, digits string) error {

@@ -56,6 +56,11 @@ type PortStatsSnapshot struct {
 
 	DTMFPackets uint64 `json:"dtmf_packets"`
 	DTMFBytes   uint64 `json:"dtmf_bytes"`
+
+	VideoPackets    uint64 `json:"video_packets"`
+	VideoBytes      uint64 `json:"video_bytes"`
+	VideoOutPackets uint64 `json:"video_packets_out"`
+	VideoOutBytes   uint64 `json:"video_bytes_out"`
 }
 
 type RoomStatsSnapshot struct {
@@ -95,16 +100,20 @@ func (s *Stats) Load() StatsSnapshot {
 	m := &r.Mixer
 	return StatsSnapshot{
 		Port: PortStatsSnapshot{
-			Streams:        p.Streams.Load(),
-			Packets:        p.Packets.Load(),
-			IgnoredPackets: p.IgnoredPackets.Load(),
-			InputPackets:   p.InputPackets.Load(),
-			MuxPackets:     p.MuxPackets.Load(),
-			MuxBytes:       p.MuxBytes.Load(),
-			AudioPackets:   p.AudioPackets.Load(),
-			AudioBytes:     p.AudioBytes.Load(),
-			DTMFPackets:    p.DTMFPackets.Load(),
-			DTMFBytes:      p.DTMFBytes.Load(),
+			Streams:         p.Streams.Load(),
+			Packets:         p.Packets.Load(),
+			IgnoredPackets:  p.IgnoredPackets.Load(),
+			InputPackets:    p.InputPackets.Load(),
+			MuxPackets:      p.MuxPackets.Load(),
+			MuxBytes:        p.MuxBytes.Load(),
+			AudioPackets:    p.AudioPackets.Load(),
+			AudioBytes:      p.AudioBytes.Load(),
+			DTMFPackets:     p.DTMFPackets.Load(),
+			DTMFBytes:       p.DTMFBytes.Load(),
+			VideoPackets:    p.VideoPackets.Load(),
+			VideoBytes:      p.VideoBytes.Load(),
+			VideoOutPackets: p.VideoOutPackets.Load(),
+			VideoOutBytes:   p.VideoOutBytes.Load(),
 		},
 		Room: RoomStatsSnapshot{
 			InputPackets:  r.InputPackets.Load(),
