@@ -35,6 +35,7 @@ import (
 	"github.com/livekit/mediatransportutil/pkg/rtcconfig"
 	"github.com/livekit/protocol/logger"
 	prtp "github.com/pion/rtp"
+	psdp "github.com/pion/sdp/v3"
 
 	"github.com/livekit/sip/pkg/mixer"
 	"github.com/livekit/sip/pkg/stats"
@@ -352,9 +353,22 @@ func (p *MediaPort) Config() *MediaConf {
 
 // WriteAudioTo sets audio writer that will receive decoded PCM from incoming RTP packets.
 func (p *MediaPort) WriteAudioTo(w msdk.PCM16Writer) {
-	if processor := p.conf.Processor; processor != nil {
-		w = processor(w)
+	if p == nil {
+		return
 	}
+
+	var processor msdk.PCM16Processor
+	if w != nil {
+		p.mu.Lock()
+		if p.conf != nil {
+			processor = p.conf.Processor
+		}
+		p.mu.Unlock()
+		if processor != nil {
+			w = processor(w)
+		}
+	}
+
 	if pw := p.audioIn.Swap(w); pw != nil {
 		_ = pw.Close()
 	}
@@ -457,9 +471,9 @@ func (p *MediaPort) SetOffer(offerData []byte, enc sdp.Encryption) (*sdp.Answer,
 	audioAnswer := sdp.AnswerMedia(port, audio, sprof)
 
 	encryptedVideo := enc != sdp.EncryptionNone && len(answerProfiles) > 0
-	answerSDP := sdp.SessionDescription{
+	answerSDP := psdp.SessionDescription{
 		Version: 0,
-		Origin: sdp.Origin{
+		Origin: psdp.Origin{
 			Username:       "-",
 			SessionID:      offer.SDP.Origin.SessionID,
 			SessionVersion: offer.SDP.Origin.SessionID + 2,
@@ -468,13 +482,13 @@ func (p *MediaPort) SetOffer(offerData []byte, enc sdp.Encryption) (*sdp.Answer,
 			UnicastAddress: p.externalIP.String(),
 		},
 		SessionName: "LiveKit",
-		ConnectionInformation: &sdp.ConnectionInformation{
+		ConnectionInformation: &psdp.ConnectionInformation{
 			NetworkType: "IN",
 			AddressType: "IP4",
-			Address:     &sdp.Address{Address: p.externalIP.String()},
+			Address:     &psdp.Address{Address: p.externalIP.String()},
 		},
-		TimeDescriptions:  []sdp.TimeDescription{{Timing: sdp.Timing{StartTime: 0, StopTime: 0}}},
-		MediaDescriptions: []*sdp.MediaDescription{audioAnswer},
+		TimeDescriptions:  []psdp.TimeDescription{{Timing: psdp.Timing{StartTime: 0, StopTime: 0}}},
+		MediaDescriptions: []*psdp.MediaDescription{audioAnswer},
 	}
 
 	var videoConf *VideoConfig
@@ -596,13 +610,14 @@ func (p *MediaPort) rtpReadLoop(log logger.Logger, r rtp.ReadStream) {
 		p.packetCount.Add(1)
 		p.stats.Packets.Add(1)
 		if n > rtp.MTUSize {
-			overflow = true
 			if !overflow {
 				log.Errorw("RTP packet is larger than MTU limit", nil, "payloadSize", n)
+				overflow = true
 			}
 			p.stats.IgnoredPackets.Add(1)
 			continue // ignore partial messages
 		}
+		overflow = false
 
 		ptr := p.hnd.Load()
 		if ptr == nil {
