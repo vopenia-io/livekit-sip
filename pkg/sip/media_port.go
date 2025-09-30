@@ -39,6 +39,22 @@ import (
 	"github.com/livekit/sip/pkg/stats"
 )
 
+// VideoFrame represents a video frame that implements the BytesFrame interface.
+type VideoFrame []byte
+
+// CopyTo implements the Frame interface.
+func (v VideoFrame) CopyTo(dst []byte) (int, error) {
+	if len(dst) < len(v) {
+		return 0, io.ErrShortBuffer
+	}
+	return copy(dst, v), nil
+}
+
+// Size returns the size of the frame in bytes.
+func (v VideoFrame) Size() int {
+	return len(v)
+}
+
 const (
 	defaultMediaTimeout        = 15 * time.Second
 	defaultMediaTimeoutInitial = 30 * time.Second
@@ -55,6 +71,9 @@ type PortStats struct {
 
 	AudioPackets atomic.Uint64
 	AudioBytes   atomic.Uint64
+
+	VideoPackets atomic.Uint64
+	VideoBytes   atomic.Uint64
 
 	DTMFPackets atomic.Uint64
 	DTMFBytes   atomic.Uint64
@@ -119,6 +138,13 @@ func (c *udpConn) Write(b []byte) (n int, err error) {
 type MediaConf struct {
 	sdp.MediaConfig
 	Processor msdk.PCM16Processor
+	Video     *VideoConfig
+}
+
+// VideoConfig represents video configuration for SIP media.
+type VideoConfig struct {
+	Codec msdk.Codec
+	Type  byte
 }
 
 type MediaOptions struct {
@@ -208,6 +234,12 @@ type MediaPort struct {
 	audioIn        *msdk.SwitchWriter // SIP RTP -> LK PCM
 	audioInHandler rtp.Handler        // for debug only
 	dtmfIn         atomic.Pointer[func(ev dtmf.Event)]
+
+	// Video support
+	videoOutRTP    *rtp.Stream
+	videoOut       msdk.Writer[VideoFrame] // LK Video -> SIP RTP
+	videoIn        msdk.Writer[VideoFrame] // SIP RTP -> LK Video
+	videoInHandler rtp.Handler             // for debug only
 }
 
 func (p *MediaPort) DisableOut() {
@@ -333,8 +365,22 @@ func (p *MediaPort) Close() {
 		if w := p.audioIn.Swap(nil); w != nil {
 			_ = w.Close()
 		}
+		if p.videoOut != nil {
+			if closer, ok := p.videoOut.(msdk.WriteCloser[VideoFrame]); ok {
+				_ = closer.Close()
+			}
+			p.videoOut = nil
+		}
+		if p.videoIn != nil {
+			if closer, ok := p.videoIn.(msdk.WriteCloser[VideoFrame]); ok {
+				_ = closer.Close()
+			}
+			p.videoIn = nil
+		}
 		p.audioOutRTP = nil
 		p.audioInHandler = nil
+		p.videoOutRTP = nil
+		p.videoInHandler = nil
 		p.dtmfOutRTP = nil
 		if p.dtmfOutAudio != nil {
 			p.dtmfOutAudio.Close()
@@ -386,9 +432,36 @@ func (p *MediaPort) GetAudioWriter() msdk.PCM16Writer {
 	return p.audioOut
 }
 
+// WriteVideoTo sets video writer that will receive decoded video from incoming RTP packets.
+func (p *MediaPort) WriteVideoTo(w msdk.Writer[VideoFrame]) {
+	p.videoIn = w
+}
+
+// GetVideoWriter returns video writer that will send video to the destination via RTP.
+func (p *MediaPort) GetVideoWriter() msdk.Writer[VideoFrame] {
+	return p.videoOut
+}
+
 // NewOffer generates an SDP offer for the media.
 func (p *MediaPort) NewOffer(encrypted sdp.Encryption) (*sdp.Offer, error) {
 	return sdp.NewOffer(p.externalIP, p.Port(), encrypted)
+}
+
+// NewOfferWithVideo generates an SDP offer for both audio and video media.
+func (p *MediaPort) NewOfferWithVideo(encrypted sdp.Encryption) (*sdp.Offer, *VideoMediaDesc, error) {
+	// For now, just return audio-only offer
+	// TODO: Implement proper video SDP generation
+	offer, err := sdp.NewOffer(p.externalIP, p.Port(), encrypted)
+	if err != nil {
+		return nil, nil, err
+	}
+	return offer, &VideoMediaDesc{}, nil
+}
+
+// VideoMediaDesc represents video media description for SDP.
+type VideoMediaDesc struct {
+	Codecs         []sdp.CodecInfo
+	CryptoProfiles []srtp.Profile
 }
 
 // SetAnswer decodes and applies SDP answer for offer from NewOffer. SetConfig must be called with the decoded configuration.
@@ -558,6 +631,14 @@ func (p *MediaPort) setupOutput() error {
 	// Encoding pipeline (LK PCM -> SIP RTP)
 	audioOut := p.conf.Audio.Codec.EncodeRTP(p.audioOutRTP)
 
+	// Setup video output if video is configured
+	if p.conf.Video != nil {
+		p.videoOutRTP = s.NewStream(p.conf.Video.Type, p.conf.Video.Codec.Info().RTPClockRate)
+		// For now, we'll use a simple pass-through for video
+		// In a real implementation, you'd want proper H.264 encoding
+		p.videoOut = rtp.NewMediaStreamOut[VideoFrame](p.videoOutRTP, int(rtp.DefFrameDur))
+	}
+
 	if p.conf.Audio.DTMFType != 0 {
 		p.dtmfOutRTP = s.NewStream(p.conf.Audio.DTMFType, dtmf.SampleRate)
 		if p.dtmfAudioEnabled {
@@ -591,6 +672,20 @@ func (p *MediaPort) setupInput() {
 			&p.stats.AudioPackets, &p.stats.AudioBytes,
 		),
 	)
+
+	// Setup video input if video is configured
+	if p.conf.Video != nil && p.videoIn != nil {
+		// For now, we'll use a simple pass-through for video
+		// In a real implementation, you'd want proper H.264 decoding
+		videoHandler := rtp.NewMediaStreamIn[VideoFrame](p.videoIn)
+		p.videoInHandler = videoHandler
+		mux.Register(
+			p.conf.Video.Type, newRTPHandlerCount(
+				newRTPStatsHandler(p.mon, p.conf.Video.Codec.Info().SDPName, videoHandler),
+				&p.stats.VideoPackets, &p.stats.VideoBytes,
+			),
+		)
+	}
 	if p.conf.Audio.DTMFType != 0 {
 		mux.Register(
 			p.conf.Audio.DTMFType, newRTPHandlerCount(
