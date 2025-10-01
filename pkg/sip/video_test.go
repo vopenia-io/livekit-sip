@@ -16,6 +16,8 @@ package sip
 
 import (
 	"testing"
+
+	"github.com/livekit/media-sdk/sdp"
 )
 
 func TestVideoFrame(t *testing.T) {
@@ -68,7 +70,7 @@ func TestVideoConfig(t *testing.T) {
 }
 
 func TestVideoMediaDesc(t *testing.T) {
-	desc := &VideoMediaDesc{}
+	desc := &sdp.VideoMediaDesc{}
 
 	if desc.Codecs == nil {
 		t.Error("Expected non-nil Codecs slice")

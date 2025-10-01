@@ -844,6 +844,7 @@ func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncrypt
 		Stats:               &c.stats.Port,
 	}, RoomSampleRate)
 	if err != nil {
+		c.log.Errorw("Cannot create media port", err)
 		return nil, err
 	}
 	c.media = mp
@@ -853,10 +854,12 @@ func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncrypt
 
 	answer, mconf, err := mp.SetOffer(offerData, e)
 	if err != nil {
+		c.log.Errorw("Cannot set SDP offer", err)
 		return nil, err
 	}
 	answerData, err = answer.SDP.Marshal()
 	if err != nil {
+		c.log.Errorw("Cannot marshal SDP answer", err)
 		return nil, err
 	}
 	c.mon.SDPSize(len(answerData), false)
@@ -864,6 +867,7 @@ func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncrypt
 
 	mconf.Processor = c.s.handler.GetMediaProcessor(features)
 	if err = c.media.SetConfig(mconf); err != nil {
+		c.log.Errorw("Cannot set media config", err)
 		return nil, err
 	}
 	if mconf.Audio.DTMFType != 0 {

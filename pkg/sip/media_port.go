@@ -629,7 +629,7 @@ func (p *MediaPort) setupOutput() error {
 	p.audioOutRTP = s.NewStream(p.conf.Audio.Type, p.conf.Audio.Codec.Info().RTPClockRate)
 
 	// Encoding pipeline (LK PCM -> SIP RTP)
-	audioOut := p.conf.Audio.Codec.EncodeRTP(p.audioOutRTP)
+	audioOut := p.conf.Audio.Codec.(rtp.AudioCodec).EncodeRTP(p.audioOutRTP)
 
 	// Setup video output if video is configured
 	if p.conf.Video != nil {
@@ -661,7 +661,7 @@ func (p *MediaPort) setupOutput() error {
 
 func (p *MediaPort) setupInput() {
 	// Decoding pipeline (SIP RTP -> LK PCM)
-	audioHandler := p.conf.Audio.Codec.DecodeRTP(p.audioIn, p.conf.Audio.Type)
+	audioHandler := p.conf.Audio.Codec.(rtp.AudioCodec).DecodeRTP(p.audioIn, p.conf.Audio.Type)
 	p.audioInHandler = audioHandler
 
 	mux := rtp.NewMux(nil)
