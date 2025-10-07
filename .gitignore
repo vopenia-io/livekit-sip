@@ -5,3 +5,10 @@ cmd/server/server
 
 test/config.yaml
 test/*/*.mkv
+
+livekit-sip
+main
+
+go.work
+go.work.sum
+*.log

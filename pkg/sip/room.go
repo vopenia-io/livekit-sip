@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"sync/atomic"
 
 	"github.com/frostbyte73/core"
@@ -73,7 +74,7 @@ type Room struct {
 	stats      *RoomStats
 
 	// Video support
-	videoOut atomic.Pointer[msdk.Writer[VideoFrame]]
+	videoOut *msdk.FrameSwitchWriter
 }
 
 type ParticipantConfig struct {
@@ -97,7 +98,7 @@ func NewRoom(log logger.Logger, st *RoomStats) *Room {
 	if st == nil {
 		st = &RoomStats{}
 	}
-	r := &Room{log: log, stats: st, out: msdk.NewSwitchWriter(RoomSampleRate)}
+	r := &Room{log: log, stats: st, out: msdk.NewSwitchWriter(RoomSampleRate), videoOut: msdk.NewFrameSwitchWriter(90000)}
 	out := newMediaWriterCount(r.out, &st.OutputFrames, &st.OutputSamples)
 
 	var err error
@@ -222,9 +223,10 @@ func (r *Room) Connect(conf *config.Config, rconf RoomConfig) error {
 				go func() {
 					if pub.Kind() == lksdk.TrackKindAudio {
 						r.handleAudioTrack(track, pub, rp, log, conf)
-					} else if pub.Kind() == lksdk.TrackKindVideo {
-						r.handleVideoTrack(track, pub, rp, log, conf)
 					}
+					// else if pub.Kind() == lksdk.TrackKindVideo {
+					// 	r.handleVideoTrack(track, pub, rp, log, conf)
+					// }
 				}()
 			},
 			OnDataPacket: func(data lksdk.DataPacket, params lksdk.DataReceiveParams) {
@@ -325,6 +327,13 @@ func (r *Room) SwapOutput(out msdk.PCM16Writer) msdk.PCM16Writer {
 	return r.out.Swap(msdk.ResampleWriter(out, r.mix.SampleRate()))
 }
 
+func (r *Room) SwapVideoOutput(out msdk.FrameWriter) msdk.FrameWriter {
+	if r == nil {
+		return nil
+	}
+	return r.videoOut.Swap(out)
+}
+
 func (r *Room) CloseOutput() error {
 	w := r.SwapOutput(nil)
 	if w == nil {
@@ -344,29 +353,29 @@ func (r *Room) SetDTMFOutput(w dtmf.Writer) {
 	r.outDtmf.Store(&w)
 }
 
-// SetVideoOutput sets the video output writer for the room.
-func (r *Room) SetVideoOutput(w msdk.Writer[VideoFrame]) {
-	if r == nil {
-		return
-	}
-	if w == nil {
-		r.videoOut.Store(nil)
-		return
-	}
-	r.videoOut.Store(&w)
-}
+// // SetVideoOutput sets the video output writer for the room.
+// func (r *Room) SetVideoOutput(w msdk.Writer[VideoFrame]) {
+// 	if r == nil {
+// 		return
+// 	}
+// 	if w == nil {
+// 		r.videoOut.Store(nil)
+// 		return
+// 	}
+// 	r.videoOut.Store(&w)
+// }
 
-// GetVideoOutput returns the current video output writer.
-func (r *Room) GetVideoOutput() msdk.Writer[VideoFrame] {
-	if r == nil {
-		return nil
-	}
-	ptr := r.videoOut.Load()
-	if ptr == nil {
-		return nil
-	}
-	return *ptr
-}
+// // GetVideoOutput returns the current video output writer.
+// func (r *Room) GetVideoOutput() msdk.Writer[VideoFrame] {
+// 	if r == nil {
+// 		return nil
+// 	}
+// 	ptr := r.videoOut.Load()
+// 	if ptr == nil {
+// 		return nil
+// 	}
+// 	return *ptr
+// }
 
 func (r *Room) sendDTMF(msg *livekit.SipDTMF) {
 	outDTMF := r.outDtmf.Load()
@@ -411,6 +420,22 @@ func (r *Room) Participant() ParticipantInfo {
 	return r.p
 }
 
+func (r *Room) NewParticipantVideoTrack(sampleRate int) (msdk.WriteCloser[msdk.FrameSample], error) {
+	track, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264}, "video", "pion")
+	if err != nil {
+		return nil, err
+	}
+	p := r.room.LocalParticipant
+	slog.Info("publishing track ben lalalolo", "participant", p.Identity(), "pID", p.SID(), "trackID", track.ID())
+	if _, err = p.PublishTrack(track, &lksdk.TrackPublicationOptions{
+		Name: p.Identity(),
+	}); err != nil {
+		return nil, err
+	}
+	ow := msdk.FromSampleWriter[msdk.FrameSample](track, sampleRate, rtp.DefFrameDur)
+	return ow, nil
+}
+
 func (r *Room) NewParticipantTrack(sampleRate int) (msdk.WriteCloser[msdk.PCM16Sample], error) {
 	track, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus}, "audio", "pion")
 	if err != nil {
@@ -427,6 +452,30 @@ func (r *Room) NewParticipantTrack(sampleRate int) (msdk.WriteCloser[msdk.PCM16S
 	if err != nil {
 		return nil, err
 	}
+
+	// go func()
+	// {
+	// 	file := "/home/maxime/Downloads/output.ivf"
+	// 	videoWidth := 854
+	// 	videoHeight := 480
+	// 	track, err := lksdk.NewLocalFileTrack(file,
+	// 		// control FPS to ensure synchronization
+	// 		lksdk.ReaderTrackWithFrameDuration(33*time.Millisecond),
+	// 		lksdk.ReaderTrackWithOnWriteComplete(func() { fmt.Println("track finished") }),
+	// 	)
+	// 	if err != nil {
+	// 		panic(err)
+	// 	}
+	// 	if _, err = r.room.LocalParticipant.PublishTrack(track, &lksdk.TrackPublicationOptions{
+	// 		Name:        file,
+	// 		VideoWidth:  videoWidth,
+	// 		VideoHeight: videoHeight,
+	// 	}); err != nil {
+	// 		panic(err)
+	// 	}
+	// 	slog.Info("publishing video track lalalala", "trackID", track.ID(), "file", file, "width", videoWidth, "height", videoHeight)
+	// }
+
 	return pw, nil
 }
 
@@ -471,23 +520,47 @@ func (r *Room) handleAudioTrack(track *webrtc.TrackRemote, pub *lksdk.RemoteTrac
 	}
 }
 
-func (r *Room) handleVideoTrack(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant, log logger.Logger, conf *config.Config) {
-	videoOut := r.videoOut.Load()
-	if videoOut == nil {
-		log.Debugw("no video output set, ignoring video track")
-		return
-	}
+// func (r *Room) handleVideoTrack(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant, log logger.Logger, conf *config.Config) {
+// 	videoOut := r.videoOut.Load()
+// 	if videoOut == nil {
+// 		log.Debugw("no video output set, ignoring video track")
+// 		return
+// 	}
 
-	in := newRTPReaderCount(track, &r.stats.InputPackets, &r.stats.InputBytes)
+// 	in := newRTPReaderCount(track, &r.stats.InputPackets, &r.stats.InputBytes)
 
-	// For now, we'll use a simple pass-through for video
-	// In a real implementation, you'd want proper H.264 decoding
-	var h rtp.HandlerCloser = rtp.NewNopCloser(rtp.NewMediaStreamIn[VideoFrame](*videoOut))
-	if conf.EnableJitterBuffer {
-		h = rtp.HandleJitter(h)
-	}
-	err := rtp.HandleLoop(in, h)
-	if err != nil && !errors.Is(err, io.EOF) {
-		log.Infow("room video track rtp handler returned with failure", "error", err)
-	}
-}
+// 	// For now, we'll use a simple pass-through for video
+// 	// In a real implementation, you'd want proper H.264 decoding
+// 	var h rtp.HandlerCloser = rtp.NewNopCloser(rtp.NewMediaStreamIn[VideoFrame](*videoOut))
+// 	if conf.EnableJitterBuffer {
+// 		h = rtp.HandleJitter(h)
+// 	}
+// 	err := rtp.HandleLoop(in, h)
+// 	if err != nil && !errors.Is(err, io.EOF) {
+// 		log.Infow("room video track rtp handler returned with failure", "error", err)
+// 	}
+// }
+
+// func (r *Room) handleVideoTrack(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant, log logger.Logger, conf *config.Config) {
+// 	// mTrack := r.NewTrack()
+// 	// if mTrack == nil {
+// 	// 	return // closed
+// 	// }
+// 	// defer mTrack.Close()
+
+// 	// odec, err := opus.Decode(out, channels, log)
+// 	// if err != nil {
+// 	// 	log.Errorw("cannot create opus decoder", err)
+// 	// 	return
+// 	// }
+// 	// defer odec.Close()
+
+// 	var h rtp.HandlerCloser = rtp.NewNopCloser(rtp.NewMediaStreamIn[opus.Sample](odec))
+// 	if conf.EnableJitterBuffer {
+// 		h = rtp.HandleJitter(h)
+// 	}
+// 	err = rtp.HandleLoop(in, h)
+// 	if err != nil && !errors.Is(err, io.EOF) {
+// 		log.Infow("room track rtp handler returned with failure", "error", err)
+// 	}
+// }

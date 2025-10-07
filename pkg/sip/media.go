@@ -194,35 +194,35 @@ func (w *rtpStatsWriter) WriteRTP(h *prtp.Header, payload []byte) (int, error) {
 	return w.w.WriteRTP(h, payload)
 }
 
-func newMediaWriterCount(w msdk.PCM16Writer, frames, samples *atomic.Uint64) msdk.PCM16Writer {
-	return &mediaWriterCount{
+func newMediaWriterCount[T msdk.Frame](w msdk.WriteCloser[T], frames, samples *atomic.Uint64) msdk.WriteCloser[T] {
+	return &mediaWriterCount[T]{
 		w:       w,
 		frames:  frames,
 		samples: samples,
 	}
 }
 
-type mediaWriterCount struct {
-	w       msdk.PCM16Writer
+type mediaWriterCount[T msdk.Frame] struct {
+	w       msdk.WriteCloser[T]
 	frames  *atomic.Uint64
 	samples *atomic.Uint64
 }
 
-func (w *mediaWriterCount) String() string {
+func (w *mediaWriterCount[T]) String() string {
 	return w.w.String()
 }
 
-func (w *mediaWriterCount) SampleRate() int {
+func (w *mediaWriterCount[T]) SampleRate() int {
 	return w.w.SampleRate()
 }
 
-func (w *mediaWriterCount) Close() error {
+func (w *mediaWriterCount[T]) Close() error {
 	return w.w.Close()
 }
 
-func (w *mediaWriterCount) WriteSample(sample msdk.PCM16Sample) error {
+func (w *mediaWriterCount[T]) WriteSample(sample T) error {
 	w.frames.Add(1)
-	w.samples.Add(uint64(len(sample)))
+	w.samples.Add(uint64(sample.Size()))
 	return w.w.WriteSample(sample)
 }
 

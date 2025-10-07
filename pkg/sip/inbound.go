@@ -763,6 +763,14 @@ func (c *inboundCall) handleInvite(ctx context.Context, req *sip.Request, trunkI
 		c.close(true, callDropped, "publish-failed")
 		return errors.Wrap(err, "publishing track to room failed")
 	}
+
+	if c.media.conf.Video != nil {
+		if err := c.publishVideoTrack(); err != nil {
+			c.log.Errorw("Cannot publish video track", err)
+			c.close(true, callDropped, "publish-failed")
+			return errors.Wrap(err, "publishing video track to room failed")
+		}
+	}
 	c.lkRoom.Subscribe()
 	if !pinPrompt {
 		c.log.Infow("Waiting for track subscription(s)")
@@ -880,6 +888,13 @@ func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncrypt
 	c.state.DeferUpdate(func(info *livekit.SIPCallInfo) {
 		info.AudioCodec = mconf.Audio.Codec.Info().SDPName
 	})
+
+	if mconf.Video != nil {
+		if w := c.lkRoom.SwapVideoOutput(c.media.GetVideoWriter()); w != nil {
+			_ = w.Close()
+		}
+	}
+
 	return answerData, nil
 }
 
@@ -1132,6 +1147,16 @@ func (c *inboundCall) createLiveKitParticipant(ctx context.Context, rconf RoomCo
 	if err != nil {
 		return err
 	}
+	return nil
+}
+
+func (c *inboundCall) publishVideoTrack() error {
+	local, err := c.lkRoom.NewParticipantVideoTrack(90000)
+	if err != nil {
+		_ = c.lkRoom.Close()
+		return err
+	}
+	c.media.WriteVideoTo(local)
 	return nil
 }
 
