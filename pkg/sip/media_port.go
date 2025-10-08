@@ -716,6 +716,7 @@ func (p *MediaPort) rtpReadLoop(log logger.Logger, r rtp.ReadStream, hndp *atomi
 		errorCnt int
 	)
 	r.L().Infow("starting RTP read loop")
+	defer r.L().Infow("RTP read loop ended")
 	for {
 		h = rtp.Header{}
 		n, err := r.ReadRTP(&h, buf)
@@ -770,7 +771,7 @@ func (p *MediaPort) rtpReadLoop(log logger.Logger, r rtp.ReadStream, hndp *atomi
 			}
 			continue
 		}
-		r.L().Infow("handled RTP stream", "payloadSize", n, "rtpHeader", h)
+		// r.L().Infow("handled RTP stream", "payloadSize", n, "rtpHeader", h)
 		errorCnt = 0
 		pipeline = ""
 	}
@@ -785,8 +786,8 @@ func (p *MediaPort) setupOutput() error {
 	go p.rtpLoop(p.sess, &p.hnd)
 	if p.vsess != nil && p.conf.Video != nil {
 		slog.Info("setting up video output")
-		// go p.rtpLoop(p.vsess, &p.vhnd)
 		go p.rtpLoop(p.vsess, &p.vhnd)
+
 		// go p.rtpLoopVideo(p.vsess)
 
 		w, err := p.vsess.OpenWriteStream()
@@ -795,10 +796,16 @@ func (p *MediaPort) setupOutput() error {
 		}
 		s := rtp.NewSeqWriter(newRTPStatsWriter(p.mon, "video", w))
 
-		p.videoOutRTP = s.NewStream(p.conf.Video.Type, p.conf.Video.Codec.Info().RTPClockRate)
+		if p.conf.Video.Codec.Info().RTPClockRate != 90000 {
+			slog.Error("video codec must use 90kHz clock", "codec", p.conf.Video.Codec.Info().SDPName, "clock", p.conf.Video.Codec.Info().RTPClockRate)
+			panic("video codec must use 90kHz clock")
+		}
+
+		p.videoOutRTP = s.NewStream(p.conf.Video.Type, 90000)
 		// For now, we'll use a simple pass-through for video
 		// In a real implementation, you'd want proper H.264 encoding
 		videoOut := p.conf.Video.Codec.(rtp.VideoCodec).EncodeRTP(p.videoOutRTP)
+		//! webrtc to sip
 		if pw := p.videoOut.Swap(videoOut); pw != nil {
 			_ = pw.Close()
 		}
@@ -835,6 +842,47 @@ func (p *MediaPort) setupOutput() error {
 	return nil
 }
 
+type DebugHandler struct {
+	rtp.Handler
+	conn net.Conn
+}
+
+var _ rtp.Handler = (*DebugHandler)(nil)
+
+func NewDebugHandler(h rtp.Handler) *DebugHandler {
+	addr := "127.0.0.1:5004"
+	conn, err := net.Dial("udp", addr)
+	if err != nil {
+		panic(err)
+	}
+	return &DebugHandler{
+		Handler: h,
+		conn:    conn,
+	}
+}
+
+func (d DebugHandler) HandleRTP(h *rtp.Header, payload []byte) error {
+
+	pkt := &rtp.Packet{
+		Header:  *h,
+		Payload: payload,
+	}
+	raw, err := pkt.Marshal()
+	if err != nil {
+		slog.Error("cannot marshal RTP packet", "error", err)
+	} else {
+		if _, err = d.conn.Write(raw); err != nil {
+			slog.Error("cannot write to debug conn", "error", err)
+		}
+	}
+
+	return d.Handler.HandleRTP(h, payload)
+}
+
+func (d DebugHandler) String() string {
+	return "debugHandler"
+}
+
 func (p *MediaPort) setupInput() {
 	// Decoding pipeline (SIP RTP -> LK PCM)
 	audioHandler := p.conf.Audio.Codec.(rtp.AudioCodec).DecodeRTP(p.audioIn, p.conf.Audio.Type)
@@ -852,11 +900,27 @@ func (p *MediaPort) setupInput() {
 	// Setup video input if video is configured
 	if p.conf.Video != nil {
 		slog.Info("setting up video input")
-		// For now, we'll use a simple pass-through for video
-		// In a real implementation, you'd want proper H.264 decoding
-		videoHandler := rtp.NewMediaStreamIn[msdk.FrameSample](p.videoIn)
+
+		// videoHandler := p.conf.Video.Codec.(rtp.VideoCodec).DecodeRTP(p.videoIn, p.conf.Video.Type)
+		videoHandler := p.conf.Video.Codec.(rtp.VideoCodec).DecodeRTP(p.videoIn, p.conf.Video.Type)
+
+		// videoHandler := rtp.NewMediaStreamIn[msdk.FrameSample](p.videoIn)
 		p.videoInHandler = videoHandler
-		vhnd := rtp.NewNopCloser(newRTPHandlerCount(p.videoInHandler, &p.stats.MuxPackets, &p.stats.MuxBytes))
+
+		// vmux := rtp.NewMux(nil)
+		// vmux.SetDefault(newRTPStatsHandler(p.mon, "", nil))
+		// vmux.Register(
+		// 	p.conf.Video.Type, newRTPHandlerCount(
+		// 		newRTPStatsHandler(p.mon, p.conf.Video.Codec.Info().SDPName, videoHandler),
+		// 		&p.stats.VideoPackets, &p.stats.VideoBytes,
+		// 	),
+		// )
+
+		// vhnd := rtp.NewNopCloser(newRTPHandlerCount(vmux, &p.stats.MuxPackets, &p.stats.MuxBytes))
+		vhnd := rtp.NewNopCloser(newRTPHandlerCount(
+			newRTPStatsHandler(p.mon, p.conf.Video.Codec.Info().SDPName, videoHandler),
+			&p.stats.VideoPackets, &p.stats.VideoBytes,
+		))
 		p.vhnd.Store(&vhnd)
 
 		// mux.Register(

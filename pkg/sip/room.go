@@ -223,10 +223,9 @@ func (r *Room) Connect(conf *config.Config, rconf RoomConfig) error {
 				go func() {
 					if pub.Kind() == lksdk.TrackKindAudio {
 						r.handleAudioTrack(track, pub, rp, log, conf)
+					} else if pub.Kind() == lksdk.TrackKindVideo {
+						r.handleVideoTrack(track, pub, rp, log, conf)
 					}
-					// else if pub.Kind() == lksdk.TrackKindVideo {
-					// 	r.handleVideoTrack(track, pub, rp, log, conf)
-					// }
 				}()
 			},
 			OnDataPacket: func(data lksdk.DataPacket, params lksdk.DataReceiveParams) {
@@ -421,7 +420,7 @@ func (r *Room) Participant() ParticipantInfo {
 }
 
 func (r *Room) NewParticipantVideoTrack(sampleRate int) (msdk.WriteCloser[msdk.FrameSample], error) {
-	track, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264}, "video", "pion")
+	track, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264}, "camera", "pion")
 	if err != nil {
 		return nil, err
 	}
@@ -541,26 +540,13 @@ func (r *Room) handleAudioTrack(track *webrtc.TrackRemote, pub *lksdk.RemoteTrac
 // 	}
 // }
 
-// func (r *Room) handleVideoTrack(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant, log logger.Logger, conf *config.Config) {
-// 	// mTrack := r.NewTrack()
-// 	// if mTrack == nil {
-// 	// 	return // closed
-// 	// }
-// 	// defer mTrack.Close()
+func (r *Room) handleVideoTrack(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant, log logger.Logger, conf *config.Config) {
+	r.log.Debugw("handling video track", "trackID", track.ID(), "streamID", track.StreamID(), "codec", track.Codec().MimeType)
 
-// 	// odec, err := opus.Decode(out, channels, log)
-// 	// if err != nil {
-// 	// 	log.Errorw("cannot create opus decoder", err)
-// 	// 	return
-// 	// }
-// 	// defer odec.Close()
+	var h rtp.HandlerCloser = rtp.NewNopCloser(rtp.NewMediaStreamIn(r.videoOut))
 
-// 	var h rtp.HandlerCloser = rtp.NewNopCloser(rtp.NewMediaStreamIn[opus.Sample](odec))
-// 	if conf.EnableJitterBuffer {
-// 		h = rtp.HandleJitter(h)
-// 	}
-// 	err = rtp.HandleLoop(in, h)
-// 	if err != nil && !errors.Is(err, io.EOF) {
-// 		log.Infow("room track rtp handler returned with failure", "error", err)
-// 	}
-// }
+	err := rtp.HandleLoop(track, h)
+	if err != nil && !errors.Is(err, io.EOF) {
+		log.Infow("room track rtp handler returned with failure", "error", err)
+	}
+}
