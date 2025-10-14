@@ -1151,6 +1151,7 @@ func (c *inboundCall) createLiveKitParticipant(ctx context.Context, rconf RoomCo
 }
 
 func (c *inboundCall) publishVideoTrack() error {
+	slog.Info("Publishing video track")
 	local, err := c.lkRoom.NewParticipantVideoTrack(90000)
 	if err != nil {
 		_ = c.lkRoom.Close()

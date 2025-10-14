@@ -27,6 +27,8 @@ import (
 	"time"
 
 	"github.com/frostbyte73/core"
+	"github.com/go-gst/go-glib/glib"
+	"github.com/go-gst/go-gst/gst"
 	"github.com/hashicorp/golang-lru/v2/expirable"
 	"github.com/icholy/digest"
 	"golang.org/x/exp/maps"
@@ -122,6 +124,47 @@ type Handler interface {
 	OnSessionEnd(ctx context.Context, callIdentifier *CallIdentifier, callInfo *livekit.SIPCallInfo, reason string)
 }
 
+func NewGSTServer() *GSTServer {
+	slog.Info("initializing gstreamer")
+	gstServer := &GSTServer{
+		ctx: context.Background(),
+	}
+	gst.Init(nil)
+	slog.Info("gstreamer initialized")
+	slog.Info("initializing glib main loop")
+	gstServer.loop = glib.NewMainLoop(glib.MainContextDefault(), false)
+	slog.Info("glib main loop initialized")
+	return gstServer
+}
+
+type GSTServer struct {
+	ctx  context.Context
+	loop *glib.MainLoop
+}
+
+func (g *GSTServer) Start() {
+	slog.Info("starting glib main loop")
+	ctx, cancel := context.WithCancel(g.ctx)
+	g.ctx = ctx
+	go func() {
+		defer cancel()
+		err := g.loop.RunError()
+		if err != nil {
+			slog.Error("glib main loop exited with error", slog.String("error", err.Error()))
+		} else {
+			slog.Info("glib main loop exited")
+		}
+	}()
+	slog.Info("glib main loop started")
+}
+
+func (g *GSTServer) Stop() {
+	slog.Info("stopping glib main loop")
+	g.loop.Quit()
+	<-g.ctx.Done()
+	slog.Info("glib main loop stopped")
+}
+
 type Server struct {
 	log          logger.Logger
 	mon          *stats.Monitor
@@ -149,6 +192,8 @@ type Server struct {
 	sconf   *ServiceConfig
 
 	res mediaRes
+
+	gstServer *GSTServer
 }
 
 type inProgressInvite struct {
@@ -171,6 +216,7 @@ func NewServer(region string, conf *config.Config, log logger.Logger, mon *stats
 	}
 	s.infos.byCallID = expirable.NewLRU[string, *inboundCallInfo](maxCallCache, nil, callCacheTTL)
 	s.initMediaRes()
+	s.gstServer = NewGSTServer()
 	return s
 }
 
@@ -308,6 +354,8 @@ func (s *Server) Start(agent *sipgo.UserAgent, sc *ServiceConfig, tlsConf *tls.C
 		}
 	}
 
+	s.gstServer.Start()
+
 	return nil
 }
 
@@ -325,6 +373,9 @@ func (s *Server) Stop() {
 	}
 	for _, l := range s.sipListeners {
 		_ = l.Close()
+	}
+	if s.gstServer != nil {
+		s.gstServer.Stop()
 	}
 }
 

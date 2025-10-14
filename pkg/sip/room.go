@@ -420,7 +420,9 @@ func (r *Room) Participant() ParticipantInfo {
 }
 
 func (r *Room) NewParticipantVideoTrack(sampleRate int) (msdk.WriteCloser[msdk.FrameSample], error) {
-	track, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264}, "camera", "pion")
+	track, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{
+		MimeType: webrtc.MimeTypeH264,
+	}, string(lksdk.TrackKindVideo), "pion")
 	if err != nil {
 		return nil, err
 	}

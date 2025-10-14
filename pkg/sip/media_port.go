@@ -17,6 +17,7 @@ package sip
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -27,7 +28,9 @@ import (
 	"time"
 
 	"github.com/frostbyte73/core"
+	"github.com/google/uuid"
 
+	"github.com/go-gst/go-gst/gst"
 	msdk "github.com/livekit/media-sdk"
 	"github.com/livekit/media-sdk/dtmf"
 	"github.com/livekit/media-sdk/mixer"
@@ -231,8 +234,17 @@ type MediaPort struct {
 	// Video support
 	videoOutRTP    *rtp.Stream
 	videoOut       *msdk.FrameSwitchWriter // LK Video -> SIP RTP
-	videoIn        *msdk.FrameSwitchWriter
-	videoInHandler rtp.Handler // for debug only
+	videoIn        *msdk.FrameSwitchWriter // SIP RTP -> LK Video
+	videoInHandler rtp.Handler             // for debug only
+
+	gstPipeline GstPipeline
+}
+
+type GstPipeline struct {
+	enabled  bool
+	ID       uuid.UUID
+	pipeline *gst.Pipeline
+	RTPPort  int
 }
 
 func (p *MediaPort) VideoPort() (int, error) {
@@ -455,6 +467,7 @@ func (p *MediaPort) GetVideoWriter() msdk.FrameWriter {
 func (p *MediaPort) NewOffer(encrypted sdp.Encryption) (*sdp.Offer, error) {
 	var vp *int = nil
 	if p.videoPort != nil {
+		slog.Info("including video port in SDP offer")
 		tp, err := p.VideoPort()
 		if err != nil {
 			return nil, err
@@ -495,20 +508,230 @@ func (p *MediaPort) SetAnswer(offer *sdp.Offer, answerData []byte, enc sdp.Encry
 	return &MediaConf{MediaConfig: *mc}, nil
 }
 
+// func BuildRtpMuxPipeline(destIP string, rtpInPort, rtcpInPort, outPort, payloadType uint16) (*gst.Pipeline, error) {
+
+// 	// Caps for the incoming RTP/H264. Adjust payload, or remove it if you don’t want to pin PT.
+// 	caps := fmt.Sprintf(
+// 		"application/x-rtp, media=video, encoding-name=H264, clock-rate=90000, payload=%d",
+// 		payloadType,
+// 	)
+
+// 	// One udpsink is fed by a funnel that merges rtpbin’s RTP+RTCP src pads.
+// 	// bind-port=outPort forces a single LOCAL port as well (optional; remove if not needed).
+// 	pipe := fmt.Sprintf(`
+// 		rtpbin name=rb latency=100
+
+// 		udpsrc port=%d caps="%s" ! rb.recv_rtp_sink_0
+// 		# udpsrc port=%%d caps="application/x-rtcp" ! rb.recv_rtcp_sink_0
+
+// 		# turn received RTP straight back through rtpbin’s sender to get paired RTP/RTCP src pads
+// 		rb.recv_rtp_src_0 ! queue max-size-buffers=0 max-size-time=0 max-size-bytes=0 ! rb.send_rtp_sink_0
+
+// 		funnel name=mux
+// 		rb.send_rtp_src_0  ! queue ! mux.sink_0
+// 		# rb.send_rtcp_src_0 ! queue ! mux.sink_1
+
+// 		mux.src ! udpsink host=%s port=%d bind-port=%d sync=false async=false
+// 	`,
+// 		rtpInPort, caps,
+// 		// rtcpInPort,
+// 		destIP, outPort, outPort,
+// 	)
+
+// 	return gst.NewPipelineFromString(pipe)
+// }
+
+func gstElement(factory, name string, props map[string]interface{}) (*gst.Element, error) {
+	el, err := gst.NewElementWithName(factory, name)
+	if err != nil {
+		slog.Error("cannot create gstreamer element", "factory", factory, "name", name, "error", err)
+		return nil, err
+	}
+	for k, v := range props {
+		if err := el.SetProperty(k, v); err != nil {
+			slog.Error("cannot set gstreamer element property", "factory", factory, "name", name, "property", k, "value", v, "error", err)
+			return nil, err
+		}
+	}
+	return el, nil
+}
+
+func (p *MediaPort) EnableGst(desc *sdp.Description) error {
+	ID := uuid.New()
+	vp, err := p.VideoPort()
+	if err != nil {
+		slog.Error("cannot get video port", "error", err)
+		return err
+	}
+
+	caps := fmt.Sprintf(
+		"application/x-rtp, media=video, encoding-name=H264, clock-rate=90000, payload=%d",
+		96,
+	)
+
+	// rtpConn, rtpPort, rtpFD, err := rtp.ReserveUDP()
+	// if err != nil {
+	// 	slog.Error("cannot reserve UDP port for RTP", "error", err)
+	// 	return err
+	// }
+	// defer rtpConn.Close()
+
+	rtpPort, err := rtp.FindFreeUDPPort(p.externalIP)
+	if err != nil {
+		slog.Error("cannot find free UDP port for RTP", "error", err)
+		return err
+	}
+
+	rtcpPort, err := rtp.FindFreeUDPPort(p.externalIP)
+	if err != nil {
+		slog.Error("cannot find free UDP port for RTP", "error", err)
+		return err
+	}
+
+	// pipe := fmt.Sprintf(`
+	// udpsrc port=%d caps="application/x-rtp,media=video,encoding-name=H264,clock-rate=90000,payload=96" name=rtps \
+	// udpsrc port=%d caps="application/x-rtcp" name=rtcps \
+	// rtcpmux name=m \
+	// 	rtps. ! m.rtp_sink \
+	// 	rtcps. ! m.rtcp_sink \
+	// m. ! udpsink host=%s port=%d sync=false async=false
+	// `, rtpPort, rtcpPort, p.externalIP.String(), vp)
+
+	// pipeline, err := gst.NewPipelineFromString(pipe)
+	// if err != nil {
+	// 	slog.Error("cannot create gstreamer pipeline", "error", err)
+	// 	return err
+	// }
+
+	pipeline, err := gst.NewPipeline(fmt.Sprintf("sip-media-%s", ID.String()))
+	if err != nil {
+		slog.Error("cannot create gstreamer pipeline", "error", err)
+		return err
+	}
+
+	var (
+		errs  error
+		elems []*gst.Element
+	)
+
+	wrapElem := func(factory string, f ...func(*gst.Element) error) *gst.Element {
+		log := slog.With("factory", factory)
+		elem, err := gst.NewElement(factory)
+		if err != nil {
+			errs = errors.Join(errs, err)
+			log.Error("cannot create gstreamer element", "error", err)
+			return elem
+		}
+		name := elem.GetName()
+
+		log = slog.With("name", name)
+
+		log.Info("created gstreamer element")
+		for _, fn := range f {
+			if err := fn(elem); err != nil {
+				errs = errors.Join(errs, err)
+				log.Error("cannot configure gstreamer element", "error", err)
+			}
+		}
+		elems = append(elems, elem)
+		return elem
+	}
+
+	slog.Info("gst port config", "rtpPort", rtpPort, "rtcpPort", rtcpPort, "destIP", p.externalIP.String(), "destPort", vp)
+
+	rtpSrc := wrapElem("udpsrc",
+		func(e *gst.Element) error { return e.SetProperty("port", rtpPort) },
+		func(e *gst.Element) error { return e.SetProperty("caps", gst.NewCapsFromString(caps)) }, // e.g. application/x-rtp,...
+	)
+	rtcpSrc := wrapElem("udpsrc",
+		func(e *gst.Element) error { return e.SetProperty("port", rtcpPort) },
+		func(e *gst.Element) error { return e.SetProperty("caps", gst.NewCapsFromString("application/x-rtcp")) },
+	)
+
+	// Two udpsinks to the SAME destination host/port
+	rtpOut := wrapElem("udpsink",
+		func(e *gst.Element) error { return e.SetProperty("host", p.externalIP.String()) },
+		func(e *gst.Element) error { return e.SetProperty("port", vp) },
+		func(e *gst.Element) error { return e.SetProperty("sync", false) },
+		func(e *gst.Element) error { return e.SetProperty("async", false) },
+	)
+	rtcpOut := wrapElem("udpsink",
+		func(e *gst.Element) error { return e.SetProperty("host", p.externalIP.String()) },
+		func(e *gst.Element) error { return e.SetProperty("port", vp) },
+		func(e *gst.Element) error { return e.SetProperty("sync", false) },
+		func(e *gst.Element) error { return e.SetProperty("async", false) },
+	)
+
+	if errs != nil {
+		slog.Error("cannot create gstreamer elements", "error", errs)
+		return errs
+	}
+
+	if err := pipeline.AddMany(elems...); err != nil {
+		slog.Error("cannot add gstreamer elements to pipeline", "error", err)
+		pipeline.SetState(gst.StateNull)
+		return err
+	}
+
+	if err := gst.ElementLinkMany(rtpSrc, rtpOut); err != nil {
+		slog.Error("cannot link gstreamer elements", "error", err)
+		pipeline.SetState(gst.StateNull)
+		return err
+	}
+	if err := gst.ElementLinkMany(rtcpSrc, rtcpOut); err != nil {
+		slog.Error("cannot link gstreamer elements", "error", err)
+		pipeline.SetState(gst.StateNull)
+		return err
+	}
+
+	if err = pipeline.SetState(gst.StatePlaying); err != nil {
+		slog.Error("cannot set gstreamer pipeline to playing", "error", err)
+		pipeline.SetState(gst.StateNull)
+		return err
+	}
+
+	p.gstPipeline.enabled = true
+	p.gstPipeline.ID = ID
+	p.gstPipeline.pipeline = pipeline
+	p.gstPipeline.RTPPort = rtpPort
+
+	return nil
+}
+
 // SetOffer decodes the offer from another party and returns encoded answer. To accept the offer, call SetConfig.
 func (p *MediaPort) SetOffer(offerData []byte, enc sdp.Encryption) (*sdp.Answer, *MediaConf, error) {
 	offer, err := sdp.ParseOffer(offerData)
 	if err != nil {
 		return nil, nil, err
 	}
-	var vp *int = nil
+
+	var (
+		vp *int = nil
+	)
+
 	// offer.Video = nil // disable video for now
 	if offer.Video != nil {
+		slog.Info("including video port in SDP answer")
+		desc := sdp.Description(*offer)
+
 		tp, err := p.VideoPort()
 		if err != nil {
+			slog.Error("cannot get video port", "error", err)
 			return nil, nil, err
 		}
+
+		// if err := p.EnableGst(&desc); err != nil {
+		// 	slog.Error("cannot enable gstreamer for video", "error", err)
+		// 	return nil, nil, err
+		// }
+
+		// slog.Info("gstreamer pipeline started", "id", p.gstPipeline.ID, "rtpPort", p.gstPipeline.RTPPort)
+
+		slog.Info("including video port in SDP answer", "video-port", tp)
+
+		*offer = sdp.Offer(desc)
 		vp = new(int)
+		// *vp = p.gstPipeline.RTPPort
 		*vp = tp
 	}
 	answer, mc, err := offer.Answer(p.externalIP, p.Port(), vp, enc)
@@ -716,6 +939,7 @@ func (p *MediaPort) rtpReadLoop(log logger.Logger, r rtp.ReadStream, hndp *atomi
 		errorCnt int
 	)
 	r.L().Infow("starting RTP read loop")
+	r.L().Infow("RTP handler", "handler", (*(hndp.Load())).String())
 	defer r.L().Infow("RTP read loop ended")
 	for {
 		h = rtp.Header{}
@@ -917,10 +1141,13 @@ func (p *MediaPort) setupInput() {
 		// )
 
 		// vhnd := rtp.NewNopCloser(newRTPHandlerCount(vmux, &p.stats.MuxPackets, &p.stats.MuxBytes))
-		vhnd := rtp.NewNopCloser(newRTPHandlerCount(
-			newRTPStatsHandler(p.mon, p.conf.Video.Codec.Info().SDPName, videoHandler),
-			&p.stats.VideoPackets, &p.stats.VideoBytes,
-		))
+		// vhnd := rtp.NewNopCloser(newRTPHandlerCount(
+		// 	newRTPStatsHandler(p.mon, p.conf.Video.Codec.Info().SDPName, videoHandler),
+		// 	&p.stats.VideoPackets, &p.stats.VideoBytes,
+		// ))
+
+		vhnd := rtp.NewNopCloser(videoHandler)
+
 		p.vhnd.Store(&vhnd)
 
 		// mux.Register(
