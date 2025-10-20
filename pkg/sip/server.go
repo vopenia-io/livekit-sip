@@ -40,6 +40,9 @@ import (
 
 	"github.com/livekit/sip/pkg/config"
 	"github.com/livekit/sip/pkg/stats"
+
+	"github.com/go-gst/go-glib/glib"
+	"github.com/go-gst/go-gst/gst"
 )
 
 const (
@@ -149,6 +152,8 @@ type Server struct {
 	sconf   *ServiceConfig
 
 	res mediaRes
+
+	gstLoop *glib.MainLoop
 }
 
 type inProgressInvite struct {
@@ -171,6 +176,11 @@ func NewServer(region string, conf *config.Config, log logger.Logger, mon *stats
 	}
 	s.infos.byCallID = expirable.NewLRU[string, *inboundCallInfo](maxCallCache, nil, callCacheTTL)
 	s.initMediaRes()
+
+	gst.Init(nil)
+
+	s.gstLoop = glib.NewMainLoop(glib.MainContextDefault(), false)
+
 	return s
 }
 
@@ -307,6 +317,8 @@ func (s *Server) Start(agent *sipgo.UserAgent, sc *ServiceConfig, tlsConf *tls.C
 			return err
 		}
 	}
+
+	go s.gstLoop.Run()
 
 	return nil
 }

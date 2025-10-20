@@ -422,6 +422,31 @@ func (r *Room) NewParticipantTrack(sampleRate int) (msdk.WriteCloser[msdk.PCM16S
 	return pw, nil
 }
 
+func (r *Room) NewParticipantVideoTrack() (rtp.WriteStream, error) {
+	track, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{
+		MimeType: webrtc.MimeTypeH264,
+	}, "camera", "pion")
+	if err != nil {
+		r.log.Errorw("cannot create rtp track", err)
+		return nil, nil
+	}
+	p := r.room.LocalParticipant
+	if _, err = p.PublishTrack(track, &lksdk.TrackPublicationOptions{
+		VideoWidth:  640,
+		VideoHeight: 480,
+		Name:        p.Identity(),
+	}); err != nil {
+		r.log.Errorw("cannot publish rtp track", err)
+		return nil, nil
+	}
+
+	r.log.Infow("published video track", "trackID", track.ID(), "streamID", track.StreamID())
+
+	w := rtp.NewPacketWriteStream(track)
+
+	return w, nil
+}
+
 func (r *Room) SendData(data lksdk.DataPacket, opts ...lksdk.DataPublishOption) error {
 	if r == nil || !r.ready.IsBroken() || r.closed.IsBroken() {
 		return nil

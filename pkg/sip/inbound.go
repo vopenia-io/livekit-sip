@@ -542,6 +542,7 @@ type inboundCall struct {
 	cancel      func()
 	call        *rpc.SIPCall
 	media       *MediaPort
+	video       *VideoPort
 	dtmf        chan dtmf.Event // buffered
 	lkRoom      *Room           // LiveKit room; only active after correct pin is entered
 	callDur     func() time.Duration
@@ -689,6 +690,7 @@ func (c *inboundCall) handleInvite(ctx context.Context, req *sip.Request, trunkI
 			headers = AttrsToHeaders(r.LocalParticipant.Attributes(), c.attrsToHdr, headers)
 		}
 		c.log.Infow("Accepting the call", "headers", headers)
+		c.log.Debugw("Answer SDP", "sdp", string(answerData))
 		err := c.cc.Accept(ctx, answerData, headers)
 		if errors.Is(err, errNoACK) {
 			c.log.Errorw("Call accepted, but no ACK received", err)
@@ -763,6 +765,12 @@ func (c *inboundCall) handleInvite(ctx context.Context, req *sip.Request, trunkI
 		c.close(true, callDropped, "publish-failed")
 		return errors.Wrap(err, "publishing track to room failed")
 	}
+
+	if err := c.publishVideoTrack(); err != nil {
+		c.log.Warnw("Cannot publish video track", err)
+		// continue anyway
+	}
+
 	c.lkRoom.Subscribe()
 	if !pinPrompt {
 		c.log.Infow("Waiting for track subscription(s)")
@@ -835,8 +843,16 @@ func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncrypt
 		return nil, err
 	}
 
+	externalIP := c.s.sconf.MediaIP
+
+	offer, err := sdp.ParseOffer(offerData)
+	if err != nil {
+		c.log.Errorw("Cannot parse SDP offer", err)
+		return nil, err
+	}
+
 	mp, err := NewMediaPort(c.log, c.mon, &MediaOptions{
-		IP:                  c.s.sconf.MediaIP,
+		IP:                  externalIP,
 		Ports:               conf.RTPPort,
 		MediaTimeoutInitial: c.s.conf.MediaTimeoutInitial,
 		MediaTimeout:        c.s.conf.MediaTimeout,
@@ -846,15 +862,48 @@ func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncrypt
 	if err != nil {
 		return nil, err
 	}
+
+	if offer.Video != nil {
+		c.log.Infow("Configuring video port", "startPort", conf.RTPPort.Start, "endPort", conf.RTPPort.End)
+		vp, err := NewVideoPort(c.log, c.mon, nil, &MediaOptions{
+			IP:                  externalIP,
+			Ports:               conf.RTPPort,
+			MediaTimeoutInitial: c.s.conf.MediaTimeoutInitial,
+			MediaTimeout:        c.s.conf.MediaTimeout,
+			EnableJitterBuffer:  c.jitterBuf,
+			Stats:               &c.stats.Port,
+		})
+		if err != nil {
+			return nil, err
+		}
+		c.video = vp
+	} else {
+		c.video = nil
+	}
 	c.media = mp
 	c.media.EnableTimeout(false) // enabled once we accept the call
 	c.media.DisableOut()         // disabled until we send 200
 	c.media.SetDTMFAudio(conf.AudioDTMF)
 
-	answer, mconf, err := mp.SetOffer(offerData, e)
+	answer, mc, err := offer.Answer(externalIP, c.media.Port(), func() *int {
+		if c.video != nil {
+			p := c.video.Port()
+			c.log.Infow("Configured video port", "port", p)
+			return &p
+		}
+		return nil
+	}(), e)
 	if err != nil {
+		c.log.Errorw("Cannot create SDP answer", err)
 		return nil, err
 	}
+
+	mconf := &MediaConf{MediaConfig: *mc}
+
+	// answer, mconf, err := mp.SetOffer(offerData, e)
+	// if err != nil {
+	// 	return nil, err
+	// }
 	answerData, err = answer.SDP.Marshal()
 	if err != nil {
 		return nil, err
@@ -880,6 +929,15 @@ func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncrypt
 	c.state.DeferUpdate(func(info *livekit.SIPCallInfo) {
 		info.AudioCodec = mconf.Audio.Codec.Info().SDPName
 	})
+
+	if c.video != nil {
+		c.log.Infow("Configuring video port")
+		if err = c.video.SetConfig(mconf); err != nil {
+			return nil, err
+		}
+		// c.publishVideoTrack()
+	}
+
 	return answerData, nil
 }
 
@@ -1142,6 +1200,25 @@ func (c *inboundCall) publishTrack() error {
 		return err
 	}
 	c.media.WriteAudioTo(local)
+	return nil
+}
+
+func (c *inboundCall) publishVideoTrack() error {
+	c.log.Infow("Publishing video track")
+	if c.video == nil {
+		c.log.Infow("No video track to publish")
+		return nil
+	}
+
+	local, err := c.lkRoom.NewParticipantVideoTrack()
+	if err != nil {
+		_ = c.lkRoom.Close()
+		return err
+	}
+
+	sc := rtp.NewStreamNopCloser(local)
+
+	c.video.WriteVideoTo(sc)
 	return nil
 }
 

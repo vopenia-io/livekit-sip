@@ -514,7 +514,10 @@ func (c *outboundCall) sipSignal(ctx context.Context) error {
 		cancel()
 	}()
 
-	sdpOffer, err := c.media.NewOffer(c.sipConf.mediaEncryption)
+	externalIP := c.c.sconf.MediaIP
+
+	sdpOffer, err := sdp.NewOffer(externalIP, c.media.Port(), nil, c.sipConf.mediaEncryption)
+	// sdpOffer, err := c.media.NewOffer(c.sipConf.mediaEncryption)
 	if err != nil {
 		return err
 	}
@@ -561,12 +564,21 @@ func (c *outboundCall) sipSignal(ctx context.Context) error {
 
 	c.log = LoggerWithHeaders(c.log, c.cc)
 
-	mc, err := c.media.SetAnswer(sdpOffer, sdpResp, c.sipConf.mediaEncryption)
+	// mc, err := c.media.SetAnswer(sdpOffer, sdpResp, c.sipConf.mediaEncryption)
+	answer, err := sdp.ParseAnswer(sdpResp)
 	if err != nil {
 		return err
 	}
-	mc.Processor = c.c.handler.GetMediaProcessor(c.sipConf.enabledFeatures)
-	if err = c.media.SetConfig(mc); err != nil {
+
+	mc, err := answer.Apply(sdpOffer, c.sipConf.mediaEncryption)
+	if err != nil {
+		return err
+	}
+
+	mconf := &MediaConf{MediaConfig: *mc}
+
+	mconf.Processor = c.c.handler.GetMediaProcessor(c.sipConf.enabledFeatures)
+	if err = c.media.SetConfig(mconf); err != nil {
 		return err
 	}
 

@@ -387,43 +387,43 @@ func (p *MediaPort) GetAudioWriter() msdk.PCM16Writer {
 }
 
 // NewOffer generates an SDP offer for the media.
-func (p *MediaPort) NewOffer(encrypted sdp.Encryption) (*sdp.Offer, error) {
-	return sdp.NewOffer(p.externalIP, p.Port(), encrypted)
-}
+// func (p *MediaPort) NewOffer(encrypted sdp.Encryption) (*sdp.Offer, error) {
+// 	return sdp.NewOffer(p.externalIP, p.Port(), nil, encrypted)
+// }
 
 // SetAnswer decodes and applies SDP answer for offer from NewOffer. SetConfig must be called with the decoded configuration.
-func (p *MediaPort) SetAnswer(offer *sdp.Offer, answerData []byte, enc sdp.Encryption) (*MediaConf, error) {
-	answer, err := sdp.ParseAnswer(answerData)
-	if err != nil {
-		return nil, err
-	}
-	mc, err := answer.Apply(offer, enc)
-	if err != nil {
-		return nil, err
-	}
-	return &MediaConf{MediaConfig: *mc}, nil
-}
+// func (p *MediaPort) SetAnswer(offer *sdp.Offer, answerData []byte, enc sdp.Encryption) (*MediaConf, error) {
+// 	answer, err := sdp.ParseAnswer(answerData)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	mc, err := answer.Apply(offer, enc)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	return &MediaConf{MediaConfig: *mc}, nil
+// }
 
 // SetOffer decodes the offer from another party and returns encoded answer. To accept the offer, call SetConfig.
-func (p *MediaPort) SetOffer(offerData []byte, enc sdp.Encryption) (*sdp.Answer, *MediaConf, error) {
-	offer, err := sdp.ParseOffer(offerData)
-	if err != nil {
-		return nil, nil, err
-	}
-	answer, mc, err := offer.Answer(p.externalIP, p.Port(), enc)
-	if err != nil {
-		return nil, nil, err
-	}
-	return answer, &MediaConf{MediaConfig: *mc}, nil
-}
+// func (p *MediaPort) SetOffer(offerData []byte, enc sdp.Encryption) (*sdp.Answer, *MediaConf, error) {
+// 	offer, err := sdp.ParseOffer(offerData)
+// 	if err != nil {
+// 		return nil, nil, err
+// 	}
+// 	answer, mc, err := offer.Answer(p.externalIP, p.Port(), nil, enc)
+// 	if err != nil {
+// 		return nil, nil, err
+// 	}
+// 	return answer, &MediaConf{MediaConfig: *mc}, nil
+// }
 
 func (p *MediaPort) SetConfig(c *MediaConf) error {
 	if p.closed.IsBroken() {
 		return errors.New("media is already closed")
 	}
 	var crypto string
-	if c.Crypto != nil {
-		crypto = c.Crypto.Profile.String()
+	if c.Audio.Crypto != nil {
+		crypto = c.Audio.Crypto.Profile.String()
 	}
 	p.log.Infow("using codecs",
 		"audio-codec", c.Audio.Codec.Info().SDPName, "audio-rtp", c.Audio.Type,
@@ -431,13 +431,13 @@ func (p *MediaPort) SetConfig(c *MediaConf) error {
 		"srtp", crypto,
 	)
 
-	p.port.SetDst(c.Remote)
+	p.port.SetDst(c.Audio.Remote)
 	var (
 		sess rtp.Session
 		err  error
 	)
-	if c.Crypto != nil {
-		sess, err = srtp.NewSession(p.log, p.port, c.Crypto)
+	if c.Audio.Crypto != nil {
+		sess, err = srtp.NewSession(p.log, p.port, c.Audio.Crypto)
 	} else {
 		sess = rtp.NewSession(p.log, p.port)
 	}
@@ -447,7 +447,7 @@ func (p *MediaPort) SetConfig(c *MediaConf) error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.port.SetDst(c.Remote)
+	p.port.SetDst(c.Audio.Remote)
 	p.conf = c
 	p.sess = sess
 
@@ -556,7 +556,7 @@ func (p *MediaPort) setupOutput() error {
 	p.audioOutRTP = s.NewStream(p.conf.Audio.Type, p.conf.Audio.Codec.Info().RTPClockRate)
 
 	// Encoding pipeline (LK PCM -> SIP RTP)
-	audioOut := p.conf.Audio.Codec.EncodeRTP(p.audioOutRTP)
+	audioOut := p.conf.Audio.Codec.(rtp.AudioCodec).EncodeRTP(p.audioOutRTP)
 
 	if p.conf.Audio.DTMFType != 0 {
 		p.dtmfOutRTP = s.NewStream(p.conf.Audio.DTMFType, dtmf.SampleRate)
@@ -580,7 +580,7 @@ func (p *MediaPort) setupOutput() error {
 
 func (p *MediaPort) setupInput() {
 	// Decoding pipeline (SIP RTP -> LK PCM)
-	audioHandler := p.conf.Audio.Codec.DecodeRTP(p.audioIn, p.conf.Audio.Type)
+	audioHandler := p.conf.Audio.Codec.(rtp.AudioCodec).DecodeRTP(p.audioIn, p.conf.Audio.Type)
 	p.audioInHandler = audioHandler
 
 	mux := rtp.NewMux(nil)
