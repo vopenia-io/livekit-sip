@@ -641,10 +641,11 @@ func (n *noopWriter) WriteRTP(h *rtp.Header, payload []byte) (int, error) {
 }
 
 const inputPipeline = `appsrc name=src is-live=true format=time do-timestamp=true
-  caps="application/x-rtp,media=video,encoding-name=VP8,payload=96,clock-rate=90000" !
-  rtpjitterbuffer latency=0 do-lost=true !
-  rtpvp8depay !
-  vp8dec !
+  caps="application/x-rtp,media=video,encoding-name=H264,payload=%d,clock-rate=90000,packetization-mode=1" !
+  rtpjitterbuffer latency=100 do-lost=true !
+  rtph264depay !
+  h264parse !
+  avdec_h264 !
   videoconvert !
   tee name=t
 
@@ -652,17 +653,21 @@ const inputPipeline = `appsrc name=src is-live=true format=time do-timestamp=tru
 
   t. ! queue !
       vp8enc deadline=1 target-bitrate=1200000 keyframe-max-dist=60 !
-      rtpvp8pay pt=96 mtu=1200 ssrc=0x11223344 !
+      rtpvp8pay pt=98 mtu=1200 ssrc=0xAABBCCDD !
       appsink name=sink sync=false emit-signals=true enable-last-sample=false
-      caps="application/x-rtp,media=video,encoding-name=VP8,payload=96,clock-rate=90000"`
+      caps="application/x-rtp,media=video,encoding-name=VP8,payload=98,clock-rate=90000"`
 
 func (p *VideoPort) setupInput() error {
 	if p.closed.IsBroken() {
 		return errors.New("media is already closed")
 	}
 
+	pt := int(p.conf.Video.Type)
+
+	pstr := fmt.Sprintf(inputPipeline, pt)
+
 	p.log.Infow("setting up video pipeline")
-	gw, err := p.gstPipeline(p.videoIn, inputPipeline)
+	gw, err := p.gstPipeline(p.videoIn, pstr)
 	if err != nil {
 		p.log.Errorw("failed to create GST input pipeline", err)
 		return err
@@ -801,9 +806,9 @@ func (p *VideoPort) gstPipeline(in rtp.WriteStreamCloser, pstr string) (*GstWrit
 // 	return w.conn.Write(data)
 // }
 
-const inputPipelineStr = `appsrc name=src is-live=true format=time do-timestamp=true
-  caps="application/x-rtp,media=video,encoding-name=VP8,payload=96,clock-rate=90000" !
-  rtpjitterbuffer latency=0 do-lost=true !
+const outputPipeline = `appsrc name=src is-live=true format=time do-timestamp=true
+  caps="application/x-rtp,media=video,encoding-name=VP8,payload=98,clock-rate=90000" !
+  rtpjitterbuffer latency=100 do-lost=true !
   rtpvp8depay !
   vp8dec !
   videoconvert !
@@ -812,10 +817,11 @@ const inputPipelineStr = `appsrc name=src is-live=true format=time do-timestamp=
   t. ! queue ! fpsdisplaysink name=preview text-overlay=true sync=true
 
   t. ! queue !
-      vp8enc deadline=1 target-bitrate=1200000 keyframe-max-dist=60 !
-      rtpvp8pay pt=96 mtu=1200 ssrc=0x11223344 !
+      x264enc speed-preset=ultrafast tune=zerolatency bitrate=1200 key-int-max=60 byte-stream=false !
+      h264parse config-interval=1 ! video/x-h264,stream-format=avc,alignment=au !
+      rtph264pay pt=%d mtu=1200 ssrc=0x11223344 config-interval=1 !
       appsink name=sink sync=false emit-signals=true enable-last-sample=false
-      caps="application/x-rtp,media=video,encoding-name=VP8,payload=96,clock-rate=90000"`
+      caps="application/x-rtp,media=video,encoding-name=H264,payload=%d,clock-rate=90000,packetization-mode=1"`
 
 func (p *VideoPort) setupOutput() error {
 	if p.closed.IsBroken() {
@@ -833,7 +839,13 @@ func (p *VideoPort) setupOutput() error {
 
 	wc := rtp.NewStreamNopCloser(w)
 
-	gw, err := p.gstPipeline(wc, inputPipelineStr)
+	pt := int(p.conf.Video.Type)
+
+	pstr := fmt.Sprintf(outputPipeline, pt, pt)
+
+	p.log.Infow("setting up video output pipeline", "pipelineStr", pstr)
+
+	gw, err := p.gstPipeline(wc, pstr)
 	if err != nil {
 		p.log.Errorw("failed to create GST output pipeline1", err)
 		return err

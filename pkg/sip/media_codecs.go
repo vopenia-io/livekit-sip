@@ -19,7 +19,6 @@ import (
 	_ "github.com/livekit/media-sdk/dtmf"
 	_ "github.com/livekit/media-sdk/g711"
 	_ "github.com/livekit/media-sdk/g722"
-
-	// _ "github.com/livekit/media-sdk/h264"
+	_ "github.com/livekit/media-sdk/h264"
 	_ "github.com/livekit/media-sdk/vp8"
 )
