@@ -202,6 +202,8 @@ func (g *GstWriteStream) Start() error {
 		return nil
 	}
 
+	slog.InfoContext(g.ctx, "starting GstWriteStream", "stream", g.String())
+
 	if err := g.pipeline.SetState(gst.StatePlaying); err != nil {
 		return err
 	}
@@ -234,9 +236,9 @@ func (g *GstWriteStream) Start() error {
 					continue
 				}
 
-				payload = payload[:n] // trim to actual size, don't know if it's necessary
+				// payload = payload[:n] // trim to actual size, don't know if it's necessary
 
-				_, err = g.w.WriteRTP(&h, payload)
+				_, err = g.w.WriteRTP(&h, payload[:n])
 				if err != nil {
 					slog.ErrorContext(g.ctx, "GstWriteStream write RTP failed", err)
 					continue
@@ -609,7 +611,7 @@ func (g *GstReadWriteRTP) ReadRTP(h *rtp.Header, payload []byte) (int, error) {
 
 func (p *VideoPort) gstInputPipeline() (*GstWriteStream, error) {
 	builder := NewPipelineBuilder()
-	pipeline, err := builder.Build()
+	pipeline, err := builder.StrPipeline(inputPipeline).Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to build GST pipeline: %w", err)
 	}
@@ -628,20 +630,50 @@ func (p *VideoPort) gstInputPipeline() (*GstWriteStream, error) {
 	return gw, nil
 }
 
+type noopWriter struct{}
+
+func (n *noopWriter) String() string {
+	return "NoopWriter"
+}
+
+func (n *noopWriter) WriteRTP(h *rtp.Header, payload []byte) (int, error) {
+	return len(payload), nil
+}
+
+const inputPipeline = `appsrc name=src is-live=true format=time do-timestamp=true
+  caps="application/x-rtp,media=video,encoding-name=VP8,payload=96,clock-rate=90000" !
+  rtpjitterbuffer latency=0 do-lost=true !
+  rtpvp8depay !
+  vp8dec !
+  videoconvert !
+  tee name=t
+
+  t. ! queue ! fpsdisplaysink name=preview text-overlay=true sync=true
+
+  t. ! queue !
+      vp8enc deadline=1 target-bitrate=1200000 keyframe-max-dist=60 !
+      rtpvp8pay pt=96 mtu=1200 ssrc=0x11223344 !
+      appsink name=sink sync=false emit-signals=true enable-last-sample=false
+      caps="application/x-rtp,media=video,encoding-name=VP8,payload=96,clock-rate=90000"`
+
 func (p *VideoPort) setupInput() error {
 	if p.closed.IsBroken() {
 		return errors.New("media is already closed")
 	}
 
 	p.log.Infow("setting up video pipeline")
-	gw, err := p.gstInputPipeline()
+	gw, err := p.gstPipeline(p.videoIn, inputPipeline)
 	if err != nil {
 		p.log.Errorw("failed to create GST input pipeline", err)
 		return err
 	}
 	p.log.Infow("video input pipeline created", "pipeline", gw.String())
 
-	go p.rtpLoop(p.sess, gw)
+	// w := &noopWriter{}
+
+	wc := rtp.NewStreamNopCloser(gw)
+
+	go p.rtpLoop(p.sess, wc)
 
 	// TODO: handle crypto
 
@@ -728,9 +760,9 @@ func (p *VideoPort) rtpReadLoop(log logger.Logger, r rtp.ReadStream, w rtp.Write
 	}
 }
 
-func (p *VideoPort) gstOutputPipeline(in rtp.WriteStreamCloser) (*GstWriteStream, error) {
+func (p *VideoPort) gstPipeline(in rtp.WriteStreamCloser, pstr string) (*GstWriteStream, error) {
 	builder := NewPipelineBuilder()
-	pipeline, err := builder.Build()
+	pipeline, err := builder.StrPipeline(pstr).Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to build GST pipeline: %w", err)
 	}
@@ -769,6 +801,22 @@ func (p *VideoPort) gstOutputPipeline(in rtp.WriteStreamCloser) (*GstWriteStream
 // 	return w.conn.Write(data)
 // }
 
+const inputPipelineStr = `appsrc name=src is-live=true format=time do-timestamp=true
+  caps="application/x-rtp,media=video,encoding-name=VP8,payload=96,clock-rate=90000" !
+  rtpjitterbuffer latency=0 do-lost=true !
+  rtpvp8depay !
+  vp8dec !
+  videoconvert !
+  tee name=t
+
+  t. ! queue ! fpsdisplaysink name=preview text-overlay=true sync=true
+
+  t. ! queue !
+      vp8enc deadline=1 target-bitrate=1200000 keyframe-max-dist=60 !
+      rtpvp8pay pt=96 mtu=1200 ssrc=0x11223344 !
+      appsink name=sink sync=false emit-signals=true enable-last-sample=false
+      caps="application/x-rtp,media=video,encoding-name=VP8,payload=96,clock-rate=90000"`
+
 func (p *VideoPort) setupOutput() error {
 	if p.closed.IsBroken() {
 		return errors.New("media is already closed")
@@ -785,13 +833,13 @@ func (p *VideoPort) setupOutput() error {
 
 	wc := rtp.NewStreamNopCloser(w)
 
-	// gw, err := p.gstOutputPipeline(wc)
-	// if err != nil {
-	// 	p.log.Errorw("failed to create GST output pipeline", err)
-	// 	return err
-	// }
+	gw, err := p.gstPipeline(wc, inputPipelineStr)
+	if err != nil {
+		p.log.Errorw("failed to create GST output pipeline1", err)
+		return err
+	}
 
-	if w := p.videoOut.Swap(wc); w != nil {
+	if w := p.videoOut.Swap(gw); w != nil {
 		_ = w.Close()
 	}
 
