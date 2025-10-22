@@ -415,8 +415,6 @@ func (r *Room) NewParticipantVideoTrack() (rtp.WriteStream, error) {
 	}
 	p := r.room.LocalParticipant
 	if _, err = p.PublishTrack(track, &lksdk.TrackPublicationOptions{
-		VideoWidth:  640,
-		VideoHeight: 480,
 		Name:        p.Identity(),
 	}); err != nil {
 		r.log.Errorw("cannot publish rtp track", err)
