@@ -647,15 +647,9 @@ const inputPipeline = `appsrc name=src format=3 is-live=true do-timestamp=true m
   h264parse config-interval=-1 !
   avdec_h264 !
   videoconvert !
-  tee name=t
-  t. ! queue leaky=downstream max-size-buffers=0 max-size-bytes=0 max-size-time=20000000 !
-	videoconvert !
-	fpsdisplaysink sync=false text-overlay=false
-
-  t. ! queue !
-	vp8enc deadline=1 target-bitrate=2000000 cpu-used=6 keyframe-max-dist=60 lag-in-frames=0 threads=4 buffer-initial-size=100 buffer-optimal-size=120 buffer-size=150 !
-	rtpvp8pay pt=96 mtu=1200 !
-	appsink name=sink emit-signals=false drop=false max-buffers=2 sync=false`
+  vp8enc deadline=1 target-bitrate=2000000 cpu-used=6 keyframe-max-dist=60 lag-in-frames=0 threads=4 buffer-initial-size=100 buffer-optimal-size=120 buffer-size=150 !
+  rtpvp8pay pt=96 mtu=1200 !
+  appsink name=sink emit-signals=false drop=false max-buffers=2 sync=false`
 
 func (p *VideoPort) setupInput() error {
 	if p.closed.IsBroken() {
