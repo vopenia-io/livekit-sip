@@ -17,6 +17,7 @@ package sip
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"sync/atomic"
 
@@ -63,6 +64,7 @@ type Room struct {
 	room       *lksdk.Room
 	mix        *mixer.Mixer
 	out        *msdk.SwitchWriter
+	videoOut   *rtp.WriteStreamSwitcher
 	outDtmf    atomic.Pointer[dtmf.Writer]
 	p          ParticipantInfo
 	ready      core.Fuse
@@ -94,7 +96,7 @@ func NewRoom(log logger.Logger, st *RoomStats) *Room {
 	if st == nil {
 		st = &RoomStats{}
 	}
-	r := &Room{log: log, stats: st, out: msdk.NewSwitchWriter(RoomSampleRate)}
+	r := &Room{log: log, stats: st, out: msdk.NewSwitchWriter(RoomSampleRate), videoOut: rtp.NewWriteStreamSwitcher()}
 	out := newMediaWriterCount(r.out, &st.OutputFrames, &st.OutputSamples)
 
 	var err error
@@ -165,8 +167,8 @@ func (r *Room) participantLeft(rp *lksdk.RemoteParticipant) {
 
 func (r *Room) subscribeTo(pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
 	log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID(), "trackID", pub.SID(), "trackName", pub.Name())
-	if pub.Kind() != lksdk.TrackKindAudio {
-		log.Debugw("skipping non-audio track")
+	if pub.Kind() != lksdk.TrackKindAudio && pub.Kind() != lksdk.TrackKindVideo {
+		log.Debugw("skipping non-audio/video track")
 		return
 	}
 	log.Debugw("subscribing to a track")
@@ -209,39 +211,16 @@ func (r *Room) Connect(conf *config.Config, rconf RoomConfig) error {
 				r.subscribeTo(pub, rp)
 			},
 			OnTrackSubscribed: func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
-				log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID(), "trackID", track.ID(), "trackName", pub.Name())
-				if !r.ready.IsBroken() {
-					log.Warnw("ignoring track, room not ready", nil)
-					return
+				r.log.Debugw("track subscribed", "kind", pub.Kind(), "participant", rp.Identity(), "pID", rp.SID(), "trackID", pub.SID(), "trackName", pub.Name())
+				switch pub.Kind() {
+				case lksdk.TrackKindAudio:
+					r.participantAudioTrackSubscribed(track, pub, rp, conf)
+				case lksdk.TrackKindVideo:
+					r.participantVideoTrackSubscribed(track, pub, rp, conf)
+				default:
+					log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID(), "trackID", pub.SID(), "trackName", pub.Name())
+					log.Warnw("unsupported track kind for subscription", fmt.Errorf("kind=%s", pub.Kind()))
 				}
-				log.Infow("mixing track")
-
-				go func() {
-					mTrack := r.NewTrack()
-					if mTrack == nil {
-						return // closed
-					}
-					defer mTrack.Close()
-
-					in := newRTPReaderCount(track, &r.stats.InputPackets, &r.stats.InputBytes)
-					out := newMediaWriterCount(mTrack, &r.stats.MixerFrames, &r.stats.MixerSamples)
-
-					odec, err := opus.Decode(out, channels, log)
-					if err != nil {
-						log.Errorw("cannot create opus decoder", err)
-						return
-					}
-					defer odec.Close()
-
-					var h rtp.HandlerCloser = rtp.NewNopCloser(rtp.NewMediaStreamIn[opus.Sample](odec))
-					if conf.EnableJitterBuffer {
-						h = rtp.HandleJitter(h)
-					}
-					err = rtp.HandleLoop(in, h)
-					if err != nil && !errors.Is(err, io.EOF) {
-						log.Infow("room track rtp handler returned with failure", "error", err)
-					}
-				}()
 			},
 			OnDataPacket: func(data lksdk.DataPacket, params lksdk.DataReceiveParams) {
 				switch data := data.(type) {
@@ -341,6 +320,10 @@ func (r *Room) SwapOutput(out msdk.PCM16Writer) msdk.PCM16Writer {
 	return r.out.Swap(msdk.ResampleWriter(out, r.mix.SampleRate()))
 }
 
+func (r *Room) SwapVideoOutput(out rtp.WriteStreamCloser) rtp.WriteStreamCloser {
+	return r.videoOut.Swap(out)
+}
+
 func (r *Room) CloseOutput() error {
 	w := r.SwapOutput(nil)
 	if w == nil {
@@ -424,7 +407,7 @@ func (r *Room) NewParticipantTrack(sampleRate int) (msdk.WriteCloser[msdk.PCM16S
 
 func (r *Room) NewParticipantVideoTrack() (rtp.WriteStream, error) {
 	track, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{
-		MimeType: webrtc.MimeTypeH264,
+		MimeType: webrtc.MimeTypeVP8,
 	}, "camera", "pion")
 	if err != nil {
 		r.log.Errorw("cannot create rtp track", err)
@@ -459,4 +442,78 @@ func (r *Room) NewTrack() *mixer.Input {
 		return nil
 	}
 	return r.mix.NewInput()
+}
+
+type noErrHandlerCloser struct {
+	w rtp.WriteStreamCloser
+}
+
+func (n noErrHandlerCloser) String() string {
+	return n.w.String()
+}
+
+func (n noErrHandlerCloser) HandleRTP(h *rtp.Header, payload []byte) error {
+	// fmt.Printf("writing rtp packet: SSRC=%d, Seq=%d, TS=%d, Len=%d -> %s\n", h.SSRC, h.SequenceNumber, h.Timestamp, len(payload), n.w.String())
+	_, err := n.w.WriteRTP(h, payload)
+	return err
+}
+
+func (n noErrHandlerCloser) Close() {
+	_ = n.w.Close()
+}
+
+func (r *Room) participantVideoTrackSubscribed(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant, conf *config.Config) {
+	log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID(), "trackID", track.ID(), "trackName", pub.Name())
+	if !r.ready.IsBroken() {
+		log.Warnw("ignoring track, room not ready", nil)
+		return
+	}
+	log.Infow("handling new video track")
+
+	hnd := &noErrHandlerCloser{
+		w: r.videoOut,
+	}
+
+	go func() {
+		err := rtp.HandleLoop(track, hnd)
+		if err != nil && !errors.Is(err, io.EOF) {
+			log.Infow("room track rtp handler returned with failure", "error", err)
+		}
+	}()
+}
+
+func (r *Room) participantAudioTrackSubscribed(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant, conf *config.Config) {
+	log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID(), "trackID", track.ID(), "trackName", pub.Name())
+	if !r.ready.IsBroken() {
+		log.Warnw("ignoring track, room not ready", nil)
+		return
+	}
+	log.Infow("mixing track")
+
+	go func() {
+		mTrack := r.NewTrack()
+		if mTrack == nil {
+			return // closed
+		}
+		defer mTrack.Close()
+
+		in := newRTPReaderCount(track, &r.stats.InputPackets, &r.stats.InputBytes)
+		out := newMediaWriterCount(mTrack, &r.stats.MixerFrames, &r.stats.MixerSamples)
+
+		odec, err := opus.Decode(out, channels, log)
+		if err != nil {
+			log.Errorw("cannot create opus decoder", err)
+			return
+		}
+		defer odec.Close()
+
+		var h rtp.HandlerCloser = rtp.NewNopCloser(rtp.NewMediaStreamIn[opus.Sample](odec))
+		if conf.EnableJitterBuffer {
+			h = rtp.HandleJitter(h)
+		}
+		err = rtp.HandleLoop(in, h)
+		if err != nil && !errors.Is(err, io.EOF) {
+			log.Infow("room track rtp handler returned with failure", "error", err)
+		}
+	}()
 }

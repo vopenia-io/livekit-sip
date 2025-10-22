@@ -1,44 +1,48 @@
 package sip
 
 import (
+	"context"
+	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/netip"
 	"strings"
 	"sync"
 
 	"github.com/frostbyte73/core"
+	"github.com/go-gst/go-gst/gst"
+	"github.com/go-gst/go-gst/gst/app"
 	"github.com/livekit/media-sdk/rtp"
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/sip/pkg/stats"
 	"github.com/pkg/errors"
 )
 
-// func NewVideoConn(c *net.UDPConn) (*videoConn, error) {
-// 	return &videoConn{
-// 		conn: c,
-// 	}, nil
+// type vconn struct {
+// 	*udpConn
 // }
 
-// type videoConn struct {
-// 	locked atomic.Bool
-// 	conn   *net.UDPConn
-// 	port   uint16
+// func (v *vconn) Write(b []byte) (int, error) {
+// 	print("writing video packet of size ", len(b), "\n")
+// 	return v.udpConn.Write(b)
 // }
 
-// func (vc *videoConn) Port() uint16 {
-// 	if !vc.locked.Load() {
-// 		return uint16(vc.conn.LocalAddr().(*net.UDPAddr).Port)
-// 	}
-// 	return vc.port
+// func (v *vconn) WriteToUDPAddrPort(b []byte, addr netip.AddrPort) (int, error) {
+// 	print("writing video packet of size ", len(b), " to ", addr.String(), "\n")
+// 	return v.udpConn.WriteToUDPAddrPort(b, addr)
 // }
 
-// func (vc *videoConn) Release() uint16 {
-// 	if !vc.locked.Swap(true) {
-// 		vc.port = uint16(vc.conn.LocalAddr().(*net.UDPAddr).Port)
-// 		vc.conn.Close()
-// 	}
-// 	return vc.port
+// func (v *vconn) Read(b []byte) (int, error) {
+// 	n, err := v.udpConn.Read(b)
+// 	print("read video packet of size ", n, "\n")
+// 	return n, err
+// }
+
+// func (v *vconn) ReadFromUDPAddrPort(b []byte) (int, netip.AddrPort, error) {
+// 	n, addr, err := v.udpConn.ReadFromUDPAddrPort(b)
+// 	print("read video packet of size ", n, " from ", addr.String(), "\n")
+// 	return n, addr, err
 // }
 
 type VideoPort struct {
@@ -69,6 +73,8 @@ func NewVideoPort(log logger.Logger, mon *stats.CallMonitor, conn UDPConn, opts 
 	}
 
 	log = log.WithValues("mediaType", "video", "localAddr", conn.LocalAddr())
+
+	// c := &vconn{udpConn: newUDPConn(log, conn)}
 
 	p := &VideoPort{
 		log:          log,
@@ -136,6 +142,13 @@ func (p *VideoPort) SetConfig(c *MediaConf) error {
 	p.conf = c
 	p.sess = sess
 
+	// go func() {
+	// 	for {
+	// 		time.Sleep(time.Second)
+	// 		slog.Info("video sess conn info", "local", p.conn.LocalAddr(), "remote", p.conn.RemoteAddr())
+	// 	}
+	// }()
+
 	if err := p.setupInput(); err != nil {
 		return err
 	}
@@ -147,12 +160,488 @@ func (p *VideoPort) SetConfig(c *MediaConf) error {
 	return nil
 }
 
+func NewGstWriteStream(ctx context.Context, pipeline *gst.Pipeline, rw *GstReadWriteRTP, w rtp.WriteStreamCloser) *GstWriteStream {
+	if ctx == nil || pipeline == nil || rw == nil || w == nil {
+		panic("invalid arguments to NewGstWriteStream")
+	}
+
+	g := &GstWriteStream{
+		pipeline: pipeline,
+		w:        w,
+		rw:       rw,
+	}
+	g.ctx, g.cancel = context.WithCancel(ctx)
+	return g
+}
+
+type GstWriteStream struct {
+	ctx      context.Context
+	cancel   context.CancelFunc
+	running  bool
+	wg       sync.WaitGroup
+	pipeline *gst.Pipeline
+	w        rtp.WriteStreamCloser
+	rw       *GstReadWriteRTP
+}
+
+func (g *GstWriteStream) String() string {
+	pname := "nil"
+	if g.pipeline != nil {
+		pname = g.pipeline.GetName()
+	}
+	wname := "nil"
+	if g.w != nil {
+		wname = g.w.String()
+	}
+
+	return fmt.Sprintf("GstWriteStream(%s: %t) -> %s", pname, g.running, wname)
+}
+
+func (g *GstWriteStream) Start() error {
+	if g.running {
+		return nil
+	}
+
+	if err := g.pipeline.SetState(gst.StatePlaying); err != nil {
+		return err
+	}
+	g.wg.Add(1)
+	go func() {
+		defer g.wg.Done()
+		<-g.ctx.Done()
+		g.pipeline.SetState(gst.StateNull)
+	}()
+
+	g.wg.Add(1)
+	go func() {
+		defer g.wg.Done()
+
+		var h rtp.Header
+		payload := make([]byte, rtp.MTUSize)
+
+		for {
+			select {
+			case <-g.ctx.Done():
+				return
+			default:
+				n, err := g.rw.ReadRTP(&h, payload)
+				if err != nil {
+					if err == io.EOF {
+						slog.InfoContext(g.ctx, "GstWriteStream read EOF, exiting")
+						return
+					}
+					slog.ErrorContext(g.ctx, "GstWriteStream read RTP failed", err)
+					continue
+				}
+
+				payload = payload[:n] // trim to actual size, don't know if it's necessary
+
+				_, err = g.w.WriteRTP(&h, payload)
+				if err != nil {
+					slog.ErrorContext(g.ctx, "GstWriteStream write RTP failed", err)
+					continue
+				}
+			}
+		}
+	}()
+
+	g.running = true
+
+	return nil
+}
+
+func (g *GstWriteStream) WriteRTP(h *rtp.Header, payload []byte) (int, error) {
+	if !g.running {
+		if err := g.Start(); err != nil {
+			return 0, err
+		}
+	}
+	return g.rw.WriteRTP(h, payload)
+}
+
+func (g *GstWriteStream) Close() error {
+	g.cancel()
+	g.wg.Wait()
+	return g.w.Close()
+}
+
+func NewReadWriteRTP(src *app.Source, sink *app.Sink) (*GstReadWriteRTP, error) {
+	g := &GstReadWriteRTP{
+		// in:   bytes.NewBuffer(nil),
+		// out:  bytes.NewBuffer(nil),
+		src:  src,
+		sink: sink,
+	}
+
+	// buf, err := gst.NewBufferFromReader(g.in)
+	// if err != nil {
+	// 	p.log.Errorw("failed to create GST buffer", err)
+	// 	return nil, err
+	// }
+	// g.gbuf = buf
+
+	if err := g.src.SetState(gst.StatePlaying); err != nil {
+		return nil, err
+	}
+
+	if err := g.sink.SetState(gst.StatePlaying); err != nil {
+		return nil, err
+	}
+
+	return g, nil
+}
+
+type GstReadWriteRTP struct {
+	sink *app.Sink
+	src  *app.Source
+}
+
+func (g *GstReadWriteRTP) String() string {
+	return "GstWriteStream"
+}
+
+func (g *GstReadWriteRTP) Close() error {
+	// if g.w != nil && *g.w != nil {
+	// 	return (*g.w).Close()
+	// }
+
+	if err := g.src.SetState(gst.StateNull); err != nil {
+		return err
+	}
+	if err := g.sink.SetState(gst.StateNull); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (g *GstReadWriteRTP) WriteRTP(h *rtp.Header, payload []byte) (int, error) {
+	p := rtp.Packet{
+		Header:  *h,
+		Payload: payload,
+	}
+	data, err := p.Marshal()
+	if err != nil {
+		return 0, err
+	}
+	n := len(payload)
+
+	buf := gst.NewBufferFromBytes(data)
+	if buf == nil {
+		return 0, errors.New("failed to create GST buffer from RTP packet")
+	}
+	g.src.PushBuffer(buf)
+
+	return n, nil
+}
+
+func (g *GstReadWriteRTP) ReadRTP(h *rtp.Header, payload []byte) (int, error) {
+	var pkt rtp.Packet
+
+	sample := g.sink.PullSample()
+	if sample == nil {
+		if g.sink.IsEOS() {
+			return 0, io.EOF
+		}
+		return 0, errors.New("failed to pull sample from appsink")
+	}
+	buf := sample.GetBuffer()
+	if buf == nil {
+		return 0, errors.New("failed to get buffer from sample")
+	}
+
+	if err := pkt.Unmarshal(buf.Bytes()); err != nil {
+		return 0, err
+	}
+
+	*h = pkt.Header
+	n := copy(payload, pkt.Payload)
+	return n, nil
+}
+
+// func (p *VideoPort) gstInputPipeline() (*GstWriteStream, error) {
+// 	// TODO: create GST pipeline
+
+// 	// Create the pipeline
+// 	pipeline, err := gst.NewPipeline("test-pipeline")
+// 	if err != nil {
+// 		return nil, err
+// 	}
+
+// 	// Create appsrc and appsink elements
+// 	appsrc, err := app.NewAppSrc()
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	appsink, err := app.NewAppSink()
+// 	if err != nil {
+// 		return nil, err
+// 	}
+
+// 	// Add them to the pipeline
+// 	if err := pipeline.AddMany(appsrc.Element, appsink.Element); err != nil {
+// 		return nil, err
+// 	}
+
+// 	// Link them (appsrc -> appsink)
+// 	if err := gst.ElementLinkMany(appsrc.Element, appsink.Element); err != nil {
+// 		return nil, err
+// 	}
+
+// 	rw, err := NewReadWriteRTP(appsrc, appsink)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	gw := NewGstWriteStream(context.Background(), pipeline, rw, p.videoIn)
+// 	if err := gw.Start(); err != nil {
+// 		return nil, err
+// 	}
+// 	return gw, nil
+// }
+
+// func (p *VideoPort) gstInputPipeline() (*GstWriteStream, error) {
+// 	// TODO: create GST pipeline
+
+// 	// Create the pipeline
+// 	pipeline, err := gst.NewPipeline("test-pipeline")
+// 	if err != nil {
+// 		return nil, fmt.Errorf("failed to create GST pipeline: %w", err)
+// 	}
+
+// 	// Create appsrc and appsink elements
+// 	appsrc, err := app.NewAppSrc()
+// 	if err != nil {
+// 		return nil, fmt.Errorf("failed to create GST appsrc: %w", err)
+// 	}
+
+// 	appsink, err := app.NewAppSink()
+// 	if err != nil {
+// 		return nil, fmt.Errorf("failed to create GST appsink: %w", err)
+// 	}
+
+// 	jitter, err := gst.NewElement("rtpjitterbuffer")
+// 	if err != nil {
+// 		return nil, fmt.Errorf("failed to create GST rtpjitterbuffer: %w", err)
+// 	}
+
+// 	depay, err := gst.NewElement("rtph264depay")
+// 	if err != nil {
+// 		return nil, fmt.Errorf("failed to create GST rtph264depay: %w", err)
+// 	}
+
+// 	parse, err := gst.NewElement("h264parse")
+// 	if err != nil {
+// 		return nil, fmt.Errorf("failed to create GST h264parse: %w", err)
+// 	}
+
+// 	decoder, err := gst.NewElement("avdec_h264")
+// 	if err != nil {
+// 		return nil, fmt.Errorf("failed to create GST avdec_h264: %w", err)
+// 	}
+
+// 	converter, err := gst.NewElement("videoconvert")
+// 	if err != nil {
+// 		return nil, fmt.Errorf("failed to create GST videoconvert: %w", err)
+// 	}
+
+// 	// scale, err := gst.NewElement("videoscale")
+// 	// if err != nil {
+// 	// 	return nil, fmt.Errorf("failed to create GST videoscale: %w", err)
+// 	// }
+
+// 	rate, err := gst.NewElement("videorate")
+// 	if err != nil {
+// 		return nil, fmt.Errorf("failed to create GST videorate: %w", err)
+// 	}
+
+// 	encoder, err := gst.NewElement("vp8enc")
+// 	if err != nil {
+// 		return nil, fmt.Errorf("failed to create GST vp8enc: %w", err)
+// 	}
+
+// 	rtppay, err := gst.NewElement("rtpvp8pay")
+// 	if err != nil {
+// 		return nil, fmt.Errorf("failed to create GST rtpvp8pay: %w", err)
+// 	}
+
+// 	{
+// 		// Configure appsrc
+// 		caps := gst.NewCapsFromString("application/x-rtp,media=video,encoding-name=H264,payload=96,clock-rate=90000")
+// 		appsrc.SetCaps(caps)
+// 		if err := appsrc.SetProperty("is-live", true); err != nil {
+// 			return nil, fmt.Errorf("failed to set GST appsrc is-live property: %w", err)
+// 		}
+// 		// if err := appsrc.SetProperty("format", int32(3)); err != nil {
+// 		// 	return nil, fmt.Errorf("failed to set GST appsrc format property: %w", err)
+// 		// }
+// 		if err := appsrc.SetProperty("do-timestamp", true); err != nil {
+// 			return nil, fmt.Errorf("failed to set GST appsrc do-timestamp property: %w", err)
+// 		}
+
+// 		// Configure appsink
+// 		if err := appsink.SetProperty("emit-signals", true); err != nil {
+// 			return nil, fmt.Errorf("failed to set GST appsink emit-signals property: %w", err)
+// 		}
+// 		if err := appsink.SetProperty("drop", true); err != nil {
+// 			return nil, fmt.Errorf("failed to set GST appsink drop property: %w", err)
+// 		}
+// 		if err := appsink.SetProperty("max-buffers", uint(1)); err != nil {
+// 			return nil, fmt.Errorf("failed to set GST appsink max-buffers property: %w", err)
+// 		}
+
+// 		// Configure jitter buffer
+// 		if err := jitter.SetProperty("latency", uint(50)); err != nil {
+// 			return nil, fmt.Errorf("failed to set GST rtpjitterbuffer latency property: %w", err)
+// 		}
+// 		if err := jitter.SetProperty("do-lost", true); err != nil {
+// 			return nil, fmt.Errorf("failed to set GST rtpjitterbuffer do-lost property: %w", err)
+// 		}
+// 		// if err := jitter.SetProperty("do-retransmission", false); err != nil {
+// 		// 	return nil, fmt.Errorf("failed to set GST rtpjitterbuffer do-retransmission property: %w", err)
+// 		// }
+
+// 		// Configure encoder
+// 		if err := encoder.SetProperty("deadline", int64(1)); err != nil {
+// 			return nil, fmt.Errorf("failed to set GST vp8enc deadline property: %w", err)
+// 		}
+// 		if err := encoder.SetProperty("cpu-used", 4); err != nil {
+// 			return nil, fmt.Errorf("failed to set GST vp8enc cpu-used property: %w", err)
+// 		}
+// 		// if err := encoder.SetProperty("target-bitrate", uint(1000000)); err != nil {
+// 		// 	return nil, fmt.Errorf("failed to set GST vp8enc target-bitrate property: %w", err)
+// 		// }
+// 		// if err := encoder.SetProperty("end-usage", 1); err != nil {
+// 		// 	return nil, fmt.Errorf("failed to set GST vp8enc end-usage property: %w", err)
+// 		// }
+// 		// if err := encoder.SetProperty("error-resilient", 1); err != nil {
+// 		// 	return nil, fmt.Errorf("failed to set GST vp8enc error-resilient property: %w", err)
+// 		// }
+// 		// if err := encoder.SetProperty("keyframe-max-dist", uint(30)); err != nil {
+// 		// 	return nil, fmt.Errorf("failed to set GST vp8enc keyframe-max-dist property: %w", err)
+// 		// }
+// 		// if err := encoder.SetProperty("min-quantizer", uint(4)); err != nil {
+// 		// 	return nil, fmt.Errorf("failed to set GST vp8enc min-quantizer property: %w", err)
+// 		// }
+// 		// if err := encoder.SetProperty("max-quantizer", uint(20)); err != nil {
+// 		// 	return nil, fmt.Errorf("failed to set GST vp8enc max-quantizer property: %w", err)
+// 		// }
+// 		// if err := encoder.SetProperty("threads", uint(4)); err != nil {
+// 		// 	return nil, fmt.Errorf("failed to set GST vp8enc threads property: %w", err)
+// 		// }
+// 		// if err := encoder.SetProperty("lag-in-frames", uint(0)); err != nil {
+// 		// 	return nil, fmt.Errorf("failed to set GST vp8enc lag-in-frames property: %w", err)
+// 		// }
+
+// 		// Configure payloader
+// 		if err := rtppay.SetProperty("pt", uint(96)); err != nil {
+// 			return nil, fmt.Errorf("failed to set GST rtpvp8pay pt property: %w", err)
+// 		}
+// 		if err := rtppay.SetProperty("mtu", uint(1200)); err != nil {
+// 			return nil, fmt.Errorf("failed to set GST rtpvp8pay mtu property: %w", err)
+// 		}
+// 		// if err := rtppay.SetProperty("picture-id-mode", 2); err != nil {
+// 		// 	return nil, fmt.Errorf("failed to set GST rtpvp8pay picture-id-mode property: %w", err)
+// 		// }
+// 	}
+
+// 	// Add them to the pipeline
+// 	elements := []*gst.Element{
+// 		appsrc.Element,
+// 		jitter,
+// 		depay,
+// 		parse,
+// 		decoder,
+// 		converter,
+// 		// scale,
+// 		rate,
+// 		encoder,
+// 		rtppay,
+// 		appsink.Element,
+// 	}
+
+// 	for _, elem := range elements {
+// 		if err := pipeline.Add(elem); err != nil {
+// 			return nil, fmt.Errorf("failed to add element %s:%s to GST pipeline: %w", elem.GetFactory().GetName(), elem.GetName(), err)
+// 		}
+// 	}
+
+// 	if err := appsrc.Link(jitter); err != nil {
+// 		return nil, fmt.Errorf("failed to link appsrc to rtpjitterbuffer: %w", err)
+// 	}
+// 	if err := jitter.Link(depay); err != nil {
+// 		return nil, fmt.Errorf("failed to link rtpjitterbuffer to rtph264depay: %w", err)
+// 	}
+// 	if err := depay.Link(parse); err != nil {
+// 		return nil, fmt.Errorf("failed to link rtph264depay to h264parse: %w", err)
+// 	}
+// 	if err := parse.Link(decoder); err != nil {
+// 		return nil, fmt.Errorf("failed to link h264parse to avdec_h264: %w", err)
+// 	}
+// 	if err := decoder.Link(converter); err != nil {
+// 		return nil, fmt.Errorf("failed to link avdec_h264 to videoconvert: %w", err)
+// 	}
+// 	// if err := converter.Link(scale); err != nil {
+// 	// 	return nil, fmt.Errorf("failed to link videoconvert to videoscale: %w", err)
+// 	// }
+// 	if err := converter.Link(rate); err != nil {
+// 		return nil, fmt.Errorf("failed to link videoconvert to videorate: %w", err)
+// 	}
+// 	if err := rate.Link(encoder); err != nil {
+// 		return nil, fmt.Errorf("failed to link videorate to vp8enc: %w", err)
+// 	}
+// 	if err := encoder.Link(rtppay); err != nil {
+// 		return nil, fmt.Errorf("failed to link vp8enc to rtpvp8pay: %w", err)
+// 	}
+// 	if err := rtppay.Link(appsink.Element); err != nil {
+// 		return nil, fmt.Errorf("failed to link rtpvp8pay to appsink: %w", err)
+// 	}
+
+// 	rw, err := NewReadWriteRTP(appsrc, appsink)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("failed to create RTP read/write stream: %w", err)
+// 	}
+// 	gw := NewGstWriteStream(context.Background(), pipeline, rw, p.videoIn)
+// 	if err := gw.Start(); err != nil {
+// 		return nil, fmt.Errorf("failed to start GST write stream: %w", err)
+// 	}
+// 	return gw, nil
+// }
+
+func (p *VideoPort) gstInputPipeline() (*GstWriteStream, error) {
+	builder := NewPipelineBuilder()
+	pipeline, err := builder.Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build GST pipeline: %w", err)
+	}
+
+	appsrc := builder.appsrc
+	appsink := builder.appsink
+
+	rw, err := NewReadWriteRTP(appsrc, appsink)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create RTP read/write stream: %w", err)
+	}
+	gw := NewGstWriteStream(context.Background(), pipeline, rw, p.videoIn)
+	if err := gw.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start GST write stream: %w", err)
+	}
+	return gw, nil
+}
+
 func (p *VideoPort) setupInput() error {
 	if p.closed.IsBroken() {
 		return errors.New("media is already closed")
 	}
 
-	go p.rtpLoop(p.sess, p.videoIn)
+	p.log.Infow("setting up video pipeline")
+	gw, err := p.gstInputPipeline()
+	if err != nil {
+		p.log.Errorw("failed to create GST input pipeline", err)
+		return err
+	}
+	p.log.Infow("video input pipeline created", "pipeline", gw.String())
+
+	go p.rtpLoop(p.sess, gw)
 
 	// TODO: handle crypto
 
@@ -174,6 +663,7 @@ func (p *VideoPort) rtpLoop(sess rtp.Session, w rtp.WriteStream) {
 			}
 			return
 		}
+		slog.Info("lilili conn", "local", p.conn.LocalAddr(), "remote", p.conn.RemoteAddr())
 		p.log.Debugw("RTP stream accepted", "ssrc", ssrc)
 		// p.stats.Streams.Add(1)
 		p.mediaReceived.Break()
@@ -200,7 +690,7 @@ func (p *VideoPort) rtpReadLoop(log logger.Logger, r rtp.ReadStream, w rtp.Write
 			return
 		} else if err != nil {
 			log.Errorw("read RTP failed", err)
-			return
+			continue
 		}
 		// p.packetCount.Add(1)
 		// p.stats.Packets.Add(1)
@@ -238,17 +728,74 @@ func (p *VideoPort) rtpReadLoop(log logger.Logger, r rtp.ReadStream, w rtp.Write
 	}
 }
 
-func (p *VideoPort) setupOutput() error {
+func (p *VideoPort) gstOutputPipeline(in rtp.WriteStreamCloser) (*GstWriteStream, error) {
+	builder := NewPipelineBuilder()
+	pipeline, err := builder.Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build GST pipeline: %w", err)
+	}
 
-	// w, err := p.sess.OpenWriteStream()
+	appsrc := builder.appsrc
+	appsink := builder.appsink
+
+	rw, err := NewReadWriteRTP(appsrc, appsink)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create RTP read/write stream: %w", err)
+	}
+	gw := NewGstWriteStream(context.Background(), pipeline, rw, in)
+	if err := gw.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start GST write stream: %w", err)
+	}
+	return gw, nil
+}
+
+// type connWriter struct {
+// 	conn UDPConn
+// }
+
+// func (w *connWriter) String() string {
+// 	return fmt.Sprintf("UDPConnWriter(%s)", w.conn.RemoteAddr())
+// }
+
+// func (w *connWriter) WriteRTP(h *rtp.Header, payload []byte) (int, error) {
+// 	p := rtp.Packet{
+// 		Header:  *h,
+// 		Payload: payload,
+// 	}
+// 	data, err := p.Marshal()
+// 	if err != nil {
+// 		return 0, err
+// 	}
+// 	return w.conn.Write(data)
+// }
+
+func (p *VideoPort) setupOutput() error {
+	if p.closed.IsBroken() {
+		return errors.New("media is already closed")
+	}
+
+	w, err := p.sess.OpenWriteStream()
+	if err != nil {
+		return err
+	}
+
+	// w := &connWriter{conn: p.conn}
+
+	p.log.Infow("video output write stream opened", "writeStream", w.String())
+
+	wc := rtp.NewStreamNopCloser(w)
+
+	// gw, err := p.gstOutputPipeline(wc)
 	// if err != nil {
+	// 	p.log.Errorw("failed to create GST output pipeline", err)
 	// 	return err
 	// }
 
-	// wc := rtp.NewStreamNopCloser(w)
+	if w := p.videoOut.Swap(wc); w != nil {
+		_ = w.Close()
+	}
 
-	// if w := p.videoOut.Swap(wc); w != nil {
-	// 	_ = w.Close()
-	// }
+	p.log.Infow("video output writer set", "videoWriter", p.videoOut.String())
+
 	return nil
 }

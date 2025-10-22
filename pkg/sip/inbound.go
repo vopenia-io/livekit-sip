@@ -935,6 +935,11 @@ func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncrypt
 		if err = c.video.SetConfig(mconf); err != nil {
 			return nil, err
 		}
+
+		if w := c.lkRoom.SwapVideoOutput(c.video.GetVideoWriter()); w != nil {
+			_ = w.Close()
+		}
+
 		// c.publishVideoTrack()
 	}
 
