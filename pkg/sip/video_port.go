@@ -623,7 +623,6 @@ func (p *VideoPort) rtpReadLoop(log logger.Logger, r rtp.ReadStream, w rtp.Write
 			}
 			continue
 		}
-		log.Debugw("RTP packet processed", "payloadSize", n, "rtpHeader", h)
 		errorCnt = 0
 		pipeline = ""
 	}
