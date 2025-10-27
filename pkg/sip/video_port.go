@@ -145,6 +145,9 @@ func (p *VideoPort) SetConfig(c *MediaConf) error {
 
 	p.rtpConn.SetDst(c.Video.Remote)
 
+	rtcpAddr := netip.AddrPortFrom(c.Video.Remote.Addr(), uint16(c.Video.RtcpPort)) // TODO: use the correct port from sdp
+	p.rtcpConn.SetDst(rtcpAddr)
+
 	// go func() {
 	// 	slog.Info("test conn read")
 	// 	buf := make([]byte, 1500)
@@ -153,9 +156,11 @@ func (p *VideoPort) SetConfig(c *MediaConf) error {
 	// }()
 	p.conf = c
 
-	p.sess = rtp.NewSession(p.log.WithValues("sess-media", "video"), p.rtpConn)
+	p.sess = rtp.NewSession(p.log.WithValues("sess-media", "video-rtp"), p.rtpConn)
 
 	p.rtcpsess = rtp.NewSession(p.log.WithValues("sess-media", "video-rtcp"), p.rtcpConn)
+
+	p.log.Infow("video RTP session created", "rtp-port", p.RTPPort(), "rtcp-port", p.RTCPPort())
 
 	// go func() {
 	// 	for {
@@ -205,7 +210,7 @@ func readerFromPipeline(pipeline *gst.Pipeline, name string) (*GstReadRTP, error
 	return reader, nil
 }
 
-func NewVideoPipeline(pipeline *gst.Pipeline, sipRtpOut, sipRtcpOut, webrtcOut rtp.WriteStreamCloser) (*VideoPipeline, error) {
+func NewVideoPipeline(pipeline *gst.Pipeline, sipRtpOut, sipRtcpOut, webrtcRtpOut, webrtcRtcpOut rtp.WriteStreamCloser) (*VideoPipeline, error) {
 	var err error
 	v := &VideoPipeline{
 		ctx: context.Background(),
@@ -219,10 +224,10 @@ func NewVideoPipeline(pipeline *gst.Pipeline, sipRtpOut, sipRtcpOut, webrtcOut r
 		return nil, fmt.Errorf("failed to create GST writer for sip_rtp_in: %w", err)
 	}
 
-	// v.SipRtcpIn, err = writerFromPipeline(pipeline, "sip_rtcp_in")
-	// if err != nil {
-	// 	return nil, fmt.Errorf("failed to create GST writer for sip_rtcp_in: %w", err)
-	// }
+	v.SipRtcpIn, err = writerFromPipeline(pipeline, "sip_rtcp_in")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GST writer for sip_rtcp_in: %w", err)
+	}
 
 	sipRtpOutReader, err := readerFromPipeline(pipeline, "sip_rtp_out")
 	if err != nil {
@@ -233,38 +238,53 @@ func NewVideoPipeline(pipeline *gst.Pipeline, sipRtpOut, sipRtcpOut, webrtcOut r
 		return nil, fmt.Errorf("failed to create GST sink writer for sip_out: %w", err)
 	}
 
-	// sipRtcpOutReader, err := readerFromPipeline(pipeline, "sip_rtcp_out")
-	// if err != nil {
-	// 	return nil, fmt.Errorf("failed to create GST reader for sip_rtcp_out: %w", err)
-	// }
-
-	// if err := gpr.NewSinkWriter(sipRtcpOutReader, sipRtcpOut); err != nil {
-	// 	return nil, fmt.Errorf("failed to create GST sink writer for sip_rtcp_out: %w", err)
-	// }
-
-	v.WebrtcIn, err = writerFromPipeline(pipeline, "webrtc_in")
+	sipRtcpOutReader, err := readerFromPipeline(pipeline, "sip_rtcp_out")
 	if err != nil {
-		return nil, fmt.Errorf("failed to create GST writer for webrtc_in: %w", err)
+		return nil, fmt.Errorf("failed to create GST reader for sip_rtcp_out: %w", err)
 	}
 
-	webrtcOutReader, err := readerFromPipeline(pipeline, "webrtc_out")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create GST reader for webrtc_out: %w", err)
+	if err := gpr.NewSinkWriter(sipRtcpOutReader, sipRtcpOut); err != nil {
+		return nil, fmt.Errorf("failed to create GST sink writer for sip_rtcp_out: %w", err)
 	}
 
-	if err := gpr.NewSinkWriter(webrtcOutReader, webrtcOut); err != nil {
-		return nil, fmt.Errorf("failed to create GST sink writer for webrtc_out: %w", err)
+	v.WebrtcRtpIn, err = writerFromPipeline(pipeline, "webrtc_rtp_in")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GST writer for webrtc_rtp_in: %w", err)
+	}
+
+	v.WebrtcRtcpIn, err = writerFromPipeline(pipeline, "webrtc_rtcp_in")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GST writer for webrtc_rtcp_in: %w", err)
+	}
+
+	webrtcRtpOutReader, err := readerFromPipeline(pipeline, "webrtc_rtp_out")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GST reader for webrtc_rtp_out: %w", err)
+	}
+
+	if err := gpr.NewSinkWriter(webrtcRtpOutReader, webrtcRtpOut); err != nil {
+		return nil, fmt.Errorf("failed to create GST sink writer for webrtc_rtp_out: %w", err)
+	}
+
+	webrtcRtcpOutReader, err := readerFromPipeline(pipeline, "webrtc_rtcp_out")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GST reader for webrtc_rtcp_out: %w", err)
+	}
+
+	if err := gpr.NewSinkWriter(webrtcRtcpOutReader, webrtcRtcpOut); err != nil {
+		return nil, fmt.Errorf("failed to create GST sink writer for webrtc_rtcp_out: %w", err)
 	}
 
 	return v, nil
 }
 
 type VideoPipeline struct {
-	ctx       context.Context
-	runner    *GstPipelineRunner
-	SipRtpIn  rtp.WriteStreamCloser
-	SipRtcpIn rtp.WriteStreamCloser
-	WebrtcIn  rtp.WriteStreamCloser
+	ctx          context.Context
+	runner       *GstPipelineRunner
+	SipRtpIn     rtp.WriteStreamCloser
+	SipRtcpIn    rtp.WriteStreamCloser
+	WebrtcRtpIn  rtp.WriteStreamCloser
+	WebrtcRtcpIn rtp.WriteStreamCloser
 }
 
 func (v *VideoPipeline) Start() error {
@@ -275,6 +295,16 @@ func (v *VideoPipeline) Close() error {
 	return v.runner.Close()
 }
 
+type discardWriter struct{}
+
+func (d *discardWriter) WriteRTP(h *rtp.Header, payload []byte) (int, error) {
+	return len(payload), nil
+}
+
+func (d *discardWriter) String() string {
+	return "discard"
+}
+
 func (p *VideoPort) setupIO() error {
 	if p.closed.IsBroken() {
 		return errors.New("media is already closed")
@@ -282,7 +312,9 @@ func (p *VideoPort) setupIO() error {
 
 	pt := int(p.conf.Video.Type)
 
-	pstr := fmt.Sprintf(gstVideoPipeline, pt, pt)
+	keyframeMaxDist := keyframeIntervalSeconds * assumedFrameRate
+
+	pstr := fmt.Sprintf(gstVideoPipeline, pt, keyframeMaxDist, pt)
 
 	var (
 		sipRtpOut  rtp.WriteStreamCloser
@@ -311,12 +343,14 @@ func (p *VideoPort) setupIO() error {
 		return fmt.Errorf("failed to create pipeline: %w", err)
 	}
 
-	vp, err := NewVideoPipeline(pipeline, sipRtpOut, sipRtcpOut, p.videoIn)
+	webrtcRtcpOut := rtp.NewStreamNopCloser(&discardWriter{})
+
+	vp, err := NewVideoPipeline(pipeline, sipRtpOut, sipRtcpOut, p.videoIn, webrtcRtcpOut)
 	if err != nil {
 		return fmt.Errorf("failed to create video pipeline: %w", err)
 	}
 
-	if w := p.videoOut.Swap(vp.WebrtcIn); w != nil {
+	if w := p.videoOut.Swap(vp.WebrtcRtpIn); w != nil {
 		_ = w.Close()
 	}
 
@@ -327,77 +361,54 @@ func (p *VideoPort) setupIO() error {
 	p.log.Infow("video pipeline started", "pipeline", pstr)
 
 	go p.rtpLoop(p.sess, vp.SipRtpIn)
-	// go p.rtpLoop(p.rtcpsess, vp.SipRtcpIn)
+	go p.rtpLoop(p.rtcpsess, vp.SipRtcpIn)
 
 	return nil
 }
 
-// const gstVideoPipeline = `
-//   rtpsession name=session0 !
-
-//   appsrc name=sip_rtp_in format=3 is-live=true do-timestamp=true max-bytes=0 block=false
-//     caps="application/x-rtp,media=video,encoding-name=H264,payload=%d,clock-rate=90000,packetization-mode=1" !
-//   session0.recv_rtp_sink
-
-//   appsrc name=sip_rtcp_in format=3 is-live=true do-timestamp=true max-bytes=0 block=false
-//     caps="application/x-rtcp" !
-//   session0.recv_rtcp_sink
-
-//   session0.recv_rtp_src !
-//     rtpjitterbuffer latency=30 do-lost=true drop-on-latency=true !
-//     rtph264depay !
-//     h264parse config-interval=-1 !
-//     avdec_h264 !
-//     videoconvert !
-//     vp8enc deadline=1 target-bitrate=2000000 cpu-used=6 keyframe-max-dist=60 lag-in-frames=0 threads=4 !
-//     rtpvp8pay pt=96 mtu=1200 !
-//   session0.send_rtp_sink
-
-//   funnel name=webrtc_mux !
-//     appsink name=webrtc_out emit-signals=false drop=false max-buffers=2 sync=false
-
-//   session0.send_rtp_src ! queue ! webrtc_mux.sink_0
-//   session0.send_rtcp_src ! queue ! webrtc_mux.sink_1
-
-//   rtpsession name=session1 !
-
-//   appsrc name=webrtc_in format=3 is-live=true do-timestamp=true max-bytes=0 block=false
-//     caps="application/x-rtp" !
-//   session1.recv_rtp_sink
-
-//   session1.recv_rtp_src !
-//     rtpjitterbuffer latency=30 do-lost=true drop-on-latency=true !
-//     rtpvp8depay !
-//     vp8dec !
-//     videoconvert !
-//     video/x-raw,format=I420 !
-//     x264enc bitrate=2000 key-int-max=60 bframes=0 rc-lookahead=0 sliced-threads=true sync-lookahead=0 !
-//     h264parse config-interval=-1 !
-//     rtph264pay pt=%d mtu=1200 config-interval=-1 aggregate-mode=zero-latency !
-//   session1.send_rtp_sink
-
-//   session1.send_rtp_src !
-//     appsink name=sip_rtp_out emit-signals=false drop=false max-buffers=2 sync=false
-
-//   session1.send_rtcp_src !
-//     appsink name=sip_rtcp_out emit-signals=false drop=false max-buffers=10 sync=false
-// `
+const (
+	keyframeIntervalSeconds = 1
+	assumedFrameRate        = 30
+)
 
 const gstVideoPipeline = `
-  ( appsrc name=sip_rtp_in format=3 is-live=true do-timestamp=true max-bytes=0 block=false
+  rtpsession name=sip_session
+  rtpsession name=webrtc_session
+
+  appsrc name=sip_rtp_in format=3 is-live=true do-timestamp=true max-bytes=0 block=true
       caps="application/x-rtp,media=video,encoding-name=H264,payload=%d,clock-rate=90000,packetization-mode=1" !
-      rtpjitterbuffer latency=30 do-lost=true do-retransmission=false drop-on-latency=true !
+      sip_session.recv_rtp_sink
+
+  appsrc name=sip_rtcp_in format=3 is-live=true do-timestamp=true max-bytes=0 block=false
+      caps="application/x-rtcp" !
+      sip_session.recv_rtcp_sink
+
+  sip_session.recv_rtp_src !
+      rtpjitterbuffer latency=10 do-lost=true do-retransmission=false drop-on-latency=true !
       rtph264depay !
       h264parse config-interval=-1 !
-      avdec_h264 !
+      avdec_h264 max-threads=4 !
       videoconvert !
-      vp8enc deadline=1 target-bitrate=2000000 cpu-used=6 keyframe-max-dist=60 lag-in-frames=0 threads=4 buffer-initial-size=100 buffer-optimal-size=120 buffer-size=150 !
+      vp8enc deadline=1 target-bitrate=2000000 cpu-used=8 keyframe-max-dist=%d lag-in-frames=0 threads=4 buffer-initial-size=100 buffer-optimal-size=120 buffer-size=150 !
       rtpvp8pay pt=96 mtu=1200 !
-      appsink name=webrtc_out emit-signals=false drop=false max-buffers=2 sync=false
-  )
-  ( appsrc name=webrtc_in format=3 is-live=true do-timestamp=true max-bytes=0 block=false
+      webrtc_session.send_rtp_sink
+
+  webrtc_session.send_rtp_src !
+      appsink name=webrtc_rtp_out emit-signals=false drop=false max-buffers=30 sync=false
+
+  webrtc_session.send_rtcp_src !
+      appsink name=webrtc_rtcp_out emit-signals=false drop=false max-buffers=10 sync=false
+
+  appsrc name=webrtc_rtp_in format=3 is-live=true do-timestamp=true max-bytes=0 block=false
       caps="application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,payload=96" !
-      rtpjitterbuffer latency=30 do-lost=true do-retransmission=false drop-on-latency=true !
+      webrtc_session.recv_rtp_sink
+
+  appsrc name=webrtc_rtcp_in format=3 is-live=true do-timestamp=true max-bytes=0 block=false
+      caps="application/x-rtcp" !
+      webrtc_session.recv_rtcp_sink
+
+  webrtc_session.recv_rtp_src !
+      rtpjitterbuffer latency=10 do-lost=true do-retransmission=false drop-on-latency=true !
       rtpvp8depay !
       vp8dec !
       videoconvert !
@@ -405,8 +416,14 @@ const gstVideoPipeline = `
       x264enc bitrate=2000 key-int-max=60 bframes=0 rc-lookahead=0 sliced-threads=true sync-lookahead=0 !
       h264parse config-interval=-1 !
       rtph264pay pt=%d mtu=1200 config-interval=-1 aggregate-mode=zero-latency !
-      appsink name=sip_rtp_out emit-signals=false drop=false max-buffers=2 sync=false
-  )`
+      sip_session.send_rtp_sink
+
+  sip_session.send_rtp_src !
+      appsink name=sip_rtp_out emit-signals=false drop=false max-buffers=30 sync=false
+
+  sip_session.send_rtcp_src !
+      appsink name=sip_rtcp_out emit-signals=false drop=false max-buffers=10 sync=false
+`
 
 // const gstPipeline = `
 // appsrc name=sip_rtp_in format=3 is-live=true do-timestamp=true max-bytes=0 block=false
@@ -623,7 +640,6 @@ func (p *VideoPort) rtpReadLoop(log logger.Logger, r rtp.ReadStream, w rtp.Write
 			}
 			continue
 		}
-		log.Debugw("RTP packet processed", "payloadSize", n, "rtpHeader", h)
 		errorCnt = 0
 		pipeline = ""
 	}
