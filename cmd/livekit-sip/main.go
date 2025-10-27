@@ -35,9 +35,15 @@ import (
 	"github.com/livekit/sip/pkg/service"
 	"github.com/livekit/sip/pkg/sip"
 	"github.com/livekit/sip/version"
+
+	// "net/http"
+	// _ "net/http/pprof"
 )
 
 func main() {
+	// go func() {
+	// 	http.ListenAndServe("localhost:6060", nil)
+	// }()
 	cmd := &cli.Command{
 		Name:        "SIP",
 		Usage:       "LiveKit SIP",

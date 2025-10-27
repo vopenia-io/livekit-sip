@@ -83,8 +83,8 @@ type Room struct {
 	stats      *RoomStats
 
 	videoMu       sync.RWMutex
-	videoHandlers map[string]*videoTrackHandler // participant identity -> video handler
-	activeSpeaker string                        // current active speaker identity
+	videoHandlers map[string]*videoTrackHandler
+	activeSpeaker string
 }
 
 type ParticipantConfig struct {
@@ -146,20 +146,17 @@ func NewRoom(log logger.Logger, st *RoomStats) *Room {
 
 func (r *Room) handleActiveSpeakersChanged(speakers []lksdk.Participant) {
 	r.roomLog.Debugw("active speakers changed event received", "speakerCount", len(speakers))
-
 	if len(speakers) == 0 {
 		r.roomLog.Debugw("no active speakers")
 		return
 	}
 
-	// Get the first (most active) speaker
 	speaker := speakers[0]
 	identity := speaker.Identity()
 
 	r.videoMu.Lock()
 	defer r.videoMu.Unlock()
 
-	// Skip if this is already the active speaker
 	if r.activeSpeaker == identity {
 		r.roomLog.Debugw("speaker is already active, skipping switch", "speaker", identity)
 		return
@@ -168,23 +165,19 @@ func (r *Room) handleActiveSpeakersChanged(speakers []lksdk.Participant) {
 	log := r.roomLog.WithValues("newSpeaker", identity, "previousSpeaker", r.activeSpeaker)
 	log.Infow("active speaker changed")
 
-	// Update active speaker
 	previousSpeaker := r.activeSpeaker
 	r.activeSpeaker = identity
 
-	// Switch video output to the new active speaker
 	r.switchVideoOutput(identity, previousSpeaker, log)
 }
 
 func (r *Room) switchVideoOutput(newSpeaker, previousSpeaker string, log logger.Logger) {
-	// This method should be called with videoMu already locked
 
 	log.Debugw("attempting to switch video output",
 		"fromSpeaker", previousSpeaker,
 		"toSpeaker", newSpeaker,
 		"totalHandlers", len(r.videoHandlers))
 
-	// Find the new speaker's video handler
 	handler, exists := r.videoHandlers[newSpeaker]
 	if !exists {
 		log.Debugw("no video handler found for new active speaker",
@@ -200,10 +193,8 @@ func (r *Room) switchVideoOutput(newSpeaker, previousSpeaker string, log logger.
 		return
 	}
 
-	// Disconnect the previous speaker's video handler from videoOut
 	if previousSpeaker != "" {
 		if prevHandler, exists := r.videoHandlers[previousSpeaker]; exists && prevHandler.handler != nil {
-			// Create a new temporary writer for the previous speaker
 			prevHandler.handler.w = rtp.NewWriteStreamSwitcher()
 			log.Debugw("disconnected previous speaker from video output",
 				"previousSpeaker", previousSpeaker,
@@ -211,13 +202,11 @@ func (r *Room) switchVideoOutput(newSpeaker, previousSpeaker string, log logger.
 		}
 	}
 
-	// Swap the video output to the new speaker's handler
 	log.Infow("switching video output to active speaker",
 		"newSpeaker", newSpeaker,
 		"newParticipantID", handler.participantID,
 		"previousSpeaker", previousSpeaker)
 
-	// Update the new handler to write to videoOut
 	oldWriter := handler.handler.w
 	handler.handler.w = r.videoOut
 
@@ -228,7 +217,6 @@ func (r *Room) switchVideoOutput(newSpeaker, previousSpeaker string, log logger.
 }
 
 func (r *Room) getHandlerIdentities() []string {
-	// This method should be called with videoMu already locked
 	identities := make([]string, 0, len(r.videoHandlers))
 	for identity := range r.videoHandlers {
 		identities = append(identities, identity)
@@ -245,14 +233,11 @@ func (r *Room) cleanupVideoHandler(identity string) {
 		return
 	}
 	defer handler.handler.Close()
+	delete(r.videoHandlers, identity)
 
 	log := r.roomLog.WithValues("participant", identity)
 	log.Debugw("cleaning up video handler")
 
-	// Remove from map
-	delete(r.videoHandlers, identity)
-
-	// If this was the active speaker, clear it
 	if r.activeSpeaker == identity {
 		r.activeSpeaker = ""
 		log.Infow("active speaker left, clearing active speaker")
@@ -505,6 +490,28 @@ func (r *Room) CloseWithReason(reason livekit.DisconnectReason) error {
 	r.closed.Break()
 	r.subscribe.Store(false)
 	err := r.CloseOutput()
+	// stop video output and close the previous writer
+	if w := r.SwapVideoOutput(nil); w != nil {
+		if e := w.Close(); err == nil {
+			err = e
+		}
+	}
+
+	// close all video handlers and clear state
+	var closers []*noErrHandlerCloser
+	r.videoMu.Lock()
+	for _, vh := range r.videoHandlers {
+		if vh != nil && vh.handler != nil {
+			closers = append(closers, vh.handler)
+		}
+	}
+	r.videoHandlers = make(map[string]*videoTrackHandler)
+	r.activeSpeaker = ""
+	r.videoMu.Unlock()
+	for _, h := range closers {
+		h.Close()
+	}
+
 	r.SetDTMFOutput(nil)
 	if r.room != nil {
 		r.room.DisconnectWithReason(reason)
@@ -588,7 +595,6 @@ func (n noErrHandlerCloser) String() string {
 }
 
 func (n noErrHandlerCloser) HandleRTP(h *rtp.Header, payload []byte) error {
-	// fmt.Printf("writing rtp packet: SSRC=%d, Seq=%d, TS=%d, Len=%d -> %s\n", h.SSRC, h.SequenceNumber, h.Timestamp, len(payload), n.w.String())
 	_, err := n.w.WriteRTP(h, payload)
 	return err
 }
@@ -607,16 +613,10 @@ func (r *Room) participantVideoTrackSubscribed(track *webrtc.TrackRemote, pub *l
 
 	identity := rp.Identity()
 
-	// Create a context for this handler
-	// Create a temporary writer that will be replaced when this becomes the active speaker
-	// We start with a no-op writer to buffer the track
-	tempWriter := rtp.NewWriteStreamSwitcher()
-
 	hnd := &noErrHandlerCloser{
-		w: tempWriter,
+		w: rtp.NewWriteStreamSwitcher(),
 	}
 
-	// Store the handler for this participant
 	r.videoMu.Lock()
 	defer r.videoMu.Unlock()
 	handler := &videoTrackHandler{
@@ -627,8 +627,6 @@ func (r *Room) participantVideoTrackSubscribed(track *webrtc.TrackRemote, pub *l
 	}
 	r.videoHandlers[identity] = handler
 
-	// Check if this participant should be the active speaker
-	// (either no one is speaking yet, or they're already the active speaker)
 	shouldActivate := r.activeSpeaker == "" || r.activeSpeaker == identity
 	if shouldActivate {
 		r.activeSpeaker = identity

@@ -1151,6 +1151,10 @@ func (c *inboundCall) closeMedia() {
 	if c.media != nil {
 		c.media.Close()
 	}
+	if c.video != nil {
+		c.video.Close()
+		c.video = nil
+	}
 }
 
 func (c *inboundCall) setStatus(v CallStatus) {
