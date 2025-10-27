@@ -52,27 +52,37 @@ type VideoPort struct {
 	conf          *MediaConf
 	mon           *stats.CallMonitor
 	externalIP    netip.Addr
-	conn          *udpConn
+	rtpConn       *udpConn
+	rtcpConn      *udpConn
 	mediaTimeout  chan struct{}
-	videoIn       *rtp.WriteStreamSwitcher
-	videoOut      *rtp.WriteStreamSwitcher
+	videoIn       *rtp.WriteStreamSwitcher // -> webrtc track
+	videoOut      *rtp.WriteStreamSwitcher // <- webrtc track
 	sess          rtp.Session
+	rtcpsess      rtp.Session
 	closed        core.Fuse
 	mediaReceived core.Fuse
 }
 
-func NewVideoPort(log logger.Logger, mon *stats.CallMonitor, conn UDPConn, opts *MediaOptions) (*VideoPort, error) {
+func NewVideoPort(log logger.Logger, mon *stats.CallMonitor, rtcConn UDPConn, rtcpConn UDPConn, opts *MediaOptions) (*VideoPort, error) {
 	mediaTimeout := make(chan struct{})
 
-	if conn == nil {
+	if rtcConn == nil {
 		c, err := rtp.ListenUDPPortRange(opts.Ports.Start, opts.Ports.End, netip.AddrFrom4([4]byte{0, 0, 0, 0}))
 		if err != nil {
 			return nil, err
 		}
-		conn = c
+		rtcConn = c
 	}
 
-	log = log.WithValues("mediaType", "video", "localAddr", conn.LocalAddr())
+	if rtcpConn == nil {
+		c, err := rtp.ListenUDPPortRange(opts.Ports.Start, opts.Ports.End, netip.AddrFrom4([4]byte{0, 0, 0, 0}))
+		if err != nil {
+			return nil, err
+		}
+		rtcpConn = c
+	}
+
+	log = log.WithValues("mediaType", "video", "localAddr", rtcConn.LocalAddr())
 
 	// c := &vconn{udpConn: newUDPConn(log, conn)}
 
@@ -84,7 +94,8 @@ func NewVideoPort(log logger.Logger, mon *stats.CallMonitor, conn UDPConn, opts 
 		mediaTimeout: mediaTimeout,
 		videoIn:      rtp.NewWriteStreamSwitcher(),
 		videoOut:     rtp.NewWriteStreamSwitcher(),
-		conn:         newUDPConn(log, conn),
+		rtpConn:      newUDPConn(log, rtcConn),
+		rtcpConn:     newUDPConn(log, rtcpConn),
 	}
 	return p, nil
 }
@@ -101,8 +112,12 @@ func (p *VideoPort) Close() {
 	})
 }
 
-func (p *VideoPort) Port() int {
-	return p.conn.LocalAddr().(*net.UDPAddr).Port
+func (p *VideoPort) RTPPort() int {
+	return p.rtpConn.LocalAddr().(*net.UDPAddr).Port
+}
+
+func (p *VideoPort) RTCPPort() int {
+	return p.rtcpConn.LocalAddr().(*net.UDPAddr).Port
 }
 
 func (p *VideoPort) WriteVideoTo(w rtp.WriteStreamCloser) {
@@ -128,7 +143,7 @@ func (p *VideoPort) SetConfig(c *MediaConf) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	p.conn.SetDst(c.Video.Remote)
+	p.rtpConn.SetDst(c.Video.Remote)
 
 	// go func() {
 	// 	slog.Info("test conn read")
@@ -136,11 +151,11 @@ func (p *VideoPort) SetConfig(c *MediaConf) error {
 	// 	i, err := p.conn.Read(buf) // prime the conn
 	// 	slog.Info("test conn read done", "n", i, "err", err)
 	// }()
-
-	sess := rtp.NewSession(p.log.WithValues("sess-media", "video"), p.conn)
-
 	p.conf = c
-	p.sess = sess
+
+	p.sess = rtp.NewSession(p.log.WithValues("sess-media", "video"), p.rtpConn)
+
+	p.rtcpsess = rtp.NewSession(p.log.WithValues("sess-media", "video-rtcp"), p.rtcpConn)
 
 	// go func() {
 	// 	for {
@@ -149,496 +164,295 @@ func (p *VideoPort) SetConfig(c *MediaConf) error {
 	// 	}
 	// }()
 
-	if err := p.setupInput(); err != nil {
-		return err
-	}
+	// if err := p.setupInput(); err != nil {
+	// 	return err
+	// }
 
-	if err := p.setupOutput(); err != nil {
+	// if err := p.setupOutput(); err != nil {
+	// 	return err
+	// }
+
+	if err := p.setupIO(); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func NewGstWriteStream(ctx context.Context, pipeline *gst.Pipeline, rw *GstReadWriteRTP, w rtp.WriteStreamCloser) *GstWriteStream {
-	if ctx == nil || pipeline == nil || rw == nil || w == nil {
-		panic("invalid arguments to NewGstWriteStream")
+func writerFromPipeline(pipeline *gst.Pipeline, name string) (*GstWriteRTP, error) {
+	element, err := pipeline.GetElementByName(name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get %s element: %w", name, err)
 	}
-
-	g := &GstWriteStream{
-		pipeline: pipeline,
-		w:        w,
-		rw:       rw,
+	src := app.SrcFromElement(element)
+	writer, err := NewGstWriteRTP(src)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GST write RTP for %s: %w", name, err)
 	}
-	g.ctx, g.cancel = context.WithCancel(ctx)
-	return g
+	return writer, nil
 }
 
-type GstWriteStream struct {
-	ctx      context.Context
-	cancel   context.CancelFunc
-	running  bool
-	wg       sync.WaitGroup
-	pipeline *gst.Pipeline
-	w        rtp.WriteStreamCloser
-	rw       *GstReadWriteRTP
+func readerFromPipeline(pipeline *gst.Pipeline, name string) (*GstReadRTP, error) {
+	element, err := pipeline.GetElementByName(name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get %s element: %w", name, err)
+	}
+	sink := app.SinkFromElement(element)
+	reader, err := NewGstReadRTP(sink)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GST read RTP for %s: %w", name, err)
+	}
+	return reader, nil
 }
 
-func (g *GstWriteStream) String() string {
-	pname := "nil"
-	if g.pipeline != nil {
-		pname = g.pipeline.GetName()
-	}
-	wname := "nil"
-	if g.w != nil {
-		wname = g.w.String()
+func NewVideoPipeline(pipeline *gst.Pipeline, sipRtpOut, sipRtcpOut, webrtcOut rtp.WriteStreamCloser) (*VideoPipeline, error) {
+	var err error
+	v := &VideoPipeline{
+		ctx: context.Background(),
 	}
 
-	return fmt.Sprintf("GstWriteStream(%s: %t) -> %s", pname, g.running, wname)
-}
+	gpr := NewGstPipelineRunner(v.ctx, pipeline)
+	v.runner = gpr
 
-func (g *GstWriteStream) Start() error {
-	if g.running {
-		return nil
+	v.SipRtpIn, err = writerFromPipeline(pipeline, "sip_rtp_in")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GST writer for sip_rtp_in: %w", err)
 	}
 
-	slog.InfoContext(g.ctx, "starting GstWriteStream", "stream", g.String())
-
-	if err := g.pipeline.SetState(gst.StatePlaying); err != nil {
-		return err
-	}
-	g.wg.Add(1)
-	go func() {
-		defer g.wg.Done()
-		<-g.ctx.Done()
-		g.pipeline.SetState(gst.StateNull)
-	}()
-
-	g.wg.Add(1)
-	go func() {
-		defer g.wg.Done()
-
-		var h rtp.Header
-		payload := make([]byte, rtp.MTUSize)
-
-		for {
-			select {
-			case <-g.ctx.Done():
-				return
-			default:
-				n, err := g.rw.ReadRTP(&h, payload)
-				if err != nil {
-					if err == io.EOF {
-						slog.InfoContext(g.ctx, "GstWriteStream read EOF, exiting")
-						return
-					}
-					slog.ErrorContext(g.ctx, "GstWriteStream read RTP failed", err)
-					continue
-				}
-
-				// payload = payload[:n] // trim to actual size, don't know if it's necessary
-
-				_, err = g.w.WriteRTP(&h, payload[:n])
-				if err != nil {
-					slog.ErrorContext(g.ctx, "GstWriteStream write RTP failed", err)
-					continue
-				}
-			}
-		}
-	}()
-
-	g.running = true
-
-	return nil
-}
-
-func (g *GstWriteStream) WriteRTP(h *rtp.Header, payload []byte) (int, error) {
-	if !g.running {
-		if err := g.Start(); err != nil {
-			return 0, err
-		}
-	}
-	return g.rw.WriteRTP(h, payload)
-}
-
-func (g *GstWriteStream) Close() error {
-	g.cancel()
-	g.wg.Wait()
-	return g.w.Close()
-}
-
-func NewReadWriteRTP(src *app.Source, sink *app.Sink) (*GstReadWriteRTP, error) {
-	g := &GstReadWriteRTP{
-		// in:   bytes.NewBuffer(nil),
-		// out:  bytes.NewBuffer(nil),
-		src:  src,
-		sink: sink,
-	}
-
-	// buf, err := gst.NewBufferFromReader(g.in)
+	// v.SipRtcpIn, err = writerFromPipeline(pipeline, "sip_rtcp_in")
 	// if err != nil {
-	// 	p.log.Errorw("failed to create GST buffer", err)
-	// 	return nil, err
-	// }
-	// g.gbuf = buf
-
-	if err := g.src.SetState(gst.StatePlaying); err != nil {
-		return nil, err
-	}
-
-	if err := g.sink.SetState(gst.StatePlaying); err != nil {
-		return nil, err
-	}
-
-	return g, nil
-}
-
-type GstReadWriteRTP struct {
-	sink *app.Sink
-	src  *app.Source
-}
-
-func (g *GstReadWriteRTP) String() string {
-	return "GstWriteStream"
-}
-
-func (g *GstReadWriteRTP) Close() error {
-	// if g.w != nil && *g.w != nil {
-	// 	return (*g.w).Close()
+	// 	return nil, fmt.Errorf("failed to create GST writer for sip_rtcp_in: %w", err)
 	// }
 
-	if err := g.src.SetState(gst.StateNull); err != nil {
-		return err
+	sipRtpOutReader, err := readerFromPipeline(pipeline, "sip_rtp_out")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GST reader for sip_rtp_out: %w", err)
 	}
-	if err := g.sink.SetState(gst.StateNull); err != nil {
-		return err
+
+	if err := gpr.NewSinkWriter(sipRtpOutReader, sipRtpOut); err != nil {
+		return nil, fmt.Errorf("failed to create GST sink writer for sip_out: %w", err)
 	}
+
+	// sipRtcpOutReader, err := readerFromPipeline(pipeline, "sip_rtcp_out")
+	// if err != nil {
+	// 	return nil, fmt.Errorf("failed to create GST reader for sip_rtcp_out: %w", err)
+	// }
+
+	// if err := gpr.NewSinkWriter(sipRtcpOutReader, sipRtcpOut); err != nil {
+	// 	return nil, fmt.Errorf("failed to create GST sink writer for sip_rtcp_out: %w", err)
+	// }
+
+	v.WebrtcIn, err = writerFromPipeline(pipeline, "webrtc_in")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GST writer for webrtc_in: %w", err)
+	}
+
+	webrtcOutReader, err := readerFromPipeline(pipeline, "webrtc_out")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GST reader for webrtc_out: %w", err)
+	}
+
+	if err := gpr.NewSinkWriter(webrtcOutReader, webrtcOut); err != nil {
+		return nil, fmt.Errorf("failed to create GST sink writer for webrtc_out: %w", err)
+	}
+
+	return v, nil
+}
+
+type VideoPipeline struct {
+	ctx       context.Context
+	runner    *GstPipelineRunner
+	SipRtpIn  rtp.WriteStreamCloser
+	SipRtcpIn rtp.WriteStreamCloser
+	WebrtcIn  rtp.WriteStreamCloser
+}
+
+func (v *VideoPipeline) Start() error {
+	return v.runner.Run(v.ctx)
+}
+
+func (v *VideoPipeline) Close() error {
+	return v.runner.Close()
+}
+
+func (p *VideoPort) setupIO() error {
+	if p.closed.IsBroken() {
+		return errors.New("media is already closed")
+	}
+
+	pt := int(p.conf.Video.Type)
+
+	pstr := fmt.Sprintf(gstVideoPipeline, pt, pt)
+
+	var (
+		sipRtpOut  rtp.WriteStreamCloser
+		sipRtcpOut rtp.WriteStreamCloser
+	)
+
+	{
+		w, err := p.sess.OpenWriteStream() // -> sip_rtp_out
+		if err != nil {
+			return fmt.Errorf("failed to open RTP write stream: %w", err)
+		}
+		sipRtpOut = rtp.NewStreamNopCloser(w) // -> sip_rtp_out
+	}
+
+	{
+		w, err := p.rtcpsess.OpenWriteStream() // -> sip_rtcp_out
+		if err != nil {
+			return fmt.Errorf("failed to open RTCP write stream: %w", err)
+		}
+		sipRtcpOut = rtp.NewStreamNopCloser(w) // -> sip_rtcp_out
+	}
+
+	p.log.Infow("setting up video pipeline", "payloadType", pt, "pipeline", pstr)
+	pipeline, err := gst.NewPipelineFromString(pstr)
+	if err != nil {
+		return fmt.Errorf("failed to create pipeline: %w", err)
+	}
+
+	vp, err := NewVideoPipeline(pipeline, sipRtpOut, sipRtcpOut, p.videoIn)
+	if err != nil {
+		return fmt.Errorf("failed to create video pipeline: %w", err)
+	}
+
+	if w := p.videoOut.Swap(vp.WebrtcIn); w != nil {
+		_ = w.Close()
+	}
+
+	if err := vp.Start(); err != nil {
+		return fmt.Errorf("failed to start video pipeline: %w", err)
+	}
+
+	p.log.Infow("video pipeline started", "pipeline", pstr)
+
+	go p.rtpLoop(p.sess, vp.SipRtpIn)
+	// go p.rtpLoop(p.rtcpsess, vp.SipRtcpIn)
 
 	return nil
 }
 
-func (g *GstReadWriteRTP) WriteRTP(h *rtp.Header, payload []byte) (int, error) {
-	p := rtp.Packet{
-		Header:  *h,
-		Payload: payload,
-	}
-	data, err := p.Marshal()
-	if err != nil {
-		return 0, err
-	}
-	n := len(payload)
+// const gstVideoPipeline = `
+//   rtpsession name=session0 !
 
-	buf := gst.NewBufferFromBytes(data)
-	if buf == nil {
-		return 0, errors.New("failed to create GST buffer from RTP packet")
-	}
-	g.src.PushBuffer(buf)
+//   appsrc name=sip_rtp_in format=3 is-live=true do-timestamp=true max-bytes=0 block=false
+//     caps="application/x-rtp,media=video,encoding-name=H264,payload=%d,clock-rate=90000,packetization-mode=1" !
+//   session0.recv_rtp_sink
 
-	return n, nil
-}
+//   appsrc name=sip_rtcp_in format=3 is-live=true do-timestamp=true max-bytes=0 block=false
+//     caps="application/x-rtcp" !
+//   session0.recv_rtcp_sink
 
-func (g *GstReadWriteRTP) ReadRTP(h *rtp.Header, payload []byte) (int, error) {
-	var pkt rtp.Packet
+//   session0.recv_rtp_src !
+//     rtpjitterbuffer latency=30 do-lost=true drop-on-latency=true !
+//     rtph264depay !
+//     h264parse config-interval=-1 !
+//     avdec_h264 !
+//     videoconvert !
+//     vp8enc deadline=1 target-bitrate=2000000 cpu-used=6 keyframe-max-dist=60 lag-in-frames=0 threads=4 !
+//     rtpvp8pay pt=96 mtu=1200 !
+//   session0.send_rtp_sink
 
-	sample := g.sink.PullSample()
-	if sample == nil {
-		if g.sink.IsEOS() {
-			return 0, io.EOF
-		}
-		return 0, errors.New("failed to pull sample from appsink")
-	}
-	buf := sample.GetBuffer()
-	if buf == nil {
-		return 0, errors.New("failed to get buffer from sample")
-	}
+//   funnel name=webrtc_mux !
+//     appsink name=webrtc_out emit-signals=false drop=false max-buffers=2 sync=false
 
-	if err := pkt.Unmarshal(buf.Bytes()); err != nil {
-		return 0, err
-	}
+//   session0.send_rtp_src ! queue ! webrtc_mux.sink_0
+//   session0.send_rtcp_src ! queue ! webrtc_mux.sink_1
 
-	*h = pkt.Header
-	n := copy(payload, pkt.Payload)
-	return n, nil
-}
+//   rtpsession name=session1 !
 
-// func (p *VideoPort) gstInputPipeline() (*GstWriteStream, error) {
-// 	// TODO: create GST pipeline
+//   appsrc name=webrtc_in format=3 is-live=true do-timestamp=true max-bytes=0 block=false
+//     caps="application/x-rtp" !
+//   session1.recv_rtp_sink
 
-// 	// Create the pipeline
-// 	pipeline, err := gst.NewPipeline("test-pipeline")
-// 	if err != nil {
-// 		return nil, err
+//   session1.recv_rtp_src !
+//     rtpjitterbuffer latency=30 do-lost=true drop-on-latency=true !
+//     rtpvp8depay !
+//     vp8dec !
+//     videoconvert !
+//     video/x-raw,format=I420 !
+//     x264enc bitrate=2000 key-int-max=60 bframes=0 rc-lookahead=0 sliced-threads=true sync-lookahead=0 !
+//     h264parse config-interval=-1 !
+//     rtph264pay pt=%d mtu=1200 config-interval=-1 aggregate-mode=zero-latency !
+//   session1.send_rtp_sink
+
+//   session1.send_rtp_src !
+//     appsink name=sip_rtp_out emit-signals=false drop=false max-buffers=2 sync=false
+
+//   session1.send_rtcp_src !
+//     appsink name=sip_rtcp_out emit-signals=false drop=false max-buffers=10 sync=false
+// `
+
+const gstVideoPipeline = `
+  ( appsrc name=sip_rtp_in format=3 is-live=true do-timestamp=true max-bytes=0 block=false
+      caps="application/x-rtp,media=video,encoding-name=H264,payload=%d,clock-rate=90000,packetization-mode=1" !
+      rtpjitterbuffer latency=30 do-lost=true do-retransmission=false drop-on-latency=true !
+      rtph264depay !
+      h264parse config-interval=-1 !
+      avdec_h264 !
+      videoconvert !
+      vp8enc deadline=1 target-bitrate=2000000 cpu-used=6 keyframe-max-dist=60 lag-in-frames=0 threads=4 buffer-initial-size=100 buffer-optimal-size=120 buffer-size=150 !
+      rtpvp8pay pt=96 mtu=1200 !
+      appsink name=webrtc_out emit-signals=false drop=false max-buffers=2 sync=false
+  )
+  ( appsrc name=webrtc_in format=3 is-live=true do-timestamp=true max-bytes=0 block=false
+      caps="application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,payload=96" !
+      rtpjitterbuffer latency=30 do-lost=true do-retransmission=false drop-on-latency=true !
+      rtpvp8depay !
+      vp8dec !
+      videoconvert !
+      video/x-raw,format=I420 !
+      x264enc bitrate=2000 key-int-max=60 bframes=0 rc-lookahead=0 sliced-threads=true sync-lookahead=0 !
+      h264parse config-interval=-1 !
+      rtph264pay pt=%d mtu=1200 config-interval=-1 aggregate-mode=zero-latency !
+      appsink name=sip_rtp_out emit-signals=false drop=false max-buffers=2 sync=false
+  )`
+
+// const gstPipeline = `
+// appsrc name=sip_rtp_in format=3 is-live=true do-timestamp=true max-bytes=0 block=false
+//     caps="application/x-rtp,media=video,encoding-name=H264,clock-rate=90000,payload=%d,packetization-mode=1"
+//     ! rtpbin name=rb
+
+// appsrc name=sip_rtcp_in format=3 is-live=true do-timestamp=true max-bytes=0 block=false
+//     caps="application/x-rtcp"
+//     ! rb.recv_rtcp_sink_0
+
+// rb.recv_rtp_src_0
+//     ! rtph264depay
+//     ! h264parse config-interval=-1
+//     ! avdec_h264
+//     ! videoconvert
+//     ! vp8enc deadline=1 target-bitrate=2000000 cpu-used=6 keyframe-max-dist=60 lag-in-frames=0 threads=4 buffer-initial-size=100 buffer-optimal-size=120 buffer-size=150
+//     ! rtpvp8pay pt=96 mtu=1200 picture-id-mode=2 use-tl0picidx=true
+//     ! appsink name=webrtc_out emit-signals=false drop=false max-buffers=2 sync=false
+
+// appsrc name=webrtc_in format=3 is-live=true do-timestamp=true max-bytes=0 block=false
+//     caps="application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,payload=96"
+//     ! rtpvp8depay
+//     ! vp8dec
+//     ! videoconvert
+//     ! video/x-raw,format=I420
+//     ! x264enc bitrate=2000 key-int-max=60 bframes=0 rc-lookahead=0 sliced-threads=true sync-lookahead=0 tune=zerolatency
+//     ! h264parse config-interval=-1
+//     ! rtph264pay pt=%d mtu=1200 config-interval=-1 aggregate-mode=zero-latency
+//     ! rb.send_rtp_sink_0
+
+// rb.send_rtp_src_0
+//     ! appsink name=sip_rtp_out emit-signals=false drop=false max-buffers=2 sync=false
+
+// rb.send_rtcp_src_0
+//     ! appsink name=sip_rtcp_out emit-signals=false drop=false sync=false
+// `
+
+// func (p *VideoPort) setupIO() error {
+// 	if p.closed.IsBroken() {
+// 		return errors.New("media is already closed")
 // 	}
 
-// 	// Create appsrc and appsink elements
-// 	appsrc, err := app.NewAppSrc()
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	appsink, err := app.NewAppSink()
-// 	if err != nil {
-// 		return nil, err
-// 	}
+// 	pt := int(p.conf.Video.Type)
 
-// 	// Add them to the pipeline
-// 	if err := pipeline.AddMany(appsrc.Element, appsink.Element); err != nil {
-// 		return nil, err
-// 	}
-
-// 	// Link them (appsrc -> appsink)
-// 	if err := gst.ElementLinkMany(appsrc.Element, appsink.Element); err != nil {
-// 		return nil, err
-// 	}
-
-// 	rw, err := NewReadWriteRTP(appsrc, appsink)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	gw := NewGstWriteStream(context.Background(), pipeline, rw, p.videoIn)
-// 	if err := gw.Start(); err != nil {
-// 		return nil, err
-// 	}
-// 	return gw, nil
+// 	pstr := fmt.Sprintf(gstPipeline, pt, pt)
 // }
-
-// func (p *VideoPort) gstInputPipeline() (*GstWriteStream, error) {
-// 	// TODO: create GST pipeline
-
-// 	// Create the pipeline
-// 	pipeline, err := gst.NewPipeline("test-pipeline")
-// 	if err != nil {
-// 		return nil, fmt.Errorf("failed to create GST pipeline: %w", err)
-// 	}
-
-// 	// Create appsrc and appsink elements
-// 	appsrc, err := app.NewAppSrc()
-// 	if err != nil {
-// 		return nil, fmt.Errorf("failed to create GST appsrc: %w", err)
-// 	}
-
-// 	appsink, err := app.NewAppSink()
-// 	if err != nil {
-// 		return nil, fmt.Errorf("failed to create GST appsink: %w", err)
-// 	}
-
-// 	jitter, err := gst.NewElement("rtpjitterbuffer")
-// 	if err != nil {
-// 		return nil, fmt.Errorf("failed to create GST rtpjitterbuffer: %w", err)
-// 	}
-
-// 	depay, err := gst.NewElement("rtph264depay")
-// 	if err != nil {
-// 		return nil, fmt.Errorf("failed to create GST rtph264depay: %w", err)
-// 	}
-
-// 	parse, err := gst.NewElement("h264parse")
-// 	if err != nil {
-// 		return nil, fmt.Errorf("failed to create GST h264parse: %w", err)
-// 	}
-
-// 	decoder, err := gst.NewElement("avdec_h264")
-// 	if err != nil {
-// 		return nil, fmt.Errorf("failed to create GST avdec_h264: %w", err)
-// 	}
-
-// 	converter, err := gst.NewElement("videoconvert")
-// 	if err != nil {
-// 		return nil, fmt.Errorf("failed to create GST videoconvert: %w", err)
-// 	}
-
-// 	// scale, err := gst.NewElement("videoscale")
-// 	// if err != nil {
-// 	// 	return nil, fmt.Errorf("failed to create GST videoscale: %w", err)
-// 	// }
-
-// 	rate, err := gst.NewElement("videorate")
-// 	if err != nil {
-// 		return nil, fmt.Errorf("failed to create GST videorate: %w", err)
-// 	}
-
-// 	encoder, err := gst.NewElement("vp8enc")
-// 	if err != nil {
-// 		return nil, fmt.Errorf("failed to create GST vp8enc: %w", err)
-// 	}
-
-// 	rtppay, err := gst.NewElement("rtpvp8pay")
-// 	if err != nil {
-// 		return nil, fmt.Errorf("failed to create GST rtpvp8pay: %w", err)
-// 	}
-
-// 	{
-// 		// Configure appsrc
-// 		caps := gst.NewCapsFromString("application/x-rtp,media=video,encoding-name=H264,payload=96,clock-rate=90000")
-// 		appsrc.SetCaps(caps)
-// 		if err := appsrc.SetProperty("is-live", true); err != nil {
-// 			return nil, fmt.Errorf("failed to set GST appsrc is-live property: %w", err)
-// 		}
-// 		// if err := appsrc.SetProperty("format", int32(3)); err != nil {
-// 		// 	return nil, fmt.Errorf("failed to set GST appsrc format property: %w", err)
-// 		// }
-// 		if err := appsrc.SetProperty("do-timestamp", true); err != nil {
-// 			return nil, fmt.Errorf("failed to set GST appsrc do-timestamp property: %w", err)
-// 		}
-
-// 		// Configure appsink
-// 		if err := appsink.SetProperty("emit-signals", true); err != nil {
-// 			return nil, fmt.Errorf("failed to set GST appsink emit-signals property: %w", err)
-// 		}
-// 		if err := appsink.SetProperty("drop", true); err != nil {
-// 			return nil, fmt.Errorf("failed to set GST appsink drop property: %w", err)
-// 		}
-// 		if err := appsink.SetProperty("max-buffers", uint(1)); err != nil {
-// 			return nil, fmt.Errorf("failed to set GST appsink max-buffers property: %w", err)
-// 		}
-
-// 		// Configure jitter buffer
-// 		if err := jitter.SetProperty("latency", uint(50)); err != nil {
-// 			return nil, fmt.Errorf("failed to set GST rtpjitterbuffer latency property: %w", err)
-// 		}
-// 		if err := jitter.SetProperty("do-lost", true); err != nil {
-// 			return nil, fmt.Errorf("failed to set GST rtpjitterbuffer do-lost property: %w", err)
-// 		}
-// 		// if err := jitter.SetProperty("do-retransmission", false); err != nil {
-// 		// 	return nil, fmt.Errorf("failed to set GST rtpjitterbuffer do-retransmission property: %w", err)
-// 		// }
-
-// 		// Configure encoder
-// 		if err := encoder.SetProperty("deadline", int64(1)); err != nil {
-// 			return nil, fmt.Errorf("failed to set GST vp8enc deadline property: %w", err)
-// 		}
-// 		if err := encoder.SetProperty("cpu-used", 4); err != nil {
-// 			return nil, fmt.Errorf("failed to set GST vp8enc cpu-used property: %w", err)
-// 		}
-// 		// if err := encoder.SetProperty("target-bitrate", uint(1000000)); err != nil {
-// 		// 	return nil, fmt.Errorf("failed to set GST vp8enc target-bitrate property: %w", err)
-// 		// }
-// 		// if err := encoder.SetProperty("end-usage", 1); err != nil {
-// 		// 	return nil, fmt.Errorf("failed to set GST vp8enc end-usage property: %w", err)
-// 		// }
-// 		// if err := encoder.SetProperty("error-resilient", 1); err != nil {
-// 		// 	return nil, fmt.Errorf("failed to set GST vp8enc error-resilient property: %w", err)
-// 		// }
-// 		// if err := encoder.SetProperty("keyframe-max-dist", uint(30)); err != nil {
-// 		// 	return nil, fmt.Errorf("failed to set GST vp8enc keyframe-max-dist property: %w", err)
-// 		// }
-// 		// if err := encoder.SetProperty("min-quantizer", uint(4)); err != nil {
-// 		// 	return nil, fmt.Errorf("failed to set GST vp8enc min-quantizer property: %w", err)
-// 		// }
-// 		// if err := encoder.SetProperty("max-quantizer", uint(20)); err != nil {
-// 		// 	return nil, fmt.Errorf("failed to set GST vp8enc max-quantizer property: %w", err)
-// 		// }
-// 		// if err := encoder.SetProperty("threads", uint(4)); err != nil {
-// 		// 	return nil, fmt.Errorf("failed to set GST vp8enc threads property: %w", err)
-// 		// }
-// 		// if err := encoder.SetProperty("lag-in-frames", uint(0)); err != nil {
-// 		// 	return nil, fmt.Errorf("failed to set GST vp8enc lag-in-frames property: %w", err)
-// 		// }
-
-// 		// Configure payloader
-// 		if err := rtppay.SetProperty("pt", uint(96)); err != nil {
-// 			return nil, fmt.Errorf("failed to set GST rtpvp8pay pt property: %w", err)
-// 		}
-// 		if err := rtppay.SetProperty("mtu", uint(1200)); err != nil {
-// 			return nil, fmt.Errorf("failed to set GST rtpvp8pay mtu property: %w", err)
-// 		}
-// 		// if err := rtppay.SetProperty("picture-id-mode", 2); err != nil {
-// 		// 	return nil, fmt.Errorf("failed to set GST rtpvp8pay picture-id-mode property: %w", err)
-// 		// }
-// 	}
-
-// 	// Add them to the pipeline
-// 	elements := []*gst.Element{
-// 		appsrc.Element,
-// 		jitter,
-// 		depay,
-// 		parse,
-// 		decoder,
-// 		converter,
-// 		// scale,
-// 		rate,
-// 		encoder,
-// 		rtppay,
-// 		appsink.Element,
-// 	}
-
-// 	for _, elem := range elements {
-// 		if err := pipeline.Add(elem); err != nil {
-// 			return nil, fmt.Errorf("failed to add element %s:%s to GST pipeline: %w", elem.GetFactory().GetName(), elem.GetName(), err)
-// 		}
-// 	}
-
-// 	if err := appsrc.Link(jitter); err != nil {
-// 		return nil, fmt.Errorf("failed to link appsrc to rtpjitterbuffer: %w", err)
-// 	}
-// 	if err := jitter.Link(depay); err != nil {
-// 		return nil, fmt.Errorf("failed to link rtpjitterbuffer to rtph264depay: %w", err)
-// 	}
-// 	if err := depay.Link(parse); err != nil {
-// 		return nil, fmt.Errorf("failed to link rtph264depay to h264parse: %w", err)
-// 	}
-// 	if err := parse.Link(decoder); err != nil {
-// 		return nil, fmt.Errorf("failed to link h264parse to avdec_h264: %w", err)
-// 	}
-// 	if err := decoder.Link(converter); err != nil {
-// 		return nil, fmt.Errorf("failed to link avdec_h264 to videoconvert: %w", err)
-// 	}
-// 	// if err := converter.Link(scale); err != nil {
-// 	// 	return nil, fmt.Errorf("failed to link videoconvert to videoscale: %w", err)
-// 	// }
-// 	if err := converter.Link(rate); err != nil {
-// 		return nil, fmt.Errorf("failed to link videoconvert to videorate: %w", err)
-// 	}
-// 	if err := rate.Link(encoder); err != nil {
-// 		return nil, fmt.Errorf("failed to link videorate to vp8enc: %w", err)
-// 	}
-// 	if err := encoder.Link(rtppay); err != nil {
-// 		return nil, fmt.Errorf("failed to link vp8enc to rtpvp8pay: %w", err)
-// 	}
-// 	if err := rtppay.Link(appsink.Element); err != nil {
-// 		return nil, fmt.Errorf("failed to link rtpvp8pay to appsink: %w", err)
-// 	}
-
-// 	rw, err := NewReadWriteRTP(appsrc, appsink)
-// 	if err != nil {
-// 		return nil, fmt.Errorf("failed to create RTP read/write stream: %w", err)
-// 	}
-// 	gw := NewGstWriteStream(context.Background(), pipeline, rw, p.videoIn)
-// 	if err := gw.Start(); err != nil {
-// 		return nil, fmt.Errorf("failed to start GST write stream: %w", err)
-// 	}
-// 	return gw, nil
-// }
-
-func (p *VideoPort) gstInputPipeline() (*GstWriteStream, error) {
-	builder := NewPipelineBuilder()
-	pipeline, err := builder.StrPipeline(inputPipeline).Build()
-	if err != nil {
-		return nil, fmt.Errorf("failed to build GST pipeline: %w", err)
-	}
-
-	appsrc := builder.appsrc
-	appsink := builder.appsink
-
-	rw, err := NewReadWriteRTP(appsrc, appsink)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create RTP read/write stream: %w", err)
-	}
-	gw := NewGstWriteStream(context.Background(), pipeline, rw, p.videoIn)
-	if err := gw.Start(); err != nil {
-		return nil, fmt.Errorf("failed to start GST write stream: %w", err)
-	}
-	return gw, nil
-}
-
-type noopWriter struct{}
-
-func (n *noopWriter) String() string {
-	return "NoopWriter"
-}
-
-func (n *noopWriter) WriteRTP(h *rtp.Header, payload []byte) (int, error) {
-	return len(payload), nil
-}
 
 const inputPipeline = `appsrc name=src format=3 is-live=true do-timestamp=true max-bytes=0 block=false
   caps="application/x-rtp,media=video,encoding-name=H264,payload=%d,clock-rate=90000,packetization-mode=1" !
@@ -661,22 +475,77 @@ func (p *VideoPort) setupInput() error {
 	pstr := fmt.Sprintf(inputPipeline, pt)
 
 	p.log.Infow("setting up video pipeline", "payloadType", pt, "pipeline", pstr)
-	gw, err := p.gstPipeline(p.videoIn, pstr)
+	gp, gw, err := p.gstPipeline(p.videoIn, pstr)
 	if err != nil {
 		p.log.Errorw("failed to create GST input pipeline", err)
 		return err
 	}
 	p.log.Infow("video input pipeline created", "pipeline", gw.String())
 
-	// w := &noopWriter{}
+	if err := gp.Run(context.Background()); err != nil {
+		p.log.Errorw("failed to run GST input pipeline", err)
+		return err
+	}
 
-	wc := rtp.NewStreamNopCloser(gw)
-
-	go p.rtpLoop(p.sess, wc)
+	go p.rtpLoop(p.sess, gw)
 
 	// TODO: handle crypto
 
 	// TODO: gst pipeline
+
+	return nil
+}
+
+const outputPipeline = `appsrc name=src format=3 is-live=true do-timestamp=true max-bytes=0 block=false
+  caps="application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,payload=96" !
+  rtpjitterbuffer latency=30 do-lost=true do-retransmission=false drop-on-latency=true !
+  rtpvp8depay !
+  vp8dec !
+  videoconvert !
+  video/x-raw,format=I420 !
+  x264enc bitrate=2000 key-int-max=60 bframes=0 rc-lookahead=0 sliced-threads=true sync-lookahead=0 !
+  h264parse config-interval=-1 !
+  rtph264pay pt=%d mtu=1200 config-interval=-1 aggregate-mode=zero-latency !
+  appsink name=sink emit-signals=false drop=false max-buffers=2 sync=false`
+
+func (p *VideoPort) setupOutput() error {
+	if p.closed.IsBroken() {
+		return errors.New("media is already closed")
+	}
+
+	w, err := p.sess.OpenWriteStream()
+	if err != nil {
+		return err
+	}
+
+	// w := &connWriter{conn: p.conn}
+
+	p.log.Infow("video output write stream opened", "writeStream", w.String())
+
+	wc := rtp.NewStreamNopCloser(w)
+
+	pt := int(p.conf.Video.Type)
+
+	pstr := fmt.Sprintf(outputPipeline, pt)
+
+	p.log.Infow("setting up video output pipeline", "payloadType", pt, "pipelineStr", pstr)
+
+	gp, gw, err := p.gstPipeline(wc, pstr)
+	if err != nil {
+		p.log.Errorw("failed to create GST output pipeline1", err)
+		return err
+	}
+
+	if w := p.videoOut.Swap(gw); w != nil {
+		_ = w.Close()
+	}
+
+	if err := gp.Run(context.Background()); err != nil {
+		p.log.Errorw("failed to run GST output pipeline", err)
+		return err
+	}
+
+	p.log.Infow("video output writer set", "videoWriter", p.videoOut.String())
 
 	return nil
 }
@@ -694,7 +563,7 @@ func (p *VideoPort) rtpLoop(sess rtp.Session, w rtp.WriteStream) {
 			}
 			return
 		}
-		slog.Info("lilili conn", "local", p.conn.LocalAddr(), "remote", p.conn.RemoteAddr())
+		slog.Info("lilili conn", "local", p.rtpConn.LocalAddr(), "remote", p.rtpConn.RemoteAddr())
 		p.log.Debugw("RTP stream accepted", "ssrc", ssrc)
 		// p.stats.Streams.Add(1)
 		p.mediaReceived.Break()
@@ -754,97 +623,41 @@ func (p *VideoPort) rtpReadLoop(log logger.Logger, r rtp.ReadStream, w rtp.Write
 			}
 			continue
 		}
+		log.Debugw("RTP packet processed", "payloadSize", n, "rtpHeader", h)
 		errorCnt = 0
 		pipeline = ""
 	}
 }
 
-func (p *VideoPort) gstPipeline(in rtp.WriteStreamCloser, pstr string) (*GstWriteStream, error) {
+func (p *VideoPort) gstPipeline(in rtp.WriteStreamCloser, pstr string) (*GstPipelineRunner, *GstWriteRTP, error) {
 	builder := NewPipelineBuilder()
 	pipeline, err := builder.StrPipeline(pstr).Build()
 	if err != nil {
-		return nil, fmt.Errorf("failed to build GST pipeline: %w", err)
+		return nil, nil, fmt.Errorf("failed to build GST pipeline: %w", err)
 	}
 
 	appsrc := builder.appsrc
 	appsink := builder.appsink
 
-	rw, err := NewReadWriteRTP(appsrc, appsink)
+	r, err := NewGstReadRTP(appsink)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create RTP read/write stream: %w", err)
-	}
-	gw := NewGstWriteStream(context.Background(), pipeline, rw, in)
-	if err := gw.Start(); err != nil {
-		return nil, fmt.Errorf("failed to start GST write stream: %w", err)
-	}
-	return gw, nil
-}
-
-// type connWriter struct {
-// 	conn UDPConn
-// }
-
-// func (w *connWriter) String() string {
-// 	return fmt.Sprintf("UDPConnWriter(%s)", w.conn.RemoteAddr())
-// }
-
-// func (w *connWriter) WriteRTP(h *rtp.Header, payload []byte) (int, error) {
-// 	p := rtp.Packet{
-// 		Header:  *h,
-// 		Payload: payload,
-// 	}
-// 	data, err := p.Marshal()
-// 	if err != nil {
-// 		return 0, err
-// 	}
-// 	return w.conn.Write(data)
-// }
-
-const outputPipeline = `appsrc name=src format=3 is-live=true do-timestamp=true max-bytes=0 block=false
-  caps="application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,payload=96" !
-  rtpjitterbuffer latency=30 do-lost=true do-retransmission=false drop-on-latency=true !
-  rtpvp8depay !
-  vp8dec !
-  videoconvert !
-  video/x-raw,format=I420 !
-  x264enc bitrate=2000 key-int-max=60 bframes=0 rc-lookahead=0 sliced-threads=true sync-lookahead=0 !
-  h264parse config-interval=-1 !
-  rtph264pay pt=%d mtu=1200 config-interval=-1 aggregate-mode=zero-latency !
-  appsink name=sink emit-signals=false drop=false max-buffers=2 sync=false`
-
-func (p *VideoPort) setupOutput() error {
-	if p.closed.IsBroken() {
-		return errors.New("media is already closed")
+		return nil, nil, fmt.Errorf("failed to create GstReadRTP: %w", err)
 	}
 
-	w, err := p.sess.OpenWriteStream()
+	gpr := NewGstPipelineRunner(context.Background(), pipeline)
+
+	if err := gpr.NewSinkWriter(r, in); err != nil {
+		return nil, nil, fmt.Errorf("failed to create GST sink writer: %w", err)
+	}
+
+	w, err := NewGstWriteRTP(appsrc)
 	if err != nil {
-		return err
+		return nil, nil, fmt.Errorf("failed to create GstWriteRTP: %w", err)
 	}
 
-	// w := &connWriter{conn: p.conn}
-
-	p.log.Infow("video output write stream opened", "writeStream", w.String())
-
-	wc := rtp.NewStreamNopCloser(w)
-
-	pt := int(p.conf.Video.Type)
-
-	pstr := fmt.Sprintf(outputPipeline, pt)
-
-	p.log.Infow("setting up video output pipeline", "payloadType", pt, "pipelineStr", pstr)
-
-	gw, err := p.gstPipeline(wc, pstr)
-	if err != nil {
-		p.log.Errorw("failed to create GST output pipeline1", err)
-		return err
-	}
-
-	if w := p.videoOut.Swap(gw); w != nil {
-		_ = w.Close()
-	}
-
-	p.log.Infow("video output writer set", "videoWriter", p.videoOut.String())
-
-	return nil
+	// gw := NewGstWriteStream(context.Background(), pipeline, rw, in)
+	// if err := gw.Start(); err != nil {
+	// 	return nil, fmt.Errorf("failed to start GST write stream: %w", err)
+	// }
+	return gpr, w, nil
 }

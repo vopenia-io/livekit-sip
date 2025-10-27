@@ -865,7 +865,7 @@ func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncrypt
 
 	if offer.Video != nil {
 		c.log.Infow("Configuring video port", "startPort", conf.RTPPort.Start, "endPort", conf.RTPPort.End)
-		vp, err := NewVideoPort(c.log, c.mon, nil, &MediaOptions{
+		vp, err := NewVideoPort(c.log, c.mon, nil, nil, &MediaOptions{
 			IP:                  externalIP,
 			Ports:               conf.RTPPort,
 			MediaTimeoutInitial: c.s.conf.MediaTimeoutInitial,
@@ -885,14 +885,16 @@ func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncrypt
 	c.media.DisableOut()         // disabled until we send 200
 	c.media.SetDTMFAudio(conf.AudioDTMF)
 
-	answer, mc, err := offer.Answer(externalIP, c.media.Port(), func() *int {
-		if c.video != nil {
-			p := c.video.Port()
-			c.log.Infow("Configured video port", "port", p)
-			return &p
-		}
-		return nil
-	}(), e)
+	var (
+		answer *sdp.Answer
+		mc     *sdp.MediaConfig
+	)
+
+	if c.video != nil {
+		answer, mc, err = offer.Answer(externalIP, c.media.Port(), c.video.RTPPort(), c.video.RTCPPort(), e)
+	} else {
+		answer, mc, err = offer.Answer(externalIP, c.media.Port(), 0, 0, e)
+	}
 	if err != nil {
 		c.log.Errorw("Cannot create SDP answer", err)
 		return nil, err
