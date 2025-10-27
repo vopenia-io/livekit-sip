@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"sync/atomic"
 
 	"github.com/frostbyte73/core"
@@ -58,6 +59,13 @@ type ParticipantInfo struct {
 	Name     string
 }
 
+type videoTrackHandler struct {
+	identity      string
+	participantID string
+	track         *webrtc.TrackRemote
+	handler       *noErrHandlerCloser
+}
+
 type Room struct {
 	log        logger.Logger
 	roomLog    logger.Logger // deferred logger
@@ -73,6 +81,10 @@ type Room struct {
 	stopped    core.Fuse
 	closed     core.Fuse
 	stats      *RoomStats
+
+	videoMu       sync.RWMutex
+	videoHandlers map[string]*videoTrackHandler // participant identity -> video handler
+	activeSpeaker string                        // current active speaker identity
 }
 
 type ParticipantConfig struct {
@@ -96,7 +108,13 @@ func NewRoom(log logger.Logger, st *RoomStats) *Room {
 	if st == nil {
 		st = &RoomStats{}
 	}
-	r := &Room{log: log, stats: st, out: msdk.NewSwitchWriter(RoomSampleRate), videoOut: rtp.NewWriteStreamSwitcher()}
+	r := &Room{
+		log:           log,
+		stats:         st,
+		out:           msdk.NewSwitchWriter(RoomSampleRate),
+		videoOut:      rtp.NewWriteStreamSwitcher(),
+		videoHandlers: make(map[string]*videoTrackHandler),
+	}
 	out := newMediaWriterCount(r.out, &st.OutputFrames, &st.OutputSamples)
 
 	var err error
@@ -124,6 +142,121 @@ func NewRoom(log logger.Logger, st *RoomStats) *Room {
 	}()
 
 	return r
+}
+
+func (r *Room) handleActiveSpeakersChanged(speakers []lksdk.Participant) {
+	r.roomLog.Debugw("active speakers changed event received", "speakerCount", len(speakers))
+
+	if len(speakers) == 0 {
+		r.roomLog.Debugw("no active speakers")
+		return
+	}
+
+	// Get the first (most active) speaker
+	speaker := speakers[0]
+	identity := speaker.Identity()
+
+	r.videoMu.Lock()
+	defer r.videoMu.Unlock()
+
+	// Skip if this is already the active speaker
+	if r.activeSpeaker == identity {
+		r.roomLog.Debugw("speaker is already active, skipping switch", "speaker", identity)
+		return
+	}
+
+	log := r.roomLog.WithValues("newSpeaker", identity, "previousSpeaker", r.activeSpeaker)
+	log.Infow("active speaker changed")
+
+	// Update active speaker
+	previousSpeaker := r.activeSpeaker
+	r.activeSpeaker = identity
+
+	// Switch video output to the new active speaker
+	r.switchVideoOutput(identity, previousSpeaker, log)
+}
+
+func (r *Room) switchVideoOutput(newSpeaker, previousSpeaker string, log logger.Logger) {
+	// This method should be called with videoMu already locked
+
+	log.Debugw("attempting to switch video output",
+		"fromSpeaker", previousSpeaker,
+		"toSpeaker", newSpeaker,
+		"totalHandlers", len(r.videoHandlers))
+
+	// Find the new speaker's video handler
+	handler, exists := r.videoHandlers[newSpeaker]
+	if !exists {
+		log.Debugw("no video handler found for new active speaker",
+			"speaker", newSpeaker,
+			"availableHandlers", r.getHandlerIdentities())
+		return
+	}
+
+	if handler.handler == nil {
+		log.Debugw("video handler not initialized for new active speaker",
+			"speaker", newSpeaker,
+			"participantID", handler.participantID)
+		return
+	}
+
+	// Disconnect the previous speaker's video handler from videoOut
+	if previousSpeaker != "" {
+		if prevHandler, exists := r.videoHandlers[previousSpeaker]; exists && prevHandler.handler != nil {
+			// Create a new temporary writer for the previous speaker
+			prevHandler.handler.w = rtp.NewWriteStreamSwitcher()
+			log.Debugw("disconnected previous speaker from video output",
+				"previousSpeaker", previousSpeaker,
+				"previousParticipantID", prevHandler.participantID)
+		}
+	}
+
+	// Swap the video output to the new speaker's handler
+	log.Infow("switching video output to active speaker",
+		"newSpeaker", newSpeaker,
+		"newParticipantID", handler.participantID,
+		"previousSpeaker", previousSpeaker)
+
+	// Update the new handler to write to videoOut
+	oldWriter := handler.handler.w
+	handler.handler.w = r.videoOut
+
+	log.Debugw("video output switched successfully",
+		"newSpeaker", newSpeaker,
+		"oldWriter", oldWriter.String(),
+		"newWriter", r.videoOut.String())
+}
+
+func (r *Room) getHandlerIdentities() []string {
+	// This method should be called with videoMu already locked
+	identities := make([]string, 0, len(r.videoHandlers))
+	for identity := range r.videoHandlers {
+		identities = append(identities, identity)
+	}
+	return identities
+}
+
+func (r *Room) cleanupVideoHandler(identity string) {
+	r.videoMu.Lock()
+	defer r.videoMu.Unlock()
+
+	handler, exists := r.videoHandlers[identity]
+	if !exists {
+		return
+	}
+	defer handler.handler.Close()
+
+	log := r.roomLog.WithValues("participant", identity)
+	log.Debugw("cleaning up video handler")
+
+	// Remove from map
+	delete(r.videoHandlers, identity)
+
+	// If this was the active speaker, clear it
+	if r.activeSpeaker == identity {
+		r.activeSpeaker = ""
+		log.Infow("active speaker left, clearing active speaker")
+	}
 }
 
 func (r *Room) Closed() <-chan struct{} {
@@ -163,10 +296,11 @@ func (r *Room) participantJoin(rp *lksdk.RemoteParticipant) {
 func (r *Room) participantLeft(rp *lksdk.RemoteParticipant) {
 	log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID())
 	log.Debugw("participant left")
+	r.cleanupVideoHandler(rp.Identity())
 }
 
 func (r *Room) subscribeTo(pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
-	log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID(), "trackID", pub.SID(), "trackName", pub.Name())
+	log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID(), "trackID", pub.SID(), "trackName", pub.Name(), "source", pub.Source().String())
 	if pub.Kind() != lksdk.TrackKindAudio && pub.Kind() != lksdk.TrackKindVideo {
 		log.Debugw("skipping non-audio/video track")
 		return
@@ -200,6 +334,9 @@ func (r *Room) Connect(conf *config.Config, rconf RoomConfig) error {
 		},
 		OnParticipantDisconnected: func(rp *lksdk.RemoteParticipant) {
 			r.participantLeft(rp)
+		},
+		OnActiveSpeakersChanged: func(speakers []lksdk.Participant) {
+			r.handleActiveSpeakersChanged(speakers)
 		},
 		ParticipantCallback: lksdk.ParticipantCallback{
 			OnTrackPublished: func(pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
@@ -415,7 +552,7 @@ func (r *Room) NewParticipantVideoTrack() (rtp.WriteStream, error) {
 	}
 	p := r.room.LocalParticipant
 	if _, err = p.PublishTrack(track, &lksdk.TrackPublicationOptions{
-		Name:        p.Identity(),
+		Name: p.Identity(),
 	}); err != nil {
 		r.log.Errorw("cannot publish rtp track", err)
 		return nil, nil
@@ -468,8 +605,41 @@ func (r *Room) participantVideoTrackSubscribed(track *webrtc.TrackRemote, pub *l
 	}
 	log.Infow("handling new video track")
 
+	identity := rp.Identity()
+
+	// Create a context for this handler
+	// Create a temporary writer that will be replaced when this becomes the active speaker
+	// We start with a no-op writer to buffer the track
+	tempWriter := rtp.NewWriteStreamSwitcher()
+
 	hnd := &noErrHandlerCloser{
-		w: r.videoOut,
+		w: tempWriter,
+	}
+
+	// Store the handler for this participant
+	r.videoMu.Lock()
+	defer r.videoMu.Unlock()
+	handler := &videoTrackHandler{
+		identity:      identity,
+		participantID: rp.SID(),
+		track:         track,
+		handler:       hnd,
+	}
+	r.videoHandlers[identity] = handler
+
+	// Check if this participant should be the active speaker
+	// (either no one is speaking yet, or they're already the active speaker)
+	shouldActivate := r.activeSpeaker == "" || r.activeSpeaker == identity
+	if shouldActivate {
+		r.activeSpeaker = identity
+		hnd.w = r.videoOut
+		log.Infow("setting as initial active speaker video",
+			"identity", identity,
+			"reason", map[bool]string{true: "first participant", false: "already active speaker"}[r.activeSpeaker == ""])
+	} else {
+		log.Debugw("participant video stored but not active",
+			"identity", identity,
+			"currentActiveSpeaker", r.activeSpeaker)
 	}
 
 	go func() {
