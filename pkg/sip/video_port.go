@@ -308,15 +308,15 @@ func (p *VideoPort) setupIO() error {
 
 const gstVideoPipeline = `
   ( appsrc name=sip_rtp_in format=3 is-live=true do-timestamp=true max-bytes=0 block=false
-      caps="application/x-rtp,media=video,encoding-name=H264,payload=%d,clock-rate=90000,packetization-mode=1" !
-      rtpjitterbuffer latency=30 do-lost=true do-retransmission=false drop-on-latency=true !
-      rtph264depay !
-      h264parse config-interval=-1 !
-      avdec_h264 !
+      caps="application/x-rtp,media=video,encoding-name=H264,payload=%d,clock-rate=90000" !
+      rtpjitterbuffer latency=100 do-lost=true mode=slave !
+      rtph264depay request-keyframe=false wait-for-keyframe=false !
+      h264parse !
+      avdec_h264 max-threads=0 skip-frame=default !
       videoconvert !
-      vp8enc deadline=1 target-bitrate=2000000 cpu-used=6 keyframe-max-dist=60 lag-in-frames=0 threads=4 buffer-initial-size=100 buffer-optimal-size=120 buffer-size=150 !
+      vp8enc deadline=1 target-bitrate=2000000 cpu-used=16 keyframe-max-dist=60 noise-sensitivity=2 buffer-size=60 static-threshold=100 !
       rtpvp8pay pt=96 mtu=1200 !
-      appsink name=webrtc_out emit-signals=false drop=false max-buffers=2 sync=false
+      appsink name=webrtc_out emit-signals=false drop=false max-buffers=0 sync=false
   )
   ( appsrc name=webrtc_in format=3 is-live=true do-timestamp=true max-bytes=0 block=false
       caps="application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,payload=96" !
@@ -356,9 +356,10 @@ func (p *VideoPort) rtpReadLoop(log logger.Logger, r rtp.ReadStream, w rtp.Write
 	buf := make([]byte, rtp.MTUSize+1)
 	overflow := false
 	var (
-		h        rtp.Header
-		pipeline string
-		errorCnt int
+		h           rtp.Header
+		pipeline    string
+		errorCnt    int
+		packetCount int
 	)
 	log.Infow("starting RTP read loop")
 	for {
@@ -370,6 +371,7 @@ func (p *VideoPort) rtpReadLoop(log logger.Logger, r rtp.ReadStream, w rtp.Write
 			log.Errorw("read RTP failed", err)
 			continue
 		}
+		packetCount++
 		if n > rtp.MTUSize {
 			overflow = true
 			if !overflow {
@@ -377,7 +379,13 @@ func (p *VideoPort) rtpReadLoop(log logger.Logger, r rtp.ReadStream, w rtp.Write
 			}
 			continue
 		}
-		i, err := w.WriteRTP(&h, buf[:n])
+		// Copy payload to prevent buffer reuse issues
+		payload := make([]byte, n)
+		copy(payload, buf[:n])
+		i, err := w.WriteRTP(&h, payload)
+		if packetCount%500 == 0 {
+			log.Infow("video RTP stats", "packets", packetCount, "errors", errorCnt, "marker", h.Marker, "seq", h.SequenceNumber)
+		}
 		if err != nil {
 			if pipeline == "" {
 				pipeline = p.videoIn.String()
