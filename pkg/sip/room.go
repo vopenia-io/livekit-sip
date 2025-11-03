@@ -177,8 +177,8 @@ func (r *Room) participantLeft(rp *lksdk.RemoteParticipant) {
 
 func (r *Room) subscribeTo(pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
 	log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID(), "trackID", pub.SID(), "trackName", pub.Name())
-	if pub.Kind() != lksdk.TrackKindAudio {
-		log.Debugw("skipping non-audio track")
+	if k := pub.Kind(); k != lksdk.TrackKindAudio && k != lksdk.TrackKindVideo {
+		log.Debugw("skipping non-audio/video track")
 		return
 	}
 	log.Debugw("subscribing to a track")

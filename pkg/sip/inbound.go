@@ -588,6 +588,7 @@ type inboundCall struct {
 	closeReason atomic.Pointer[ReasonHeader]
 	call        *rpc.SIPCall
 	media       *MediaPort
+	video       *VideoManager
 	dtmf        chan dtmf.Event // buffered
 	lkRoom      *Room           // LiveKit room; only active after correct pin is entered
 	callDur     func() time.Duration
@@ -805,7 +806,7 @@ func (c *inboundCall) handleInvite(ctx context.Context, req *sip.Request, trunkI
 		return errors.Wrap(err, "failed joining room")
 	}
 	// Publish our own track.
-	if err := c.publishTrack(); err != nil {
+	if err := c.publishTracks(); err != nil {
 		c.log.Errorw("Cannot publish track", err)
 		c.close(true, callDropped, "publish-failed")
 		return errors.Wrap(err, "publishing track to room failed")
@@ -909,12 +910,47 @@ func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncrypt
 		return nil, fmt.Errorf("no audio in SDP offer: %w", sdp.ErrNoCommonMedia)
 	}
 
+	if offer.Video != nil {
+		c.log.Infow("video SDP", "data", offer.Video)
+		if offer.Video.Codec == nil {
+			return nil, fmt.Errorf("no video codec in SDP offer: %w", sdp.ErrNoCommonMedia)
+		}
+		video, err := NewVideoManager(c.log, c.lkRoom, offer, offer.Video, &MediaOptions{
+			IP:                  c.s.sconf.MediaIP,
+			Ports:               conf.RTPPort,
+			MediaTimeoutInitial: c.s.conf.MediaTimeoutInitial,
+			MediaTimeout:        c.s.conf.MediaTimeout,
+			Stats:               &c.stats.Port,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("video manager creation failed: %w", err)
+		}
+		c.video = video
+		offer.Video.Port = uint16(video.RtpPort())
+		// offer.Video.Security.Mode = e
+		if err := c.video.Setup(); err != nil {
+			return nil, fmt.Errorf("video setup failed: %w", err)
+		}
+		if err := c.video.Start(); err != nil {
+			return nil, fmt.Errorf("video start failed: %w", err)
+		}
+	}
+
 	offer.Addr = c.s.sconf.MediaIP
 
 	offer.Audio.Port = uint16(mp.Port())
 	offer.Audio.Security.Mode = e
 
 	mc, err := offer.V1MediaConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	if err := offer.ToSDP(); err != nil {
+		return nil, err
+	}
+
+	c.log.Infow("Creating SDP answer", "sdp", offer)
 
 	answerData, err = offer.Marshal()
 	if err != nil {
@@ -1227,13 +1263,24 @@ func (c *inboundCall) createLiveKitParticipant(ctx context.Context, rconf RoomCo
 	return nil
 }
 
-func (c *inboundCall) publishTrack() error {
+func (c *inboundCall) publishTracks() error {
 	local, err := c.lkRoom.NewParticipantTrack(RoomSampleRate)
 	if err != nil {
 		_ = c.lkRoom.Close()
 		return err
 	}
 	c.media.WriteAudioTo(local)
+
+	if c.video != nil {
+		videoTrack, err := c.lkRoom.NewParticipantVideoTrack()
+		if err != nil {
+			_ = c.lkRoom.Close()
+			return err
+		}
+		trackWriter := &NopWriteCloser{Writer: videoTrack}
+		c.video.SetWebrtcRtpOut(trackWriter)
+	}
+
 	return nil
 }
 

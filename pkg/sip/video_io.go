@@ -1,4 +1,4 @@
-package video
+package sip
 
 import (
 	"io"
@@ -12,6 +12,10 @@ type NopWriteCloser struct {
 
 func (n *NopWriteCloser) Close() error {
 	return nil
+}
+
+func NewSwitchWriter() *SwitchWriter {
+	return &SwitchWriter{}
 }
 
 type SwitchWriter struct {
@@ -47,15 +51,24 @@ func (s *SwitchWriter) Swap(w io.WriteCloser) io.WriteCloser {
 	return nil
 }
 
+func NewSwitchReader() *SwitchReader {
+	sr := &SwitchReader{}
+	sr.b = sync.NewCond(&sr.mu)
+	return sr
+}
+
 type SwitchReader struct {
-	r atomic.Pointer[io.ReadCloser]
-	b sync.Cond
+	r  atomic.Pointer[io.ReadCloser]
+	b  *sync.Cond
+	mu sync.Mutex
 }
 
 func (s *SwitchReader) Read(p []byte) (n int, err error) {
 	r := s.r.Load()
 	if r == nil {
+		s.mu.Lock()
 		s.b.Wait()
+		s.mu.Unlock()
 		return s.Read(p)
 	}
 	return (*r).Read(p)
@@ -75,7 +88,9 @@ func (s *SwitchReader) Swap(r io.ReadCloser) io.ReadCloser {
 		old = s.r.Swap(nil)
 	} else {
 		old = s.r.Swap(&r)
+		s.mu.Lock()
 		s.b.Broadcast()
+		s.mu.Unlock()
 	}
 	if old != nil {
 		return *old
