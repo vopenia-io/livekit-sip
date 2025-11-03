@@ -1,7 +1,6 @@
 package sip
 
 import (
-	"fmt"
 	"io"
 	"sync"
 	"sync/atomic"
