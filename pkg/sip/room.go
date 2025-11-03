@@ -17,6 +17,7 @@ package sip
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"sync/atomic"
 
@@ -61,20 +62,23 @@ type ParticipantInfo struct {
 	Name     string
 }
 
+type TrackCallback = func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant, conf *config.Config)
+
 type Room struct {
-	log        logger.Logger
-	roomLog    logger.Logger // deferred logger
-	room       *lksdk.Room
-	mix        *mixer.Mixer
-	out        *msdk.SwitchWriter
-	outDtmf    atomic.Pointer[dtmf.Writer]
-	p          ParticipantInfo
-	ready      core.Fuse
-	subscribe  atomic.Bool
-	subscribed core.Fuse
-	stopped    core.Fuse
-	closed     core.Fuse
-	stats      *RoomStats
+	log                logger.Logger
+	roomLog            logger.Logger // deferred logger
+	room               *lksdk.Room
+	mix                *mixer.Mixer
+	out                *msdk.SwitchWriter
+	outDtmf            atomic.Pointer[dtmf.Writer]
+	p                  ParticipantInfo
+	ready              core.Fuse
+	subscribe          atomic.Bool
+	subscribed         core.Fuse
+	stopped            core.Fuse
+	closed             core.Fuse
+	stats              *RoomStats
+	videoTrackCallback map[string]TrackCallback
 }
 
 type ParticipantConfig struct {
@@ -98,7 +102,11 @@ func NewRoom(log logger.Logger, st *RoomStats) *Room {
 	if st == nil {
 		st = &RoomStats{}
 	}
-	r := &Room{log: log, stats: st, out: msdk.NewSwitchWriter(RoomSampleRate)}
+	r := &Room{log: log,
+		stats:              st,
+		out:                msdk.NewSwitchWriter(RoomSampleRate),
+		videoTrackCallback: make(map[string]TrackCallback),
+	}
 	out := newMediaWriterCount(r.out, &st.OutputFrames, &st.OutputSamples)
 
 	var err error
@@ -213,39 +221,16 @@ func (r *Room) Connect(conf *config.Config, rconf RoomConfig) error {
 				r.subscribeTo(pub, rp)
 			},
 			OnTrackSubscribed: func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
-				log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID(), "trackID", track.ID(), "trackName", pub.Name())
-				if !r.ready.IsBroken() {
-					log.Warnw("ignoring track, room not ready", nil)
-					return
+				r.log.Debugw("track subscribed", "kind", pub.Kind(), "participant", rp.Identity(), "pID", rp.SID(), "trackID", pub.SID(), "trackName", pub.Name())
+				switch pub.Kind() {
+				case lksdk.TrackKindAudio:
+					r.participantAudioTrackSubscribed(track, pub, rp, conf)
+				case lksdk.TrackKindVideo:
+					r.participantVideoTrackSubscribed(track, pub, rp, conf)
+				default:
+					log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID(), "trackID", pub.SID(), "trackName", pub.Name())
+					log.Warnw("unsupported track kind for subscription", fmt.Errorf("kind=%s", pub.Kind()))
 				}
-				log.Infow("mixing track")
-
-				go func() {
-					mTrack := r.NewTrack()
-					if mTrack == nil {
-						return // closed
-					}
-					defer mTrack.Close()
-
-					in := newRTPReaderCount(track, &r.stats.InputPackets, &r.stats.InputBytes)
-					out := newMediaWriterCount(mTrack, &r.stats.MixerFrames, &r.stats.MixerSamples)
-
-					odec, err := opus.Decode(out, channels, log)
-					if err != nil {
-						log.Errorw("cannot create opus decoder", err)
-						return
-					}
-					defer odec.Close()
-
-					var h rtp.HandlerCloser = rtp.NewNopCloser(rtp.NewMediaStreamIn[opus.Sample](odec))
-					if conf.EnableJitterBuffer {
-						h = rtp.HandleJitter(h)
-					}
-					err = rtp.HandleLoop(in, h)
-					if err != nil && !errors.Is(err, io.EOF) {
-						log.Infow("room track rtp handler returned with failure", "error", err)
-					}
-				}()
 			},
 			OnDataPacket: func(data lksdk.DataPacket, params lksdk.DataReceiveParams) {
 				switch data := data.(type) {
@@ -430,6 +415,22 @@ func (r *Room) NewParticipantTrack(sampleRate int) (msdk.WriteCloser[msdk.PCM16S
 	return pw, nil
 }
 
+func (r *Room) NewParticipantVideoTrack() (*webrtc.TrackLocalStaticRTP, error) {
+	track, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{
+		MimeType: webrtc.MimeTypeVP8,
+	}, "video", "pion")
+	if err != nil {
+		return nil, err
+	}
+	p := r.room.LocalParticipant
+	if _, err = p.PublishTrack(track, &lksdk.TrackPublicationOptions{
+		Name: p.Identity(),
+	}); err != nil {
+		return nil, err
+	}
+	return track, nil
+}
+
 func (r *Room) SendData(data lksdk.DataPacket, opts ...lksdk.DataPublishOption) error {
 	if r == nil || !r.ready.IsBroken() || r.closed.IsBroken() {
 		return nil
@@ -442,4 +443,63 @@ func (r *Room) NewTrack() *mixer.Input {
 		return nil
 	}
 	return r.mix.NewInput()
+}
+
+func (r *Room) participantAudioTrackSubscribed(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant, conf *config.Config) {
+	log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID(), "trackID", track.ID(), "trackName", pub.Name())
+	if !r.ready.IsBroken() {
+		log.Warnw("ignoring track, room not ready", nil)
+		return
+	}
+	log.Infow("mixing track")
+
+	go func() {
+		mTrack := r.NewTrack()
+		if mTrack == nil {
+			return // closed
+		}
+		defer mTrack.Close()
+
+		in := newRTPReaderCount(track, &r.stats.InputPackets, &r.stats.InputBytes)
+		out := newMediaWriterCount(mTrack, &r.stats.MixerFrames, &r.stats.MixerSamples)
+
+		odec, err := opus.Decode(out, channels, log)
+		if err != nil {
+			log.Errorw("cannot create opus decoder", err)
+			return
+		}
+		defer odec.Close()
+
+		var h rtp.HandlerCloser = rtp.NewNopCloser(rtp.NewMediaStreamIn[opus.Sample](odec))
+		if conf.EnableJitterBuffer {
+			h = rtp.HandleJitter(h)
+		}
+		err = rtp.HandleLoop(in, h)
+		if err != nil && !errors.Is(err, io.EOF) {
+			log.Infow("room track rtp handler returned with failure", "error", err)
+		}
+	}()
+}
+
+func (r *Room) AddVideoTrackCallback(name string, cb TrackCallback) {
+	r.videoTrackCallback[name] = cb
+}
+
+func (r *Room) participantVideoTrackSubscribed(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant, conf *config.Config) {
+	log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID(), "trackID", track.ID(), "trackName", pub.Name())
+	if !r.ready.IsBroken() {
+		log.Warnw("ignoring track, room not ready", nil)
+		return
+	}
+	log.Infow("handling new video track")
+
+	if cb, ok := r.videoTrackCallback[pub.Name()]; ok {
+		go cb(track, pub, rp, conf)
+		return
+	}
+	if cb, ok := r.videoTrackCallback["*"]; ok {
+		go cb(track, pub, rp, conf)
+		return
+	}
+	log.Warnw("no video track callback registered for this track", nil)
 }
