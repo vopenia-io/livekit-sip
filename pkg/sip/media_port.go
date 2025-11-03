@@ -392,11 +392,13 @@ func (p *MediaPort) GetAudioWriter() msdk.PCM16Writer {
 }
 
 // NewOffer generates an SDP offer for the media.
+// Deprecated: use sdpv2 package instead.
 func (p *MediaPort) NewOffer(encrypted sdp.Encryption) (*sdp.Offer, error) {
 	return sdp.NewOffer(p.externalIP, p.Port(), encrypted)
 }
 
 // SetAnswer decodes and applies SDP answer for offer from NewOffer. SetConfig must be called with the decoded configuration.
+// Deprecated: use sdpv2 package instead.
 func (p *MediaPort) SetAnswer(offer *sdp.Offer, answerData []byte, enc sdp.Encryption) (*MediaConf, error) {
 	answer, err := sdp.ParseAnswer(answerData)
 	if err != nil {
@@ -410,6 +412,7 @@ func (p *MediaPort) SetAnswer(offer *sdp.Offer, answerData []byte, enc sdp.Encry
 }
 
 // SetOffer decodes the offer from another party and returns encoded answer. To accept the offer, call SetConfig.
+// Deprecated: use sdpv2 package instead.
 func (p *MediaPort) SetOffer(offerData []byte, enc sdp.Encryption) (*sdp.Answer, *MediaConf, error) {
 	offer, err := sdp.ParseOffer(offerData)
 	if err != nil {

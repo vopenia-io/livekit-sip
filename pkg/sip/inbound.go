@@ -38,6 +38,7 @@ import (
 	"github.com/livekit/media-sdk/dtmf"
 	"github.com/livekit/media-sdk/rtp"
 	"github.com/livekit/media-sdk/sdp"
+	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
 	"github.com/livekit/media-sdk/tones"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
@@ -899,14 +900,29 @@ func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncrypt
 	c.media.DisableOut()         // disabled until we send 200
 	c.media.SetDTMFAudio(conf.AudioDTMF)
 
-	answer, mconf, err := mp.SetOffer(offerData, e)
+	offer, err := sdpv2.NewSDP(offerData)
 	if err != nil {
 		return nil, err
 	}
-	answerData, err = answer.SDP.Marshal()
+
+	if offer.Audio == nil {
+		return nil, fmt.Errorf("no audio in SDP offer: %w", sdp.ErrNoCommonMedia)
+	}
+
+	offer.Addr = c.s.sconf.MediaIP
+
+	offer.Audio.Port = uint16(mp.Port())
+	offer.Audio.Security.Mode = e
+
+	mc, err := offer.V1MediaConfig()
+
+	answerData, err = offer.Marshal()
 	if err != nil {
 		return nil, err
 	}
+
+	mconf := &MediaConf{MediaConfig: mc}
+
 	c.mon.SDPSize(len(answerData), false)
 	c.log.Debugw("SDP answer", "sdp", string(answerData))
 

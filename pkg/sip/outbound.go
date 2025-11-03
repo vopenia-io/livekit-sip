@@ -31,6 +31,7 @@ import (
 
 	"github.com/livekit/media-sdk/dtmf"
 	"github.com/livekit/media-sdk/sdp"
+	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
 	"github.com/livekit/media-sdk/tones"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
@@ -520,14 +521,21 @@ func (c *outboundCall) sipSignal(ctx context.Context) error {
 		cancel()
 	}()
 
-	sdpOffer, err := c.media.NewOffer(c.sipConf.mediaEncryption)
-	if err != nil {
-		return err
+	sdpOffer := &sdpv2.Session{
+		Addr: c.media.externalIP,
+		Audio: &sdpv2.MediaSection{
+			Port: uint16(c.media.Port()),
+			Security: sdpv2.Security{
+				Mode: c.sipConf.mediaEncryption,
+			},
+		},
 	}
-	sdpOfferData, err := sdpOffer.SDP.Marshal()
+
+	sdpOfferData, err := sdpOffer.Marshal()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to marshal SDP offer: %w", err)
 	}
+
 	c.mon.SDPSize(len(sdpOfferData), true)
 	c.log.Debugw("SDP offer", "sdp", string(sdpOfferData))
 	joinDur := c.mon.JoinDur()
@@ -567,12 +575,23 @@ func (c *outboundCall) sipSignal(ctx context.Context) error {
 
 	c.log = LoggerWithHeaders(c.log, c.cc)
 
-	mc, err := c.media.SetAnswer(sdpOffer, sdpResp, c.sipConf.mediaEncryption)
+	if err := sdpOffer.ApplySDP(sdpResp); err != nil {
+		return err
+	}
+
+	sdpOffer.Addr = c.media.externalIP
+	sdpOffer.Audio.Port = uint16(c.media.Port())
+	sdpOffer.Audio.Security.Mode = c.sipConf.mediaEncryption
+
+	mc, err := sdpOffer.V1MediaConfig()
 	if err != nil {
 		return err
 	}
-	mc.Processor = c.c.handler.GetMediaProcessor(c.sipConf.enabledFeatures)
-	if err = c.media.SetConfig(mc); err != nil {
+
+	mconf := &MediaConf{MediaConfig: mc}
+
+	mconf.Processor = c.c.handler.GetMediaProcessor(c.sipConf.enabledFeatures)
+	if err = c.media.SetConfig(mconf); err != nil {
 		return err
 	}
 
