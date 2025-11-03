@@ -34,12 +34,96 @@ import (
 //   )
 // `
 
+// Optimized pipeline: MINIMUM LATENCY with BEST QUALITY for video conferencing
+// Target: 80-120ms glass-to-glass latency
+// Path 1: SIP (H.264) -> WebRTC (VP8)
+// Path 2: WebRTC (VP8) -> SIP (H.264)
+// const pipelineStr = `
+//   appsrc name=sip_rtp_in format=3 is-live=true do-timestamp=true max-bytes=0 block=false
+//       caps="application/x-rtp,media=video,encoding-name=H264,payload=96,clock-rate=90000,packetization-mode=1" !
+//       rtpjitterbuffer name=sip_jitter latency=40 do-lost=true do-retransmission=false drop-on-latency=false mode=1 !
+//       rtph264depay request-keyframe=false wait-for-keyframe=false !
+//       h264parse config-interval=-1 !
+//       avdec_h264 max-threads=4 output-corrupt=false !
+//       videoconvert n-threads=4 !
+//       video/x-raw,format=I420 !
+//       vp8enc
+//           deadline=1
+//           target-bitrate=2500000
+//           end-usage=cbr
+//           cpu-used=5
+//           keyframe-max-dist=60
+//           keyframe-mode=auto
+//           lag-in-frames=0
+//           threads=4
+//           error-resilient=1
+//           token-partitions=2
+//           static-threshold=0
+//           buffer-initial-size=100
+//           buffer-optimal-size=120
+//           buffer-size=150
+//           max-intra-bitrate=500
+//           undershoot=95
+//           overshoot=105
+//           resize-allowed=false
+//           sharpness=1
+//           noise-sensitivity=0
+//           min-quantizer=4
+//           max-quantizer=40 !
+//       rtpvp8pay pt=%d mtu=1200 picture-id-mode=1 !
+//       appsink name=webrtc_rtp_out emit-signals=false drop=false max-buffers=3 sync=false
+
+//   appsrc name=webrtc_rtp_in format=3 is-live=true do-timestamp=true max-bytes=0 block=false
+//       caps="application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,payload=96" !
+//       rtpjitterbuffer name=webrtc_jitter latency=40 do-lost=true do-retransmission=false drop-on-latency=false mode=1 !
+//       rtpvp8depay request-keyframe=true wait-for-keyframe=false !
+//       vp8dec threads=4 post-processing=false post-processing-flags=0 !
+//       videoconvert n-threads=4 !
+//       video/x-raw,format=I420 !
+//       x264enc
+//           bitrate=2500
+//           vbv-buf-capacity=2500
+//           speed-preset=faster
+//           tune=zerolatency
+//           key-int-max=60
+//           bframes=0
+//           b-adapt=false
+//           rc-lookahead=0
+//           sliced-threads=true
+//           sync-lookahead=0
+//           aud=true
+//           byte-stream=true
+//           cabac=true
+//           dct8x8=true
+//           ref=1
+//           me=hex
+//           subme=2
+//           trellis=0
+//           weightb=false
+//           qp-min=10
+//           qp-max=40
+//           qp-step=4
+//           pass=cbr
+//           option-string="scenecut=0:bframes=0:force-cfr=1:nal-hrd=cbr:filler=1:intra-refresh=1:min-keyint=30" !
+//       h264parse config-interval=-1 !
+//       rtph264pay pt=%d mtu=1200 config-interval=-1 aggregate-mode=zero-latency !
+//       appsink name=sip_rtp_out emit-signals=false drop=false max-buffers=3 sync=false
+
+//   appsrc name=sip_rtcp_in format=3 is-live=true do-timestamp=true max-bytes=0 block=false
+//       caps="application/x-rtcp" !
+//       appsink name=sip_rtcp_out emit-signals=false drop=false max-buffers=2 sync=false
+
+//   appsrc name=webrtc_rtcp_in format=3 is-live=true do-timestamp=true max-bytes=0 block=false
+//       caps="application/x-rtcp" !
+//       appsink name=webrtc_rtcp_out emit-signals=false drop=false max-buffers=2 sync=false
+// `
+
 const pipelineStr = `
   rtpsession name=sip_session
   rtpsession name=webrtc_session
 
   appsrc name=sip_rtp_in format=3 is-live=true do-timestamp=true max-bytes=0 block=true
-      caps="application/x-rtp,media=video,encoding-name=H264,payload=96,clock-rate=90000,packetization-mode=1" !
+      caps="application/x-rtp,media=video,encoding-name=H264,payload=%d,clock-rate=90000,packetization-mode=1" !
       sip_session.recv_rtp_sink
 
   appsrc name=sip_rtcp_in format=3 is-live=true do-timestamp=true max-bytes=0 block=false
@@ -52,7 +136,7 @@ const pipelineStr = `
       h264parse config-interval=-1 !
       avdec_h264 max-threads=4 !
       videoconvert !
-      vp8enc deadline=1 target-bitrate=2000000 cpu-used=8 keyframe-max-dist=500 lag-in-frames=0 threads=4 buffer-initial-size=100 buffer-optimal-size=120 buffer-size=150 !
+      vp8enc deadline=1 target-bitrate=2000000 cpu-used=8 keyframe-max-dist=60 lag-in-frames=0 threads=4 buffer-initial-size=100 buffer-optimal-size=120 buffer-size=150 !
       rtpvp8pay pt=96 mtu=1200 !
       webrtc_session.send_rtp_sink
 
@@ -78,7 +162,7 @@ const pipelineStr = `
       video/x-raw,format=I420 !
       x264enc bitrate=2000 key-int-max=60 bframes=0 rc-lookahead=0 sliced-threads=true sync-lookahead=0 !
       h264parse config-interval=-1 !
-      rtph264pay pt=96 mtu=1200 config-interval=-1 aggregate-mode=zero-latency !
+      rtph264pay pt=%d mtu=1200 config-interval=-1 aggregate-mode=zero-latency !
       sip_session.send_rtp_sink
 
   sip_session.send_rtp_src !
@@ -117,7 +201,7 @@ func readerFromPipeline(pipeline *gst.Pipeline, name string) (*GstReader, error)
 func (v *VideoManager) SetupGstPipeline() error {
 	v.log.Debugw("setting up GStreamer pipeline")
 
-	pstr := pipelineStr
+	pstr := fmt.Sprintf(pipelineStr, v.media.Codec.PayloadType, v.media.Codec.PayloadType)
 
 	pipeline, err := gst.NewPipelineFromString(pstr)
 	if err != nil {

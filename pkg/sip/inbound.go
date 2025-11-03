@@ -927,6 +927,9 @@ func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncrypt
 		}
 		c.video = video
 		offer.Video.Port = uint16(video.RtpPort())
+
+		offer.Video.Codecs = []*sdpv2.Codec{offer.Video.Codec}
+
 		// offer.Video.Security.Mode = e
 		if err := c.video.Setup(); err != nil {
 			return nil, fmt.Errorf("video setup failed: %w", err)
@@ -937,6 +940,8 @@ func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncrypt
 	}
 
 	offer.Addr = c.s.sconf.MediaIP
+
+	offer.Audio.Codecs = []*sdpv2.Codec{offer.Audio.Codec}
 
 	offer.Audio.Port = uint16(mp.Port())
 	offer.Audio.Security.Mode = e
@@ -1279,6 +1284,13 @@ func (c *inboundCall) publishTracks() error {
 		}
 		trackWriter := &NopWriteCloser{Writer: videoTrack}
 		c.video.SetWebrtcRtpOut(trackWriter)
+		webrtcRtcpOut := &RtcpWriter{
+			pc: c.lkRoom.LocalParticipant().GetSubscriberPeerConnection(),
+		}
+
+		c.video.SetWebrtcRtcpOut(
+			&NopWriteCloser{Writer: webrtcRtcpOut},
+		)
 	}
 
 	return nil

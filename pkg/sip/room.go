@@ -503,3 +503,10 @@ func (r *Room) participantVideoTrackSubscribed(track *webrtc.TrackRemote, pub *l
 	}
 	log.Warnw("no video track callback registered for this track", nil)
 }
+
+func (r *Room) LocalParticipant() *lksdk.LocalParticipant {
+	if r == nil || r.room == nil {
+		return nil
+	}
+	return r.room.LocalParticipant
+}

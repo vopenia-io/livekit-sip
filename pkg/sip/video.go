@@ -13,6 +13,7 @@ import (
 	"github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/livekit/sip/pkg/config"
+	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -38,6 +39,7 @@ func NewVideoManager(log logger.Logger, room *Room, sdp *sdpv2.Session, media *s
 		log:           log,
 		room:          room,
 		opts:          opts,
+		media:         media,
 		rtpConn:       newUDPConn(log.WithComponent("video-rtp"), rtpConn),
 		rtcpConn:      newUDPConn(log.WithComponent("video-rtcp"), rtcpConn),
 		sipRtpIn:      NewSwitchReader(),
@@ -56,12 +58,15 @@ func NewVideoManager(log logger.Logger, room *Room, sdp *sdpv2.Session, media *s
 	rtcpAddr := netip.AddrPortFrom(sdp.Addr, media.RTCPPort)
 	v.rtcpConn.SetDst(rtcpAddr)
 
+	v.log.Infow("video manager created", "rtpLocal", v.rtpConn.LocalAddr(), "rtpRemote", rtpAddr, "rtcpLocal", v.rtcpConn.LocalAddr(), "rtcpRemote", rtcpAddr)
+
 	return v, nil
 }
 
 type VideoManager struct {
 	log           logger.Logger
 	opts          *MediaOptions
+	media         *sdpv2.MediaSection
 	room          *Room
 	rtpConn       *udpConn
 	rtcpConn      *udpConn
@@ -97,13 +102,13 @@ func (v *VideoManager) Close() error {
 	return nil
 }
 
-func (v *VideoManager) SetSipRtpIn(r io.ReadCloser) {
-	v.sipRtpIn.Swap(r)
-}
+// func (v *VideoManager) SetSipRtpIn(r io.ReadCloser) {
+// 	v.sipRtpIn.Swap(r)
+// }
 
-func (v *VideoManager) SetSipRtpOut(w io.WriteCloser) {
-	v.sipRtpOut.Swap(w)
-}
+// func (v *VideoManager) SetSipRtpOut(w io.WriteCloser) {
+// 	v.sipRtpOut.Swap(w)
+// }
 
 func (v *VideoManager) SetWebrtcRtpIn(r io.ReadCloser) {
 	v.webrtcRtpIn.Swap(r)
@@ -113,11 +118,12 @@ func (v *VideoManager) SetWebrtcRtpOut(w io.WriteCloser) {
 	v.webrtcRtpOut.Swap(w)
 }
 
-type TrackAdapter struct{ *webrtc.TrackRemote }
+func (v *VideoManager) SetWebrtcRtcpIn(r io.ReadCloser) {
+	v.webrtcRtcpIn.Swap(r)
+}
 
-func (t *TrackAdapter) Read(p []byte) (n int, err error) {
-	n, _, err = t.TrackRemote.Read(p)
-	return n, err
+func (v *VideoManager) SetWebrtcRtcpOut(w io.WriteCloser) {
+	v.webrtcRtcpOut.Swap(w)
 }
 
 func (v *VideoManager) Setup() error {
@@ -137,7 +143,10 @@ func (v *VideoManager) Setup() error {
 	v.sipRtcpIn.Swap(v.rtcpConn)
 	v.sipRtcpOut.Swap(v.rtcpConn)
 
-	v.webrtcRtpOut.Swap(&NopWriteCloser{(io.Discard)})
+	// v.webrtcRtpOut.Swap(&NopWriteCloser{(io.Discard)})
+
+	webrtcRtcpInPipeIn, webrtcRtcpInPipeOut := io.Pipe()
+	v.webrtcRtcpIn.Swap(webrtcRtcpInPipeIn)
 
 	v.room.AddVideoTrackCallback("*",
 		func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant, conf *config.Config) {
@@ -146,6 +155,20 @@ func (v *VideoManager) Setup() error {
 			v.webrtcRtpIn.Swap(io.NopCloser(
 				&TrackAdapter{TrackRemote: track},
 			))
+			pub.OnRTCP(func(pkt rtcp.Packet) {
+				var buf []byte
+				b, err := pkt.Marshal()
+				if err != nil {
+					v.log.Errorw("failed to marshal rtcp packet", err)
+					return
+				}
+				buf = append(buf, b...)
+				// fmt.Printf("Writing %d bytes to webrtcRtcpIn pipe\n", len(buf))
+				_, err = webrtcRtcpInPipeOut.Write(buf)
+				if err != nil {
+					v.log.Errorw("failed to write rtcp packet to pipe", err)
+				}
+			})
 		})
 
 	return nil

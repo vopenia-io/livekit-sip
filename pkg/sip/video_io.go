@@ -1,9 +1,13 @@
 package sip
 
 import (
+	"fmt"
 	"io"
 	"sync"
 	"sync/atomic"
+
+	"github.com/pion/rtcp"
+	"github.com/pion/webrtc/v4"
 )
 
 type NopWriteCloser struct {
@@ -96,4 +100,27 @@ func (s *SwitchReader) Swap(r io.ReadCloser) io.ReadCloser {
 		return *old
 	}
 	return nil
+}
+
+type TrackAdapter struct{ *webrtc.TrackRemote }
+
+func (t *TrackAdapter) Read(p []byte) (n int, err error) {
+	n, _, err = t.TrackRemote.Read(p)
+	return n, err
+}
+
+type RtcpWriter struct {
+	pc *webrtc.PeerConnection
+}
+
+func (r *RtcpWriter) Write(p []byte) (n int, err error) {
+	// fmt.Printf("RTCP Writer got %d bytes\n", len(p))
+	pkts, err := rtcp.Unmarshal(p)
+	if err != nil {
+		return 0, err
+	}
+	if err := r.pc.WriteRTCP(pkts); err != nil {
+		return 0, err
+	}
+	return len(p), nil
 }
