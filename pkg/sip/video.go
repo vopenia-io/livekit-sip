@@ -1,5 +1,28 @@
 package sip
 
+/*
+#cgo pkg-config: gstreamer-1.0
+#include <glib.h>
+#include <string.h>
+
+static void customLogHandler(const gchar *log_domain,
+                             GLogLevelFlags log_level,
+                             const gchar *message,
+                             gpointer user_data) {
+    // Suppress "loop detected in the graph" warnings
+    if (log_level == G_LOG_LEVEL_WARNING && strstr(message, "loop detected in the graph") != NULL) {
+        return;
+    }
+    // For other messages, use the default handler
+    g_log_default_handler(log_domain, log_level, message, user_data);
+}
+
+static void installLogHandler() {
+    g_log_set_handler("GStreamer", G_LOG_LEVEL_WARNING | G_LOG_LEVEL_CRITICAL | G_LOG_LEVEL_ERROR, customLogHandler, NULL);
+}
+*/
+import "C"
+
 import (
 	"fmt"
 	"io"
@@ -21,6 +44,11 @@ var mainLoop *glib.MainLoop
 
 func init() {
 	gst.Init(nil)
+
+	// Install a custom GLib log handler to filter out "loop detected" warnings
+	// These warnings come from g_warning() in GStreamer core, not the debug log system
+	C.installLogHandler()
+
 	mainLoop = glib.NewMainLoop(glib.MainContextDefault(), false)
 	_ = mainLoop
 }
