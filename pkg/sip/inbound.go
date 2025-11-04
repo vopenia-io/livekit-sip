@@ -927,8 +927,8 @@ func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncrypt
 	})
 
 	if offer.Video != nil {
-		if err := offer.Audio.SelectCodec(); err != nil {
-			return nil, fmt.Errorf("audio codec selection failed: %w, video: %v", err, offer.Video)
+		if err := offer.Video.SelectCodec(); err != nil {
+			return nil, fmt.Errorf("video codec selection failed: %w, video: %v", err, offer.Video)
 		}
 		c.log.Infow("video SDP", "data", offer.Video)
 		if offer.Video.Codec == nil {
