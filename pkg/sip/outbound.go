@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"net/netip"
 	"sort"
 	"sync"
 	"time"
@@ -27,6 +28,7 @@ import (
 	"github.com/pkg/errors"
 	"golang.org/x/exp/maps"
 
+	"github.com/livekit/media-sdk"
 	msdk "github.com/livekit/media-sdk"
 
 	"github.com/livekit/media-sdk/dtmf"
@@ -521,14 +523,19 @@ func (c *outboundCall) sipSignal(ctx context.Context) error {
 		cancel()
 	}()
 
-	sdpOffer := &sdpv2.Session{
-		Addr: c.media.externalIP,
-		Audio: &sdpv2.MediaSection{
-			Port: uint16(c.media.Port()),
-			Security: sdpv2.Security{
-				Mode: c.sipConf.mediaEncryption,
-			},
-		},
+	sdpOffer, err := (&sdpv2.SDP{}).Builder().
+		SetAddress(c.media.externalIP).
+		SetAudio(func(b *sdpv2.SDPMediaBuilder) (*sdpv2.SDPMedia, error) {
+			b = b.SetRTPPort(uint16(c.media.Port()))
+			for _, c := range media.EnabledCodecs() {
+				b = b.AddCodec(func(b *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
+					return b.SetCodec(c).Build()
+				}, false)
+			}
+			return b.Build()
+		}).Build()
+	if err != nil {
+		return fmt.Errorf("failed to build SDP offer: %w", err)
 	}
 
 	sdpOfferData, err := sdpOffer.Marshal()
@@ -575,17 +582,14 @@ func (c *outboundCall) sipSignal(ctx context.Context) error {
 
 	c.log = LoggerWithHeaders(c.log, c.cc)
 
-	if err := sdpOffer.ApplySDP(sdpResp); err != nil {
-		return err
+	sdpAnswer, err := sdpv2.NewSDP(sdpResp)
+	if err != nil {
+		return fmt.Errorf("failed to create SDP from response: %w", err)
 	}
 
-	sdpOffer.Addr = c.media.externalIP
-	sdpOffer.Audio.Port = uint16(c.media.Port())
-	sdpOffer.Audio.Security.Mode = c.sipConf.mediaEncryption
-
-	mc, err := sdpOffer.V1MediaConfig()
+	mc, err := sdpAnswer.V1MediaConfig(netip.AddrPortFrom(sdpOffer.Addr, sdpOffer.Audio.Port))
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to get media config from SDP answer: %w", err)
 	}
 
 	mconf := &MediaConf{MediaConfig: mc}

@@ -25,7 +25,7 @@ func init() {
 	_ = mainLoop
 }
 
-func NewVideoManager(log logger.Logger, room *Room, sdp *sdpv2.Session, media *sdpv2.MediaSection, opts *MediaOptions) (*VideoManager, error) {
+func NewVideoManager(log logger.Logger, room *Room, sdp *sdpv2.SDP, media *sdpv2.SDPMedia, opts *MediaOptions) (*VideoManager, error) {
 	rtpConn, err := mrtp.ListenUDPPortRange(opts.Ports.Start, opts.Ports.End, opts.IP)
 	if err != nil {
 		return nil, fmt.Errorf("failed to listen on UDP port range for RTP: %w", err)
@@ -66,7 +66,7 @@ func NewVideoManager(log logger.Logger, room *Room, sdp *sdpv2.Session, media *s
 type VideoManager struct {
 	log           logger.Logger
 	opts          *MediaOptions
-	media         *sdpv2.MediaSection
+	media         *sdpv2.SDPMedia
 	room          *Room
 	rtpConn       *udpConn
 	rtcpConn      *udpConn
