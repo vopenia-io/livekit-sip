@@ -1,28 +1,5 @@
 package sip
 
-/*
-#cgo pkg-config: gstreamer-1.0
-#include <glib.h>
-#include <string.h>
-
-static void customLogHandler(const gchar *log_domain,
-                             GLogLevelFlags log_level,
-                             const gchar *message,
-                             gpointer user_data) {
-    // Suppress "loop detected in the graph" warnings
-    if (log_level == G_LOG_LEVEL_WARNING && strstr(message, "loop detected in the graph") != NULL) {
-        return;
-    }
-    // For other messages, use the default handler
-    g_log_default_handler(log_domain, log_level, message, user_data);
-}
-
-static void installLogHandler() {
-    g_log_set_handler("GStreamer", G_LOG_LEVEL_WARNING | G_LOG_LEVEL_CRITICAL | G_LOG_LEVEL_ERROR, customLogHandler, NULL);
-}
-*/
-import "C"
-
 import (
 	"fmt"
 	"io"
@@ -45,22 +22,15 @@ var mainLoop *glib.MainLoop
 func init() {
 	gst.Init(nil)
 
-	// Install a custom GLib log handler to filter out "loop detected" warnings
-	// These warnings come from g_warning() in GStreamer core, not the debug log system
-	C.installLogHandler()
-
 	mainLoop = glib.NewMainLoop(glib.MainContextDefault(), false)
 	_ = mainLoop
 }
 
 func NewVideoManager(log logger.Logger, room *Room, sdp *sdpv2.SDP, media *sdpv2.SDPMedia, opts *MediaOptions) (*VideoManager, error) {
-	rtpConn, err := mrtp.ListenUDPPortRange(opts.Ports.Start, opts.Ports.End, opts.IP)
+	// Allocate RTP/RTCP port pair according to RFC 3550 (RTCP on RTP+1)
+	rtpConn, rtcpConn, err := mrtp.ListenUDPPortPair(opts.Ports.Start, opts.Ports.End, opts.IP)
 	if err != nil {
-		return nil, fmt.Errorf("failed to listen on UDP port range for RTP: %w", err)
-	}
-	rtcpConn, err := mrtp.ListenUDPPortRange(opts.Ports.Start, opts.Ports.End, opts.IP)
-	if err != nil {
-		return nil, fmt.Errorf("failed to listen on UDP port range for RTCP: %w", err)
+		return nil, fmt.Errorf("failed to listen on UDP port pair for RTP/RTCP: %w", err)
 	}
 
 	v := &VideoManager{
@@ -176,6 +146,10 @@ func (v *VideoManager) Setup() error {
 	webrtcRtcpInPipeIn, webrtcRtcpInPipeOut := io.Pipe()
 	v.webrtcRtcpIn.Swap(webrtcRtcpInPipeIn)
 
+	// Create RTCP output pipe for WebRTC
+	webrtcRtcpOutPipeIn, webrtcRtcpOutPipeOut := io.Pipe()
+	v.webrtcRtcpOut.Swap(webrtcRtcpOutPipeOut)
+
 	v.room.AddVideoTrackCallback("*",
 		func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant, conf *config.Config) {
 			v.log.Infow("adding video track from participant", "participant", rp.Identity(), "trackID", track.ID())
@@ -183,20 +157,32 @@ func (v *VideoManager) Setup() error {
 			v.webrtcRtpIn.Swap(io.NopCloser(
 				&TrackAdapter{TrackRemote: track},
 			))
+
+			// Read RTCP from WebRTC incoming
 			pub.OnRTCP(func(pkt rtcp.Packet) {
-				var buf []byte
+					var buf []byte
 				b, err := pkt.Marshal()
 				if err != nil {
-					v.log.Errorw("failed to marshal rtcp packet", err)
-					return
+						return
 				}
 				buf = append(buf, b...)
-				// fmt.Printf("Writing %d bytes to webrtcRtcpIn pipe\n", len(buf))
 				_, err = webrtcRtcpInPipeOut.Write(buf)
 				if err != nil {
-					v.log.Errorw("failed to write rtcp packet to pipe", err)
-				}
+					}
 			})
+
+			// Send RTCP to WebRTC (from our monitor/forwarder)
+			// Note: For now just log what we would send - actual sending requires PeerConnection access
+			go func() {
+				buf := make([]byte, 1500)
+				for {
+					_, err := webrtcRtcpOutPipeIn.Read(buf)
+					if err != nil {
+							return
+					}
+					// Discard RTCP packets - no way to send them to WebRTC track
+				}
+			}()
 		})
 
 	return nil
