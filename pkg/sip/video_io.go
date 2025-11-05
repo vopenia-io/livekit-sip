@@ -168,6 +168,7 @@ func (r *RtcpReader) Close() error {
 
 func NewTrackInput(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant, conf *config.Config) *TrackInput {
 	ti := &TrackInput{
+		Sid:    pub.SID(),
 		RtpIn:  io.NopCloser(&TrackAdapter{TrackRemote: track}),
 		RtcpIn: io.NopCloser(NewRtcpReader(pub, rp)),
 	}
@@ -175,6 +176,7 @@ func NewTrackInput(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication,
 }
 
 type TrackInput struct {
+	Sid    string
 	RtpIn  io.ReadCloser
 	RtcpIn io.ReadCloser
 }

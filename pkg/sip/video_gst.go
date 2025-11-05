@@ -135,10 +135,10 @@ import (
 
 func NewGstReader(sink *app.Sink) (*GstReader, error) {
 	g := &GstReader{
-		sink: sink,
+		Sink: sink,
 	}
 
-	if err := g.sink.SetState(gst.StatePlaying); err != nil {
+	if err := g.Sink.SetState(gst.StatePlaying); err != nil {
 		return nil, err
 	}
 
@@ -146,24 +146,24 @@ func NewGstReader(sink *app.Sink) (*GstReader, error) {
 }
 
 type GstReader struct {
-	sink *app.Sink
+	Sink *app.Sink
 }
 
 func (g *GstReader) SetState(state gst.State) error {
-	return g.sink.SetState(state)
+	return g.Sink.SetState(state)
 }
 
 func (g *GstReader) Close() error {
-	if err := g.sink.SetState(gst.StateNull); err != nil {
+	if err := g.Sink.SetState(gst.StateNull); err != nil {
 		return err
 	}
 	return nil
 }
 
 func (g *GstReader) Read(buf []byte) (int, error) {
-	sample := g.sink.PullSample()
+	sample := g.Sink.PullSample()
 	if sample == nil {
-		if g.sink.IsEOS() {
+		if g.Sink.IsEOS() {
 			return 0, io.EOF
 		}
 		return 0, errors.New("failed to pull sample from appsink")
@@ -179,10 +179,10 @@ func (g *GstReader) Read(buf []byte) (int, error) {
 
 func NewGstWriter(src *app.Source) (*GstWriter, error) {
 	g := &GstWriter{
-		src: src,
+		Src: src,
 	}
 
-	if err := g.src.SetState(gst.StatePlaying); err != nil {
+	if err := g.Src.SetState(gst.StatePlaying); err != nil {
 		return nil, err
 	}
 
@@ -190,15 +190,15 @@ func NewGstWriter(src *app.Source) (*GstWriter, error) {
 }
 
 type GstWriter struct {
-	src *app.Source
+	Src *app.Source
 }
 
 func (g *GstWriter) String() string {
-	return fmt.Sprintf("GstWriteRTP(%s:%s)", g.src.GetFactory().GetName(), g.src.GetName())
+	return fmt.Sprintf("GstWriteRTP(%s:%s)", g.Src.GetFactory().GetName(), g.Src.GetName())
 }
 
 func (g *GstWriter) Close() error {
-	if err := g.src.SetState(gst.StateNull); err != nil {
+	if err := g.Src.SetState(gst.StateNull); err != nil {
 		return err
 	}
 	return nil
@@ -209,7 +209,7 @@ func (g *GstWriter) Write(buf []byte) (int, error) {
 	if buffer == nil {
 		return 0, errors.New("failed to create GST buffer from RTP packet")
 	}
-	g.src.PushBuffer(buffer)
+	g.Src.PushBuffer(buffer)
 	return len(buf), nil
 }
 

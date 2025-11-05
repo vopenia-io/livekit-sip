@@ -79,7 +79,7 @@ type VideoManager struct {
 	room     *Room
 	rtpConn  *udpConn
 	rtcpConn *udpConn
-	pipeline *gst.Pipeline
+	pipeline *VideoPipeline
 }
 
 func (v *VideoManager) RtpPort() int {
@@ -93,7 +93,7 @@ func (v *VideoManager) RtcpPort() int {
 func (v *VideoManager) Close() error {
 	v.log.Debugw("closing video manager")
 	if v.pipeline != nil {
-		if err := v.pipeline.SetState(gst.StateNull); err != nil {
+		if err := v.pipeline.Close(); err != nil {
 			return fmt.Errorf("failed to set GStreamer pipeline to null: %w", err)
 		}
 	}
@@ -160,9 +160,10 @@ func (v *VideoManager) Setup() error {
 		if w := v.webrtcRtcpIn.Swap(ti.RtcpIn); w != nil {
 			_ = w.Close()
 		}
+		v.pipeline.Flush(ti.Sid)
 	})
 
-	v.room.UpdateActiveParticipant("")
+	v.room.UpdateActiveParticipant(nil)
 
 	// v.room.AddVideoTrackCallback("*",
 	// 	func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant, conf *config.Config) {
@@ -205,7 +206,7 @@ func (v *VideoManager) Setup() error {
 func (v *VideoManager) Start() error {
 	v.log.Debugw("starting video manager")
 
-	if err := v.pipeline.SetState(gst.StatePlaying); err != nil {
+	if err := v.pipeline.Start(); err != nil {
 		return fmt.Errorf("failed to set GStreamer pipeline to playing: %w", err)
 	}
 	return nil

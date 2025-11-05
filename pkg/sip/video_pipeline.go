@@ -11,14 +11,48 @@ import (
 	"github.com/pion/rtcp"
 )
 
+type VideoPipeline struct {
+	SipRtpIn  *GstWriter
+	SipRtpOut *GstReader
+
+	WebrtcRtpIn  *GstWriter
+	WebrtcRtpOut *GstReader
+
+	Pipeline *gst.Pipeline
+}
+
+func (v *VideoPipeline) Close() error {
+	if v.Pipeline != nil {
+		if err := v.Pipeline.SetState(gst.StateNull); err != nil {
+			return fmt.Errorf("failed to set GStreamer pipeline to null: %w", err)
+		}
+	}
+	return nil
+}
+
+func (v *VideoPipeline) Start() error {
+	if err := v.Pipeline.SetState(gst.StatePlaying); err != nil {
+		return fmt.Errorf("failed to set GStreamer pipeline to playing: %w", err)
+	}
+	return nil
+}
+
+func (v *VideoPipeline) Flush(sid string) error {
+	v.Pipeline.SendEvent(gst.NewFlushStartEvent())
+	v.Pipeline.SendEvent(gst.NewFlushStopEvent(true))
+
+	// v.SipRtpIn.Src.SendEvent(gst.NewStreamStartEvent(sid))
+	return nil
+}
+
 // rtcpMonitor wraps an io.Reader to monitor and log RTCP packets
 type rtcpMonitor struct {
-	reader          io.Reader
-	writer          io.Writer
-	log             logger.Logger
-	name            string
-	pliForwarder    io.Writer // Forward PLI/FIR to the opposite direction
-	lastPLIForward  int64     // Unix timestamp of last PLI forward (rate limiting)
+	reader         io.Reader
+	writer         io.Writer
+	log            logger.Logger
+	name           string
+	pliForwarder   io.Writer // Forward PLI/FIR to the opposite direction
+	lastPLIForward int64     // Unix timestamp of last PLI forward (rate limiting)
 }
 
 func (r *rtcpMonitor) Read(p []byte) (n int, err error) {
@@ -226,7 +260,13 @@ func (v *VideoManager) SetupGstPipeline() error {
 		}
 	}()
 
-	v.pipeline = pipeline
+	v.pipeline = &VideoPipeline{
+		SipRtpIn:     sipRtpIn,
+		SipRtpOut:    sipRtpOut,
+		WebrtcRtpIn:  webrtcRtpIn,
+		WebrtcRtpOut: webrtcRtpOut,
+		Pipeline:     pipeline,
+	}
 
 	return nil
 }
