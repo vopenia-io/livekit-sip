@@ -74,27 +74,45 @@ func (s *SwitchWriter) Swap(w io.WriteCloser) io.WriteCloser {
 func NewSwitchReader() *SwitchReader {
 	sr := &SwitchReader{}
 	sr.b = sync.NewCond(&sr.mu)
+	sr.closed.Store(false)
 	return sr
 }
 
 type SwitchReader struct {
-	r  atomic.Pointer[io.ReadCloser]
-	b  *sync.Cond
-	mu sync.Mutex
+	r      atomic.Pointer[io.ReadCloser]
+	b      *sync.Cond
+	mu     sync.Mutex
+	closed atomic.Bool
 }
 
 func (s *SwitchReader) Read(p []byte) (n int, err error) {
 	r := s.r.Load()
 	if r == nil {
+		// If closed, return EOF immediately
+		if s.closed.Load() {
+			return 0, io.EOF
+		}
+		// Wait for a reader to be swapped in
 		s.mu.Lock()
 		s.b.Wait()
 		s.mu.Unlock()
+		// Check again if closed after waking up
+		if s.closed.Load() {
+			return 0, io.EOF
+		}
 		return s.Read(p)
 	}
 	return (*r).Read(p)
 }
 
 func (s *SwitchReader) Close() error {
+	// Mark as closed first
+	s.closed.Store(true)
+	// Wake up any blocked readers
+	s.mu.Lock()
+	s.b.Broadcast()
+	s.mu.Unlock()
+	// Close the underlying reader if exists
 	r := s.r.Load()
 	if r != nil {
 		return (*r).Close()

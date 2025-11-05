@@ -148,15 +148,20 @@ func (v *VideoIO) SetWebrtcRtcpOut(w io.WriteCloser) {
 }
 
 func (v *VideoManager) PublishVideoTrack() error {
+	// Only start video output if we're receiving from SIP
 	if !v.recv {
 		return v.room.StopVideo()
 	}
+
+	// Start the video track for SIP→WebRTC
 	to, err := v.room.StartVideo()
 	if err != nil {
 		return err
 	}
 	v.SetWebrtcRtpOut(to.RtpOut)
 	v.SetWebrtcRtcpOut(to.RtcpOut)
+
+	v.log.Infow("video track published for SIP→WebRTC", "recv", v.recv, "send", v.send)
 	return nil
 }
 
@@ -182,6 +187,7 @@ func (v *VideoManager) Setup(media *sdpv2.SDPMedia) error {
 	v.log.Infow("video setup", "send", v.send, "recv", v.recv, "remote", v.remote.String(), "rtp_port", v.RtpPort(), "rtcp_port", v.RtcpPort())
 
 	if v.send {
+		// Set up SIP RTP/RTCP output (our pipeline → SIP device)
 		rtpAddr := netip.AddrPortFrom(v.remote, media.Port)
 		v.rtpConn.SetDst(rtpAddr)
 
@@ -193,28 +199,15 @@ func (v *VideoManager) Setup(media *sdpv2.SDPMedia) error {
 		if w := v.sipRtcpOut.Swap(v.rtcpConn); w != nil {
 			_ = w.Close()
 		}
-		if !v.recv {
-			if r := v.sipRtpIn.Swap(nil); r != nil {
-				_ = r.Close()
-			}
-			if w := v.sipRtcpIn.Swap(nil); w != nil {
-				_ = w.Close()
-			}
-			v.room.SetTrackCallback(nil)
-		}
-	}
 
-	if v.recv {
-		if r := v.sipRtpIn.Swap(v.rtpConn); r != nil {
-			_ = r.Close()
-		}
-		if w := v.sipRtcpIn.Swap(v.rtcpConn); w != nil {
-			_ = w.Close()
-		}
+		v.log.Infow("setting up video send to SIP", "remote", v.remote.String(), "port", media.Port)
 
+		// Set up callback for when WebRTC tracks are subscribed (WebRTC → SIP direction)
+		// This is needed to get video from WebRTC participants and send to SIP device
 		v.room.SetTrackCallback(func(ti *TrackInput) {
-			fmt.Printf("\n\n\n\n\n\n\n\n\nCALLBACK\n\n\n\n\n")
-
+			v.log.Infow("WebRTC video track subscribed - connecting WebRTC→SIP pipeline",
+				"hasRtpIn", ti.RtpIn != nil,
+				"hasRtcpIn", ti.RtcpIn != nil)
 
 			if r := v.webrtcRtpIn.Swap(ti.RtpIn); r != nil {
 				_ = r.Close()
@@ -224,15 +217,35 @@ func (v *VideoManager) Setup(media *sdpv2.SDPMedia) error {
 			}
 		})
 
+		// Trigger active participant update to invoke callback if tracks already exist
 		v.room.UpdateActiveParticipant("")
+	} else {
+		// If not sending to SIP, disable SIP output
+		if w := v.sipRtpOut.Swap(nil); w != nil {
+			_ = w.Close()
+		}
+		if w := v.sipRtcpOut.Swap(nil); w != nil {
+			_ = w.Close()
+		}
+	}
 
-		if !v.send {
-			if w := v.sipRtpOut.Swap(nil); w != nil {
-				_ = w.Close()
-			}
-			if w := v.sipRtcpOut.Swap(nil); w != nil {
-				_ = w.Close()
-			}
+	if v.recv {
+		// Set up SIP RTP/RTCP input (SIP device → our pipeline)
+		if r := v.sipRtpIn.Swap(v.rtpConn); r != nil {
+			_ = r.Close()
+		}
+		if w := v.sipRtcpIn.Swap(v.rtcpConn); w != nil {
+			_ = w.Close()
+		}
+
+		v.log.Infow("setting up video receive from SIP", "remote", v.remote.String(), "port", media.Port)
+	} else {
+		// If not receiving from SIP, disable SIP input
+		if r := v.sipRtpIn.Swap(nil); r != nil {
+			_ = r.Close()
+		}
+		if w := v.sipRtcpIn.Swap(nil); w != nil {
+			_ = w.Close()
 		}
 	}
 
