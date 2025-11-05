@@ -876,6 +876,126 @@ func (c *inboundCall) handleInvite(ctx context.Context, req *sip.Request, trunkI
 	}
 }
 
+
+func (c *inboundCall) SetupAudio(conf *config.Config, offer *sdpv2.SDP, answerBuilder *sdpv2.SDPBuilder, features []livekit.SIPFeature) error {
+	if offer.Audio == nil {
+		return fmt.Errorf("no audio in SDP offer: %w", sdp.ErrNoCommonMedia)
+	}
+
+	if c.media == nil {
+		mp, err := NewMediaPort(c.log, c.mon, &MediaOptions{
+			IP:                  c.s.sconf.MediaIP,
+			Ports:               conf.RTPPort,
+			MediaTimeoutInitial: c.s.conf.MediaTimeoutInitial,
+			MediaTimeout:        c.s.conf.MediaTimeout,
+			EnableJitterBuffer:  c.jitterBuf,
+			Stats:               &c.stats.Port,
+		}, RoomSampleRate)
+
+		if err != nil {
+			return err
+		}
+		c.media = mp
+		c.media.EnableTimeout(false) // enabled once we accept the call
+		c.media.DisableOut()         // disabled until we send 200
+		c.media.SetDTMFAudio(conf.AudioDTMF)
+	}
+
+	answerBuilder.SetAudio(func(b *sdpv2.SDPMediaBuilder) (*sdpv2.SDPMedia, error) {
+		return b.
+			AddCodec(func(_ *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
+				return offer.Audio.Codec, nil
+			}, true).
+			SetRTPPort(uint16(c.media.Port())).
+			Build()
+	})
+
+	answer, err := answerBuilder.Build()
+	if err != nil {
+		return err
+	}
+
+	if err := answer.Audio.SelectCodec(); err != nil {
+		return fmt.Errorf("audio codec selection failed: %w", err)
+	}
+
+	mc, err := answer.V1MediaConfig(netip.AddrPortFrom(offer.Addr, offer.Audio.Port))
+	if err != nil {
+		return err
+	}
+
+	mconf := &MediaConf{MediaConfig: mc}
+
+	mconf.Processor = c.s.handler.GetMediaProcessor(features)
+	if err = c.media.SetConfig(mconf); err != nil {
+		return err
+	}
+	if mconf.Audio.DTMFType != 0 {
+		c.media.HandleDTMF(c.handleDTMF)
+	}
+
+	// Must be set earlier to send the pin prompts.
+	if w := c.lkRoom.SwapOutput(c.media.GetAudioWriter()); w != nil {
+		_ = w.Close()
+	}
+	if mconf.Audio.DTMFType != 0 {
+		c.lkRoom.SetDTMFOutput(c.media)
+	}
+	c.state.DeferUpdate(func(info *livekit.SIPCallInfo) {
+		info.AudioCodec = mconf.Audio.Codec.Info().SDPName
+	})
+
+	return nil
+}
+
+func (c *inboundCall) SetupVideo(conf *config.Config, offer *sdpv2.SDP, answerBuilder *sdpv2.SDPBuilder, features []livekit.SIPFeature) error {
+	if offer.Video != nil {
+		if err := offer.Video.SelectCodec(); err != nil {
+			return fmt.Errorf("video codec selection failed: %w, video: %v", err, offer.Video)
+		}
+		c.log.Infow("video SDP", "data", offer.Video)
+		if offer.Video.Codec == nil {
+			return fmt.Errorf("no video codec in SDP offer: %w", sdp.ErrNoCommonMedia)
+		}
+
+		if c.video == nil {
+			video, err := NewVideoManager(c.log, c.lkRoom, offer, offer.Video, &MediaOptions{
+				IP:                  c.s.sconf.MediaIP,
+				Ports:               conf.RTPPort,
+				MediaTimeoutInitial: c.s.conf.MediaTimeoutInitial,
+				MediaTimeout:        c.s.conf.MediaTimeout,
+				Stats:               &c.stats.Port,
+			})
+			if err != nil {
+				return fmt.Errorf("video manager creation failed: %w", err)
+			}
+			c.video = video
+
+			if err := c.video.Setup(); err != nil {
+				return fmt.Errorf("video setup failed: %w", err)
+			}
+			if err := c.video.Start(); err != nil {
+				return fmt.Errorf("video start failed: %w", err)
+			}
+		}
+
+		answerBuilder.SetVideo(func(b *sdpv2.SDPMediaBuilder) (*sdpv2.SDPMedia, error) {
+			return b.
+				AddCodec(func(_ *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
+					return offer.Video.Codec, nil
+				}, true).
+				SetRTPPort(uint16(c.video.RtpPort())).
+				SetRTCPPort(uint16(c.video.RtcpPort())).
+				Build()
+		})
+	} else if c.video != nil {
+		// video was previously established, but not in this offer
+		c.video.Close()
+		c.video = nil
+	}
+	return nil
+}
+
 func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncryption, conf *config.Config, features []livekit.SIPFeature) (answerData []byte, _ error) {
 	c.mon.SDPSize(len(offerData), true)
 	c.log.Debugw("SDP offer", "sdp", string(offerData))
@@ -884,22 +1004,6 @@ func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncrypt
 	// 	c.log.Errorw("Cannot parse encryption", err)
 	// 	return nil, err
 	// }
-
-	mp, err := NewMediaPort(c.log, c.mon, &MediaOptions{
-		IP:                  c.s.sconf.MediaIP,
-		Ports:               conf.RTPPort,
-		MediaTimeoutInitial: c.s.conf.MediaTimeoutInitial,
-		MediaTimeout:        c.s.conf.MediaTimeout,
-		EnableJitterBuffer:  c.jitterBuf,
-		Stats:               &c.stats.Port,
-	}, RoomSampleRate)
-	if err != nil {
-		return nil, err
-	}
-	c.media = mp
-	c.media.EnableTimeout(false) // enabled once we accept the call
-	c.media.DisableOut()         // disabled until we send 200
-	c.media.SetDTMFAudio(conf.AudioDTMF)
 
 	offer, err := sdpv2.NewSDP(offerData)
 	if err != nil {
@@ -917,64 +1021,15 @@ func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncrypt
 	answerBuilder := offer.Clone().Builder()
 	answerBuilder.SetAddress(c.s.sconf.MediaIP)
 
-	answerBuilder.SetAudio(func(b *sdpv2.SDPMediaBuilder) (*sdpv2.SDPMedia, error) {
-		return b.
-			AddCodec(func(_ *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
-				return offer.Audio.Codec, nil
-			}, true).
-			SetRTPPort(uint16(mp.Port())).
-			Build()
-	})
+	if err := c.SetupAudio(conf, offer, answerBuilder, features); err != nil {
+		return nil, fmt.Errorf("audio setup failed: %w", err)
+	}
 
-	if offer.Video != nil {
-		if err := offer.Video.SelectCodec(); err != nil {
-			return nil, fmt.Errorf("video codec selection failed: %w, video: %v", err, offer.Video)
-		}
-		c.log.Infow("video SDP", "data", offer.Video)
-		if offer.Video.Codec == nil {
-			return nil, fmt.Errorf("no video codec in SDP offer: %w", sdp.ErrNoCommonMedia)
-		}
-		video, err := NewVideoManager(c.log, c.lkRoom, offer, offer.Video, &MediaOptions{
-			IP:                  c.s.sconf.MediaIP,
-			Ports:               conf.RTPPort,
-			MediaTimeoutInitial: c.s.conf.MediaTimeoutInitial,
-			MediaTimeout:        c.s.conf.MediaTimeout,
-			Stats:               &c.stats.Port,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("video manager creation failed: %w", err)
-		}
-		c.video = video
-
-		answerBuilder.SetVideo(func(b *sdpv2.SDPMediaBuilder) (*sdpv2.SDPMedia, error) {
-			return b.
-				AddCodec(func(_ *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
-					return offer.Video.Codec, nil
-				}, true).
-				SetRTPPort(uint16(video.RtpPort())).
-				SetRTCPPort(uint16(video.RtcpPort())).
-				Build()
-		})
-
-		// offer.Video.Security.Mode = e
-		if err := c.video.Setup(); err != nil {
-			return nil, fmt.Errorf("video setup failed: %w", err)
-		}
-		if err := c.video.Start(); err != nil {
-			return nil, fmt.Errorf("video start failed: %w", err)
-		}
+	if err := c.SetupVideo(conf, offer, answerBuilder, features); err != nil {
+		return nil, fmt.Errorf("video setup failed: %w", err)
 	}
 
 	answer, err := answerBuilder.Build()
-	if err != nil {
-		return nil, err
-	}
-
-	if err := answer.Audio.SelectCodec(); err != nil {
-		return nil, fmt.Errorf("audio codec selection failed: %w", err)
-	}
-
-	mc, err := answer.V1MediaConfig(netip.AddrPortFrom(offer.Addr, offer.Audio.Port))
 	if err != nil {
 		return nil, err
 	}
@@ -986,29 +1041,9 @@ func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncrypt
 		return nil, err
 	}
 
-	mconf := &MediaConf{MediaConfig: mc}
-
 	c.mon.SDPSize(len(answerData), false)
 	c.log.Debugw("SDP answer", "sdp", string(answerData))
 
-	mconf.Processor = c.s.handler.GetMediaProcessor(features)
-	if err = c.media.SetConfig(mconf); err != nil {
-		return nil, err
-	}
-	if mconf.Audio.DTMFType != 0 {
-		c.media.HandleDTMF(c.handleDTMF)
-	}
-
-	// Must be set earlier to send the pin prompts.
-	if w := c.lkRoom.SwapOutput(c.media.GetAudioWriter()); w != nil {
-		_ = w.Close()
-	}
-	if mconf.Audio.DTMFType != 0 {
-		c.lkRoom.SetDTMFOutput(c.media)
-	}
-	c.state.DeferUpdate(func(info *livekit.SIPCallInfo) {
-		info.AudioCodec = mconf.Audio.Codec.Info().SDPName
-	})
 	return answerData, nil
 }
 
