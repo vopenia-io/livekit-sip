@@ -876,7 +876,6 @@ func (c *inboundCall) handleInvite(ctx context.Context, req *sip.Request, trunkI
 	}
 }
 
-
 func (c *inboundCall) SetupAudio(conf *config.Config, offer *sdpv2.SDP, answerBuilder *sdpv2.SDPBuilder, features []livekit.SIPFeature) error {
 	if offer.Audio == nil {
 		return fmt.Errorf("no audio in SDP offer: %w", sdp.ErrNoCommonMedia)
@@ -1009,6 +1008,8 @@ func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncrypt
 	if err != nil {
 		return nil, err
 	}
+
+	c.log.Infow("Parsed SDP offer", "sdp", offer)
 
 	if offer.Audio == nil {
 		return nil, fmt.Errorf("no audio in SDP offer: %w", sdp.ErrNoCommonMedia)
