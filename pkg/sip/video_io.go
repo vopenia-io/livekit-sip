@@ -1,10 +1,13 @@
 package sip
 
 import (
+	"errors"
 	"io"
 	"sync"
 	"sync/atomic"
 
+	lksdk "github.com/livekit/server-sdk-go/v2"
+	"github.com/livekit/sip/pkg/config"
 	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 )
@@ -122,4 +125,56 @@ func (r *RtcpWriter) Write(p []byte) (n int, err error) {
 		return 0, err
 	}
 	return len(p), nil
+}
+
+func NewRtcpReader(pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) *RtcpReader {
+	pipeReader, pipeWriter := io.Pipe()
+	rr := &RtcpReader{
+		pipeReader: pipeReader,
+		pipeWriter: pipeWriter,
+		pub:        pub,
+		rp:         rp,
+	}
+
+	pub.OnRTCP(func(pkt rtcp.Packet) {
+		var buf []byte
+		b, err := pkt.Marshal()
+		if err != nil {
+			return
+		}
+		buf = append(buf, b...)
+		_, err = rr.pipeWriter.Write(buf)
+		if err != nil {
+		}
+	})
+
+	return rr
+}
+
+type RtcpReader struct {
+	pipeReader *io.PipeReader
+	pipeWriter *io.PipeWriter
+	pub        *lksdk.RemoteTrackPublication
+	rp         *lksdk.RemoteParticipant
+}
+
+func (r *RtcpReader) Read(p []byte) (n int, err error) {
+	return r.pipeReader.Read(p)
+}
+
+func (r *RtcpReader) Close() error {
+	return errors.Join(r.pipeWriter.Close(), r.pipeReader.Close())
+}
+
+func NewTrackInput(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant, conf *config.Config) *TrackInput {
+	ti := &TrackInput{
+		RtpIn:  io.NopCloser(&TrackAdapter{TrackRemote: track}),
+		RtcpIn: io.NopCloser(NewRtcpReader(pub, rp)),
+	}
+	return ti
+}
+
+type TrackInput struct {
+	RtpIn  io.ReadCloser
+	RtcpIn io.ReadCloser
 }

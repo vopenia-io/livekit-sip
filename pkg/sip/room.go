@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"sync/atomic"
 
 	"github.com/frostbyte73/core"
@@ -62,23 +63,27 @@ type ParticipantInfo struct {
 	Name     string
 }
 
-type TrackCallback = func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant, conf *config.Config)
+type TrackCallback = func(ti *TrackInput)
 
 type Room struct {
-	log                logger.Logger
-	roomLog            logger.Logger // deferred logger
-	room               *lksdk.Room
-	mix                *mixer.Mixer
-	out                *msdk.SwitchWriter
-	outDtmf            atomic.Pointer[dtmf.Writer]
-	p                  ParticipantInfo
-	ready              core.Fuse
-	subscribe          atomic.Bool
-	subscribed         core.Fuse
-	stopped            core.Fuse
-	closed             core.Fuse
-	stats              *RoomStats
-	videoTrackCallback map[string]TrackCallback
+	log        logger.Logger
+	roomLog    logger.Logger // deferred logger
+	room       *lksdk.Room
+	mix        *mixer.Mixer
+	out        *msdk.SwitchWriter
+	outDtmf    atomic.Pointer[dtmf.Writer]
+	p          ParticipantInfo
+	ready      core.Fuse
+	subscribe  atomic.Bool
+	subscribed core.Fuse
+	stopped    core.Fuse
+	closed     core.Fuse
+	stats      *RoomStats
+
+	participantTracks map[string]TrackInput
+	activeParticipant string
+	trackMu           sync.Mutex
+	trackCallback     TrackCallback
 }
 
 type ParticipantConfig struct {
@@ -103,9 +108,9 @@ func NewRoom(log logger.Logger, st *RoomStats) *Room {
 		st = &RoomStats{}
 	}
 	r := &Room{log: log,
-		stats:              st,
-		out:                msdk.NewSwitchWriter(RoomSampleRate),
-		videoTrackCallback: make(map[string]TrackCallback),
+		stats:             st,
+		out:               msdk.NewSwitchWriter(RoomSampleRate),
+		participantTracks: make(map[string]TrackInput),
 	}
 	out := newMediaWriterCount(r.out, &st.OutputFrames, &st.OutputSamples)
 
@@ -173,6 +178,8 @@ func (r *Room) participantJoin(rp *lksdk.RemoteParticipant) {
 func (r *Room) participantLeft(rp *lksdk.RemoteParticipant) {
 	log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID())
 	log.Debugw("participant left")
+
+	r.DeleteParticipantTrack(rp.Identity())
 }
 
 func (r *Room) subscribeTo(pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
@@ -187,6 +194,17 @@ func (r *Room) subscribeTo(pub *lksdk.RemoteTrackPublication, rp *lksdk.RemotePa
 		return
 	}
 	r.subscribed.Break()
+}
+
+func (r *Room) updateActiveSpeaker(p []lksdk.Participant) {
+	for _, sp := range p {
+		if !sp.IsSpeaking() || !sp.IsCameraEnabled() {
+			continue
+		}
+		id := sp.Identity()
+		r.UpdateActiveParticipant(id)
+		break
+	}
 }
 
 func (r *Room) Connect(conf *config.Config, rconf RoomConfig) error {
@@ -211,6 +229,9 @@ func (r *Room) Connect(conf *config.Config, rconf RoomConfig) error {
 		OnParticipantDisconnected: func(rp *lksdk.RemoteParticipant) {
 			r.participantLeft(rp)
 		},
+		OnActiveSpeakersChanged: func(p []lksdk.Participant) {
+			r.updateActiveSpeaker(p)
+		},
 		ParticipantCallback: lksdk.ParticipantCallback{
 			OnTrackPublished: func(pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
 				log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID(), "trackID", pub.SID(), "trackName", pub.Name())
@@ -230,6 +251,18 @@ func (r *Room) Connect(conf *config.Config, rconf RoomConfig) error {
 				default:
 					log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID(), "trackID", pub.SID(), "trackName", pub.Name())
 					log.Warnw("unsupported track kind for subscription", fmt.Errorf("kind=%s", pub.Kind()))
+				}
+			},
+			OnTrackUnsubscribed: func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
+				r.log.Debugw("track unsubscribed", "kind", pub.Kind(), "participant", rp.Identity(), "pID", rp.SID(), "trackID", pub.SID(), "trackName", pub.Name())
+				switch pub.Kind() {
+				case lksdk.TrackKindAudio:
+					// no-op
+				case lksdk.TrackKindVideo:
+					r.DeleteParticipantTrack(rp.Identity())
+				default:
+					log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID(), "trackID", pub.SID(), "trackName", pub.Name())
+					log.Warnw("unsupported track kind for unsubscription", fmt.Errorf("kind=%s", pub.Kind()))
 				}
 			},
 			OnDataPacket: func(data lksdk.DataPacket, params lksdk.DataReceiveParams) {
@@ -481,8 +514,42 @@ func (r *Room) participantAudioTrackSubscribed(track *webrtc.TrackRemote, pub *l
 	}()
 }
 
-func (r *Room) AddVideoTrackCallback(name string, cb TrackCallback) {
-	r.videoTrackCallback[name] = cb
+func (r *Room) DeleteParticipantTrack(participantID string) {
+	r.trackMu.Lock()
+	delete(r.participantTracks, participantID)
+	if r.activeParticipant == participantID {
+		r.updateActiveSpeaker(r.room.ActiveSpeakers())
+	} else {
+		r.trackMu.Unlock()
+	}
+}
+
+func (r *Room) SetTrackCallback(cb TrackCallback) {
+	r.trackMu.Lock()
+	defer r.trackMu.Unlock()
+	r.trackCallback = cb
+}
+
+func (r *Room) UpdateActiveParticipant(participantID string) {
+	if participantID == "" && r.activeParticipant == "" {
+		return
+	}
+	if participantID == r.activeParticipant {
+		return
+	}
+	if participantID == "" {
+		participantID = r.activeParticipant
+	}
+	r.trackMu.Lock()
+	defer r.trackMu.Unlock()
+	r.activeParticipant = participantID
+	track, ok := r.participantTracks[participantID]
+	if !ok {
+		return
+	}
+	if r.trackCallback != nil {
+		r.trackCallback(&track)
+	}
 }
 
 func (r *Room) participantVideoTrackSubscribed(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant, conf *config.Config) {
@@ -493,15 +560,27 @@ func (r *Room) participantVideoTrackSubscribed(track *webrtc.TrackRemote, pub *l
 	}
 	log.Infow("handling new video track")
 
-	if cb, ok := r.videoTrackCallback[pub.Name()]; ok {
-		go cb(track, pub, rp, conf)
-		return
-	}
-	if cb, ok := r.videoTrackCallback["*"]; ok {
-		go cb(track, pub, rp, conf)
-		return
-	}
-	log.Warnw("no video track callback registered for this track", nil)
+	id := rp.Identity()
+
+	ti := NewTrackInput(track, pub, rp, conf)
+
+	func() {
+		r.trackMu.Lock()
+		defer r.trackMu.Unlock()
+		r.participantTracks[id] = *ti
+	}()
+
+	r.UpdateActiveParticipant(id)
+
+	// if cb, ok := r.videoTrackCallback[pub.Name()]; ok {
+	// 	go cb(track, pub, rp, conf)
+	// 	return
+	// }
+	// if cb, ok := r.videoTrackCallback["*"]; ok {
+	// 	go cb(track, pub, rp, conf)
+	// 	return
+	// }
+	// log.Warnw("no video track callback registered for this track", nil)
 }
 
 func (r *Room) LocalParticipant() *lksdk.LocalParticipant {

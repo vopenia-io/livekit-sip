@@ -11,10 +11,6 @@ import (
 	mrtp "github.com/livekit/media-sdk/rtp"
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
 	"github.com/livekit/protocol/logger"
-	lksdk "github.com/livekit/server-sdk-go/v2"
-	"github.com/livekit/sip/pkg/config"
-	"github.com/pion/rtcp"
-	"github.com/pion/webrtc/v4"
 )
 
 var mainLoop *glib.MainLoop
@@ -34,20 +30,22 @@ func NewVideoManager(log logger.Logger, room *Room, sdp *sdpv2.SDP, media *sdpv2
 	}
 
 	v := &VideoManager{
-		log:           log,
-		room:          room,
-		opts:          opts,
-		media:         media,
-		rtpConn:       newUDPConn(log.WithComponent("video-rtp"), rtpConn),
-		rtcpConn:      newUDPConn(log.WithComponent("video-rtcp"), rtcpConn),
-		sipRtpIn:      NewSwitchReader(),
-		sipRtpOut:     NewSwitchWriter(),
-		sipRtcpIn:     NewSwitchReader(),
-		sipRtcpOut:    NewSwitchWriter(),
-		webrtcRtpIn:   NewSwitchReader(),
-		webrtcRtpOut:  NewSwitchWriter(),
-		webrtcRtcpIn:  NewSwitchReader(),
-		webrtcRtcpOut: NewSwitchWriter(),
+		VideoIO: VideoIO{
+			sipRtpIn:      NewSwitchReader(),
+			sipRtpOut:     NewSwitchWriter(),
+			sipRtcpIn:     NewSwitchReader(),
+			sipRtcpOut:    NewSwitchWriter(),
+			webrtcRtpIn:   NewSwitchReader(),
+			webrtcRtpOut:  NewSwitchWriter(),
+			webrtcRtcpIn:  NewSwitchReader(),
+			webrtcRtcpOut: NewSwitchWriter(),
+		},
+		log:      log,
+		room:     room,
+		opts:     opts,
+		media:    media,
+		rtpConn:  newUDPConn(log.WithComponent("video-rtp"), rtpConn),
+		rtcpConn: newUDPConn(log.WithComponent("video-rtcp"), rtcpConn),
 	}
 
 	rtpAddr := netip.AddrPortFrom(sdp.Addr, media.Port)
@@ -61,22 +59,27 @@ func NewVideoManager(log logger.Logger, room *Room, sdp *sdpv2.SDP, media *sdpv2
 	return v, nil
 }
 
-type VideoManager struct {
-	log           logger.Logger
-	opts          *MediaOptions
-	media         *sdpv2.SDPMedia
-	room          *Room
-	rtpConn       *udpConn
-	rtcpConn      *udpConn
-	pipeline      *gst.Pipeline
-	sipRtpIn      *SwitchReader
-	sipRtpOut     *SwitchWriter
-	sipRtcpIn     *SwitchReader
-	sipRtcpOut    *SwitchWriter
+type VideoIO struct {
+	sipRtpIn   *SwitchReader
+	sipRtpOut  *SwitchWriter
+	sipRtcpIn  *SwitchReader
+	sipRtcpOut *SwitchWriter
+
 	webrtcRtpIn   *SwitchReader
 	webrtcRtpOut  *SwitchWriter
 	webrtcRtcpIn  *SwitchReader
 	webrtcRtcpOut *SwitchWriter
+}
+
+type VideoManager struct {
+	VideoIO
+	log      logger.Logger
+	opts     *MediaOptions
+	media    *sdpv2.SDPMedia
+	room     *Room
+	rtpConn  *udpConn
+	rtcpConn *udpConn
+	pipeline *gst.Pipeline
 }
 
 func (v *VideoManager) RtpPort() int {
@@ -108,19 +111,19 @@ func (v *VideoManager) Close() error {
 // 	v.sipRtpOut.Swap(w)
 // }
 
-func (v *VideoManager) SetWebrtcRtpIn(r io.ReadCloser) {
+func (v *VideoIO) SetWebrtcRtpIn(r io.ReadCloser) {
 	v.webrtcRtpIn.Swap(r)
 }
 
-func (v *VideoManager) SetWebrtcRtpOut(w io.WriteCloser) {
+func (v *VideoIO) SetWebrtcRtpOut(w io.WriteCloser) {
 	v.webrtcRtpOut.Swap(w)
 }
 
-func (v *VideoManager) SetWebrtcRtcpIn(r io.ReadCloser) {
+func (v *VideoIO) SetWebrtcRtcpIn(r io.ReadCloser) {
 	v.webrtcRtcpIn.Swap(r)
 }
 
-func (v *VideoManager) SetWebrtcRtcpOut(w io.WriteCloser) {
+func (v *VideoIO) SetWebrtcRtcpOut(w io.WriteCloser) {
 	v.webrtcRtcpOut.Swap(w)
 }
 
@@ -141,49 +144,60 @@ func (v *VideoManager) Setup() error {
 	v.sipRtcpIn.Swap(v.rtcpConn)
 	v.sipRtcpOut.Swap(v.rtcpConn)
 
-	// v.webrtcRtpOut.Swap(&NopWriteCloser{(io.Discard)})
+	// // v.webrtcRtpOut.Swap(&NopWriteCloser{(io.Discard)})
 
-	webrtcRtcpInPipeIn, webrtcRtcpInPipeOut := io.Pipe()
-	v.webrtcRtcpIn.Swap(webrtcRtcpInPipeIn)
+	// webrtcRtcpInPipeIn, webrtcRtcpInPipeOut := io.Pipe()
+	// v.webrtcRtcpIn.Swap(webrtcRtcpInPipeIn)
 
-	// Create RTCP output pipe for WebRTC
-	webrtcRtcpOutPipeIn, webrtcRtcpOutPipeOut := io.Pipe()
-	v.webrtcRtcpOut.Swap(webrtcRtcpOutPipeOut)
+	// // Create RTCP output pipe for WebRTC
+	// webrtcRtcpOutPipeIn, webrtcRtcpOutPipeOut := io.Pipe()
+	// v.webrtcRtcpOut.Swap(webrtcRtcpOutPipeOut)
 
-	v.room.AddVideoTrackCallback("*",
-		func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant, conf *config.Config) {
-			v.log.Infow("adding video track from participant", "participant", rp.Identity(), "trackID", track.ID())
+	v.room.SetTrackCallback(func(ti *TrackInput) {
+		if r := v.webrtcRtpIn.Swap(ti.RtpIn); r != nil {
+			_ = r.Close()
+		}
+		if w := v.webrtcRtcpIn.Swap(ti.RtcpIn); w != nil {
+			_ = w.Close()
+		}
+	})
 
-			v.webrtcRtpIn.Swap(io.NopCloser(
-				&TrackAdapter{TrackRemote: track},
-			))
+	v.room.UpdateActiveParticipant("")
 
-			// Read RTCP from WebRTC incoming
-			pub.OnRTCP(func(pkt rtcp.Packet) {
-					var buf []byte
-				b, err := pkt.Marshal()
-				if err != nil {
-						return
-				}
-				buf = append(buf, b...)
-				_, err = webrtcRtcpInPipeOut.Write(buf)
-				if err != nil {
-					}
-			})
+	// v.room.AddVideoTrackCallback("*",
+	// 	func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant, conf *config.Config) {
+	// 		v.log.Infow("adding video track from participant", "participant", rp.Identity(), "trackID", track.ID())
 
-			// Send RTCP to WebRTC (from our monitor/forwarder)
-			// Note: For now just log what we would send - actual sending requires PeerConnection access
-			go func() {
-				buf := make([]byte, 1500)
-				for {
-					_, err := webrtcRtcpOutPipeIn.Read(buf)
-					if err != nil {
-							return
-					}
-					// Discard RTCP packets - no way to send them to WebRTC track
-				}
-			}()
-		})
+	// 		v.webrtcRtpIn.Swap(io.NopCloser(
+	// 			&TrackAdapter{TrackRemote: track},
+	// 		))
+
+	// 		// Read RTCP from WebRTC incoming
+	// 		pub.OnRTCP(func(pkt rtcp.Packet) {
+	// 			var buf []byte
+	// 			b, err := pkt.Marshal()
+	// 			if err != nil {
+	// 				return
+	// 			}
+	// 			buf = append(buf, b...)
+	// 			_, err = webrtcRtcpInPipeOut.Write(buf)
+	// 			if err != nil {
+	// 			}
+	// 		})
+
+	// 		// Send RTCP to WebRTC (from our monitor/forwarder)
+	// 		// Note: For now just log what we would send - actual sending requires PeerConnection access
+	// 		go func() {
+	// 			buf := make([]byte, 1500)
+	// 			for {
+	// 				_, err := webrtcRtcpOutPipeIn.Read(buf)
+	// 				if err != nil {
+	// 					return
+	// 				}
+	// 				// Discard RTCP packets - no way to send them to WebRTC track
+	// 			}
+	// 		}()
+	// 	})
 
 	return nil
 }
