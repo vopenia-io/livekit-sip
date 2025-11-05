@@ -7,18 +7,19 @@ import (
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/app"
+	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
 	"github.com/livekit/protocol/logger"
 	"github.com/pion/rtcp"
 )
 
 // rtcpMonitor wraps an io.Reader to monitor and log RTCP packets
 type rtcpMonitor struct {
-	reader          io.Reader
-	writer          io.Writer
-	log             logger.Logger
-	name            string
-	pliForwarder    io.Writer // Forward PLI/FIR to the opposite direction
-	lastPLIForward  int64     // Unix timestamp of last PLI forward (rate limiting)
+	reader         io.Reader
+	writer         io.Writer
+	log            logger.Logger
+	name           string
+	pliForwarder   io.Writer // Forward PLI/FIR to the opposite direction
+	lastPLIForward int64     // Unix timestamp of last PLI forward (rate limiting)
 }
 
 func (r *rtcpMonitor) Read(p []byte) (n int, err error) {
@@ -135,14 +136,21 @@ func readerFromPipeline(pipeline *gst.Pipeline, name string) (*GstReader, error)
 	return reader, nil
 }
 
-func (v *VideoManager) SetupGstPipeline() error {
+func Copy(dst io.WriteCloser, src io.ReadCloser) {
+	n, err := io.Copy(dst, src)
+	fmt.Printf("Copied %d bytes with err=%v\n", n, err)
+	src.Close()
+	dst.Close()
+}
+
+func (v *VideoManager) SetupGstPipeline(media *sdpv2.SDPMedia) error {
 	// Note: packetization-mode and profile-level-id are SDP/FMTP parameters,
 	// not RTP caps parameters. GStreamer's rtph264depay will handle them automatically
 	// from the H.264 stream itself. We only need to specify payload type in the caps.
 
-	pstr := fmt.Sprintf(pipelineStr, v.media.Codec.PayloadType, v.media.Codec.PayloadType)
+	pstr := fmt.Sprintf(pipelineStr, media.Codec.PayloadType, media.Codec.PayloadType)
 
-	v.log.Infow("Creating GStreamer pipeline", "payloadType", v.media.Codec.PayloadType, "codecName", v.media.Codec.Name)
+	v.log.Infow("Creating GStreamer pipeline", "payloadType", media.Codec.PayloadType, "codecName", media.Codec.Name)
 
 	pipeline, err := gst.NewPipelineFromString(pstr)
 	if err != nil {
@@ -153,25 +161,25 @@ func (v *VideoManager) SetupGstPipeline() error {
 	if err != nil {
 		return fmt.Errorf("failed to create SIP RTP reader: %w", err)
 	}
-	go io.Copy(sipRtpIn, v.sipRtpIn)
+	go Copy(sipRtpIn, v.sipRtpIn)
 
 	sipRtpOut, err := readerFromPipeline(pipeline, "sip_rtp_out")
 	if err != nil {
 		return fmt.Errorf("failed to create SIP RTP writer: %w", err)
 	}
-	go io.Copy(v.sipRtpOut, sipRtpOut)
+	go Copy(v.sipRtpOut, sipRtpOut)
 
 	webrtcRtpIn, err := writerFromPipeline(pipeline, "webrtc_rtp_in")
 	if err != nil {
 		return fmt.Errorf("failed to create WebRTC RTP reader: %w", err)
 	}
-	go io.Copy(webrtcRtpIn, v.webrtcRtpIn)
+	go Copy(webrtcRtpIn, v.webrtcRtpIn)
 
 	webrtcRtpOut, err := readerFromPipeline(pipeline, "webrtc_rtp_out")
 	if err != nil {
 		return fmt.Errorf("failed to create WebRTC RTP writer: %w", err)
 	}
-	go io.Copy(v.webrtcRtpOut, webrtcRtpOut)
+	go Copy(v.webrtcRtpOut, webrtcRtpOut)
 
 	// RTCP monitoring with cross-direction PLI forwarding
 	// WebRTC RTCP monitor - forward PLI to SIP side
@@ -182,7 +190,7 @@ func (v *VideoManager) SetupGstPipeline() error {
 		log:          v.log,
 		name:         "WebRTC-IN",
 	}
-	go io.Copy(io.Discard, webrtcRtcpMonitor)
+	go Copy(&NopWriteCloser{io.Discard}, io.NopCloser(webrtcRtcpMonitor))
 
 	// SIP RTCP monitor - forward PLI to WebRTC side
 	sipRtcpMonitor := &rtcpMonitor{
@@ -192,7 +200,7 @@ func (v *VideoManager) SetupGstPipeline() error {
 		log:          v.log,
 		name:         "SIP-IN",
 	}
-	go io.Copy(io.Discard, sipRtcpMonitor)
+	go Copy(&NopWriteCloser{io.Discard}, io.NopCloser(sipRtcpMonitor))
 
 	// Monitor jitter buffer for packet loss on WebRTC->SIP path and send PLI to WebRTC
 	webrtcJitterBuffer, err := pipeline.GetElementByName("webrtc_jitterbuffer")

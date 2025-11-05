@@ -350,7 +350,25 @@ func (s *Server) processInvite(req *sip.Request, tx sip.ServerTransaction) (retE
 	if existing != nil && existing.cc.InviteCSeq() < cc.InviteCSeq() {
 		log.Infow("accepting reinvite", "sipCallID", existing.cc.ID(), "content-type", req.ContentType(), "content-length", req.ContentLength())
 		existing.log.Infow("reinvite", "content-type", req.ContentType(), "content-length", req.ContentLength(), "cseq", cc.InviteCSeq())
-		cc.AcceptAsKeepAlive()
+
+		existing.cc = cc
+		answerData, err := existing.runMediaConn(req.Body(), 0, s.conf, existing.disp.EnabledFeatures)
+		if err != nil {
+			existing.cc.RespondAndDrop(sip.StatusUnsupportedMediaType, "Unsupported media")
+		}
+
+		err = existing.cc.Accept(ctx, answerData, make(map[string]string))
+		if err != nil {
+			existing.cc.RespondAndDrop(sip.StatusServiceUnavailable, "Service temporarily unavailable")
+			return nil
+		}
+
+		if err := existing.publishTracks(); err != nil {
+			existing.log.Errorw("Cannot publish track", err)
+			existing.close(true, callDropped, "publish-failed")
+			return errors.Wrap(err, "publishing track to room failed")
+		}
+
 		return nil
 	}
 
@@ -599,6 +617,7 @@ type inboundCall struct {
 	stats       Stats
 	jitterBuf   bool
 	projectID   string
+	disp        CallDispatch // TODO: do we really need to store this?
 }
 
 func (s *Server) newInboundCall(
@@ -655,6 +674,7 @@ func (c *inboundCall) handleInvite(ctx context.Context, req *sip.Request, trunkI
 		Pin:     "",
 		NoPin:   false,
 	})
+	c.disp = disp // TODO: remove it reacreating it from DispatchCall don't break reinvite
 	if disp.ProjectID != "" {
 		c.log = c.log.WithValues("projectID", disp.ProjectID)
 		c.projectID = disp.ProjectID
@@ -958,7 +978,7 @@ func (c *inboundCall) SetupVideo(conf *config.Config, offer *sdpv2.SDP, answerBu
 		}
 
 		if c.video == nil {
-			video, err := NewVideoManager(c.log, c.lkRoom, offer, offer.Video, &MediaOptions{
+			video, err := NewVideoManager(c.log, c.lkRoom, offer, &MediaOptions{
 				IP:                  c.s.sconf.MediaIP,
 				Ports:               conf.RTPPort,
 				MediaTimeoutInitial: c.s.conf.MediaTimeoutInitial,
@@ -970,11 +990,15 @@ func (c *inboundCall) SetupVideo(conf *config.Config, offer *sdpv2.SDP, answerBu
 			}
 			c.video = video
 
-			if err := c.video.Setup(); err != nil {
+			if err := c.video.Setup(offer.Video); err != nil {
 				return fmt.Errorf("video setup failed: %w", err)
 			}
 			if err := c.video.Start(); err != nil {
 				return fmt.Errorf("video start failed: %w", err)
+			}
+		} else {
+			if err := c.video.Setup(offer.Video); err != nil {
+				return fmt.Errorf("video setup failed: %w", err)
 			}
 		}
 
@@ -985,9 +1009,11 @@ func (c *inboundCall) SetupVideo(conf *config.Config, offer *sdpv2.SDP, answerBu
 				}, true).
 				SetRTPPort(uint16(c.video.RtpPort())).
 				SetRTCPPort(uint16(c.video.RtcpPort())).
+				SetDirection(offer.Video.Direction.Reverse()).
 				Build()
 		})
 	} else if c.video != nil {
+		c.log.Infow("closing video manager as no video in offer")
 		// video was previously established, but not in this offer
 		c.video.Close()
 		c.video = nil
@@ -1329,31 +1355,20 @@ func (c *inboundCall) createLiveKitParticipant(ctx context.Context, rconf RoomCo
 }
 
 func (c *inboundCall) publishTracks() error {
-	local, err := c.lkRoom.NewParticipantTrack(RoomSampleRate)
-	if err != nil {
-		_ = c.lkRoom.Close()
-		return err
-	}
-	c.media.WriteAudioTo(local)
-
-	if c.video != nil {
-		videoTrack, err := c.lkRoom.NewParticipantVideoTrack()
+	if c.media.audioIn.Get() == nil {
+		local, err := c.lkRoom.NewParticipantTrack(RoomSampleRate)
 		if err != nil {
 			_ = c.lkRoom.Close()
 			return err
 		}
-		trackWriter := &NopWriteCloser{Writer: videoTrack}
-		c.video.SetWebrtcRtpOut(trackWriter)
-		webrtcRtcpOut := &RtcpWriter{
-			pc: c.lkRoom.LocalParticipant().GetSubscriberPeerConnection(),
-		}
-
-		c.video.SetWebrtcRtcpOut(
-			&NopWriteCloser{Writer: webrtcRtcpOut},
-		)
+		c.media.WriteAudioTo(local)
 	}
 
-	return nil
+	if c.video != nil {
+		return c.video.PublishVideoTrack()
+	} else {
+		return c.lkRoom.StopVideo()
+	}
 }
 
 func (c *inboundCall) joinRoom(ctx context.Context, rconf RoomConfig, status CallStatus) error {

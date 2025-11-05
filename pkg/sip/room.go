@@ -84,6 +84,7 @@ type Room struct {
 	activeParticipant string
 	trackMu           sync.Mutex
 	trackCallback     TrackCallback
+	videoOut          *TrackOutput
 }
 
 type ParticipantConfig struct {
@@ -251,6 +252,10 @@ func (r *Room) Connect(conf *config.Config, rconf RoomConfig) error {
 				default:
 					log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID(), "trackID", pub.SID(), "trackName", pub.Name())
 					log.Warnw("unsupported track kind for subscription", fmt.Errorf("kind=%s", pub.Kind()))
+				}
+				if r.activeParticipant == "" {
+					// r.UpdateActiveParticipant(rp.Identity())
+					r.log.Debugw("no active participant yet on track subscribe")
 				}
 			},
 			OnTrackUnsubscribed: func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
@@ -448,7 +453,15 @@ func (r *Room) NewParticipantTrack(sampleRate int) (msdk.WriteCloser[msdk.PCM16S
 	return pw, nil
 }
 
-func (r *Room) NewParticipantVideoTrack() (*webrtc.TrackLocalStaticRTP, error) {
+func (r *Room) StartVideo() (*TrackOutput, error) {
+	r.trackMu.Lock()
+	defer r.trackMu.Unlock()
+	if r.videoOut != nil {
+		return r.videoOut, nil
+	}
+
+	to := &TrackOutput{}
+
 	track, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{
 		MimeType: webrtc.MimeTypeVP8,
 	}, "video", "pion")
@@ -456,12 +469,38 @@ func (r *Room) NewParticipantVideoTrack() (*webrtc.TrackLocalStaticRTP, error) {
 		return nil, err
 	}
 	p := r.room.LocalParticipant
-	if _, err = p.PublishTrack(track, &lksdk.TrackPublicationOptions{
+	pt, err := p.PublishTrack(track, &lksdk.TrackPublicationOptions{
 		Name: p.Identity(),
-	}); err != nil {
+	})
+	if err != nil {
 		return nil, err
 	}
-	return track, nil
+	r.log.Infow("published video track", "SID", pt.SID())
+	trackRtcp := &RtcpWriter{
+		pc: p.GetSubscriberPeerConnection(),
+	}
+	to.RtpOut = &CallbackWriteCloser{
+		Writer: track,
+		Callback: func() error {
+			r.log.Infow("unpublishing video track", "SID", pt.SID())
+			return p.UnpublishTrack(pt.SID())
+		},
+	}
+	to.RtcpOut = &NopWriteCloser{Writer: trackRtcp}
+
+	r.videoOut = to
+
+	return to, nil
+}
+
+func (r *Room) StopVideo() error {
+	r.log.Infow("stopping video")
+	r.trackMu.Lock()
+	defer r.trackMu.Unlock()
+	if r.videoOut == nil {
+		return nil
+	}
+	return errors.Join(r.videoOut.RtpOut.Close(), r.videoOut.RtcpOut.Close())
 }
 
 func (r *Room) SendData(data lksdk.DataPacket, opts ...lksdk.DataPublishOption) error {

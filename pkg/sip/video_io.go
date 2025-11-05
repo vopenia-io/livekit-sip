@@ -20,6 +20,20 @@ func (n *NopWriteCloser) Close() error {
 	return nil
 }
 
+type CallbackWriteCloser struct {
+	io.Writer
+	Callback func() error
+}
+
+func (c *CallbackWriteCloser) Close() error {
+	if c.Callback != nil {
+		err := c.Callback()
+		c.Callback = nil
+		return err
+	}
+	return nil
+}
+
 func NewSwitchWriter() *SwitchWriter {
 	return &SwitchWriter{}
 }
@@ -104,11 +118,28 @@ func (s *SwitchReader) Swap(r io.ReadCloser) io.ReadCloser {
 	return nil
 }
 
-type TrackAdapter struct{ *webrtc.TrackRemote }
+func NewTrackAdapter(track *webrtc.TrackRemote) *TrackAdapter {
+	ta := &TrackAdapter{}
+	ta.Store(track)
+	return ta
+}
+
+type TrackAdapter struct {
+	atomic.Pointer[webrtc.TrackRemote]
+}
 
 func (t *TrackAdapter) Read(p []byte) (n int, err error) {
-	n, _, err = t.TrackRemote.Read(p)
+	tr := t.Load()
+	if tr == nil {
+		return 0, io.EOF
+	}
+	n, _, err = (*tr).Read(p)
 	return n, err
+}
+
+func (t *TrackAdapter) Close() error {
+	t.Store(nil)
+	return nil
 }
 
 type RtcpWriter struct {
@@ -168,8 +199,8 @@ func (r *RtcpReader) Close() error {
 
 func NewTrackInput(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant, conf *config.Config) *TrackInput {
 	ti := &TrackInput{
-		RtpIn:  io.NopCloser(&TrackAdapter{TrackRemote: track}),
-		RtcpIn: io.NopCloser(NewRtcpReader(pub, rp)),
+		RtpIn:  NewTrackAdapter(track),
+		RtcpIn: NewRtcpReader(pub, rp),
 	}
 	return ti
 }
@@ -177,4 +208,9 @@ func NewTrackInput(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication,
 type TrackInput struct {
 	RtpIn  io.ReadCloser
 	RtcpIn io.ReadCloser
+}
+
+type TrackOutput struct {
+	RtpOut  io.WriteCloser
+	RtcpOut io.WriteCloser
 }

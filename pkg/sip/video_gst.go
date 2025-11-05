@@ -154,6 +154,7 @@ func (g *GstReader) SetState(state gst.State) error {
 }
 
 func (g *GstReader) Close() error {
+	fmt.Printf("Closing GstReader %s:%s\n", g.sink.GetFactory().GetName(), g.sink.GetName())
 	if err := g.sink.SetState(gst.StateNull); err != nil {
 		return err
 	}
@@ -198,6 +199,7 @@ func (g *GstWriter) String() string {
 }
 
 func (g *GstWriter) Close() error {
+	fmt.Printf("Closing GstWriter %s:%s\n", g.src.GetFactory().GetName(), g.src.GetName())
 	if err := g.src.SetState(gst.StateNull); err != nil {
 		return err
 	}
