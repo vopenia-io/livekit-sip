@@ -1025,9 +1025,7 @@ func (c *inboundCall) SetupVideo(conf *config.Config, offer *sdpv2.SDP, answerBu
 func (c *inboundCall) SetupScreenShare(conf *config.Config, offer *sdpv2.SDP) error {
 	c.log.Infow("🖥️ [Inbound] Setting up screen share support")
 
-	// For now, use placeholder BFCP server address
-	// TODO Phase 4: Extract from SDP BFCP m-line
-	bfcpServerAddr := "192.168.0.104:5070" // Placeholder - will extract from SDP in Phase 4
+	// TODO integrate BFCP server info for the client to connect
 
 	ssm, err := NewScreenShareManager(
 		c.log,
@@ -1046,8 +1044,10 @@ func (c *inboundCall) SetupScreenShare(conf *config.Config, offer *sdpv2.SDP) er
 		return fmt.Errorf("failed to create screen share manager: %w", err)
 	}
 
-	// Setup BFCP client (placeholder IDs for now)
-	// TODO Phase 4: Extract from SDP attributes
+	// TODO client
+	// Extract from SDP OFFER if there are any BFCP m-line
+	// Extract from SDP attributes
+
 	ctx := context.Background()
 	if err := ssm.SetupBFCP(ctx, bfcpServerAddr, 1, 1, 1); err != nil {
 		c.log.Warnw("🖥️ [Inbound] Failed to setup BFCP client", err)
@@ -1061,13 +1061,13 @@ func (c *inboundCall) SetupScreenShare(conf *config.Config, offer *sdpv2.SDP) er
 	// Register re-INVITE callbacks (Phase 5)
 	ssm.SetOnStartCallback(func() error {
 		c.log.Infow("🖥️ [Inbound] Screen share started - re-INVITE needed")
-		// TODO Phase 5: return c.sendScreenShareReInvite(true)
+		// TODO return c.sendScreenShareReInvite(true)
 		return nil
 	})
 
 	ssm.SetOnStopCallback(func() error {
 		c.log.Infow("🖥️ [Inbound] Screen share stopped - re-INVITE needed")
-		// TODO Phase 5: return c.sendScreenShareReInvite(false)
+		// TODO  return c.sendScreenShareReInvite(false)
 		return nil
 	})
 
