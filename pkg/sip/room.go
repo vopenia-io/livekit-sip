@@ -80,11 +80,13 @@ type Room struct {
 	closed     core.Fuse
 	stats      *RoomStats
 
-	participantTracks map[string]TrackInput
-	activeParticipant string
-	trackMu           sync.Mutex
-	trackCallback     TrackCallback
-	videoOut          *TrackOutput
+	participantTracks   map[string]TrackInput
+	activeParticipant   string
+	trackMu             sync.Mutex
+	trackCallback       TrackCallback        // Camera video callback
+	screenShareCallback TrackCallback        // Screen share callback
+	screenShareMgr      *ScreenShareManager  // Screen share manager for direct access
+	videoOut            *TrackOutput
 }
 
 type ParticipantConfig struct {
@@ -569,18 +571,38 @@ func (r *Room) SetTrackCallback(cb TrackCallback) {
 	r.trackCallback = cb
 }
 
+func (r *Room) SetScreenShareCallback(cb TrackCallback) {
+	r.trackMu.Lock()
+	defer r.trackMu.Unlock()
+	r.screenShareCallback = cb
+}
+
+func (r *Room) SetScreenShareManager(ssm *ScreenShareManager) {
+	r.trackMu.Lock()
+	defer r.trackMu.Unlock()
+	r.screenShareMgr = ssm
+}
+
 func (r *Room) UpdateActiveParticipant(participantID string) {
 	r.trackMu.Lock()
 	defer r.trackMu.Unlock()
+
+	r.roomLog.Debugw("UpdateActiveParticipant called",
+		"requestedID", participantID,
+		"currentActive", r.activeParticipant,
+		"numTracks", len(r.participantTracks),
+		"hasCallback", r.trackCallback != nil)
 
 	// If participantID is empty and we have no active participant,
 	// try to pick the first available participant from participantTracks
 	if participantID == "" && r.activeParticipant == "" {
 		for id := range r.participantTracks {
 			participantID = id
+			r.roomLog.Debugw("Auto-selected first participant", "participantID", participantID)
 			break
 		}
 		if participantID == "" {
+			r.roomLog.Debugw("No tracks available")
 			return // No tracks available
 		}
 	}
@@ -590,16 +612,22 @@ func (r *Room) UpdateActiveParticipant(participantID string) {
 		participantID = r.activeParticipant
 	}
 
-	// If no change and we already have an active participant, do nothing
-	if participantID == r.activeParticipant && r.activeParticipant != "" {
+	// Check if track exists before doing anything
+	track, ok := r.participantTracks[participantID]
+	if !ok {
+		r.roomLog.Debugw("Track not found for participant, skipping", "participantID", participantID)
 		return
 	}
 
-	r.activeParticipant = participantID
-	track, ok := r.participantTracks[participantID]
-	if !ok {
+	// If no change and we already have an active participant, do nothing
+	if participantID == r.activeParticipant && r.activeParticipant != "" {
+		r.roomLog.Debugw("Active participant unchanged, skipping callback", "participantID", participantID)
 		return
 	}
+
+	// Set active participant and invoke callback
+	r.activeParticipant = participantID
+	r.roomLog.Infow("Invoking video track callback", "participantID", participantID, "hasCallback", r.trackCallback != nil)
 	if r.trackCallback != nil {
 		r.trackCallback(&track)
 	}
@@ -611,6 +639,27 @@ func (r *Room) participantVideoTrackSubscribed(track *webrtc.TrackRemote, pub *l
 		log.Warnw("ignoring track, room not ready", nil)
 		return
 	}
+
+	// Check if this is a screen share track
+	if pub.Source() == livekit.TrackSource_SCREEN_SHARE {
+		log.Infow("🖥️ [Room] handling SCREEN SHARE track")
+		r.trackMu.Lock()
+		ssm := r.screenShareMgr
+		r.trackMu.Unlock()
+
+		if ssm != nil {
+			log.Infow("🖥️ [Room] Invoking ScreenShareManager.OnScreenShareTrack")
+			go func() {
+				if err := ssm.OnScreenShareTrack(track, pub, rp); err != nil {
+					log.Errorw("🖥️ [Room] Failed to handle screen share track", err)
+				}
+			}()
+		} else {
+			log.Warnw("🖥️ [Room] No screen share manager registered", nil)
+		}
+		return // Don't process as regular video
+	}
+
 	log.Infow("handling new video track")
 
 	id := rp.Identity()

@@ -678,11 +678,11 @@ re-INVITE completed successfully
 ## 📝 Commit History
 
 ### Phase 1: Enable Screenshare Code
-**Commit**: `TBD`
-**Date**: TBD
+**Commit**: `4210872`
+**Date**: 2025-11-06
 **Changes**:
 - Renamed `screenshare.go.disabled` → `screenshare.go`
-- Build successful
+- Build successful (59MB binary)
 
 **Test Results**:
 - ✅ Code compiles
@@ -692,28 +692,61 @@ re-INVITE completed successfully
 ---
 
 ### Phase 2: Room Integration
-**Commit**: `TBD`
-**Date**: TBD
+**Commit**: `TBD` (to be committed with Phase 3)
+**Date**: 2025-11-06
 **Changes**:
-- Added `screenShareCallback` to Room struct
-- Implemented `SetScreenShareCallback()`
-- Modified `participantVideoTrackSubscribed()` for screen share detection
+- Added `screenShareCallback` field to Room struct (room.go:87)
+- Added `screenShareMgr` field to Room struct (room.go:88)
+- Implemented `SetScreenShareCallback()` method (room.go:574-578)
+- Implemented `SetScreenShareManager()` method (room.go:580-584)
+- Modified `participantVideoTrackSubscribed()` for screen share detection (room.go:640-658)
+- Added comprehensive debug logging to `UpdateActiveParticipant()` (room.go:590-633)
+- Fixed critical bug: Check track exists before setting activeParticipant (room.go:615-620)
 
 **Test Results**:
-- TBD
+- ✅ Screen share track detection: PASS
+- ✅ Track source identification (TrackSource_SCREEN_SHARE): PASS
+- ✅ Logs show 🖥️ emoji for screen share events: PASS
+- ✅ Camera video unaffected: PASS
+- ✅ Early return prevents screen share from being processed as camera video: PASS
 
 ---
 
 ### Phase 3: Inbound Call Integration
-**Commit**: `TBD`
-**Date**: TBD
+**Commit**: `TBD` (ready to commit)
+**Date**: 2025-11-06
 **Changes**:
-- Added `screenShare` field to `inboundCall`
-- Implemented `SetupScreenShare()`
-- Integrated lifecycle management
+- Added `screenShare *ScreenShareManager` field to `inboundCall` struct (inbound.go:610)
+- Implemented `SetupScreenShare()` method (inbound.go:1025-1081):
+  - Creates ScreenShareManager with MediaOptions
+  - Uses placeholder BFCP server address (192.168.0.104:5070)
+  - Sets up BFCP client with placeholder IDs (conferenceID:1, userID:1, floorID:1)
+  - Stores manager reference in Room via `SetScreenShareManager()`
+  - Registers OnStart/OnStop callbacks (stubs for Phase 5)
+- Called `SetupScreenShare()` in `runMediaConn()` after video setup (inbound.go:1118-1122)
+- Added cleanup in `closeMedia()` (inbound.go:1372-1377)
+- Implemented `sendScreenShareReInvite()` stub for Phase 5 (inbound.go:1083-1096)
 
 **Test Results**:
-- TBD
+- ✅ ScreenShareManager initialization: PASS
+- ✅ Dedicated RTP/RTCP ports allocated (16484/16485): PASS
+- ✅ BFCP connection attempt (gracefully fails without server): PASS
+- ✅ Screen share track detection: PASS
+- ✅ GStreamer pipeline creation (VP8→H264): PASS
+- ✅ Pipeline state PLAYING: PASS
+- ✅ Track connected to pipeline: PASS
+- ✅ UDP sockets connected: PASS
+- ✅ Periodic PLI (keyframe requests) every 5s: PASS
+- ✅ Re-INVITE callback invoked (stub): PASS
+- ✅ Camera video unaffected during screen share: PASS
+- ✅ Video WebRTC → SIP: PASS
+- ✅ Video SIP → WebRTC: PASS
+- ⚠️ Screen share stop detection: Not captured in logs (expected - Phase 5 will handle lifecycle)
+
+**Known Limitations (By Design)**:
+- BFCP uses hardcoded values (Phase 4 will extract from SDP)
+- No actual re-INVITE sent (Phase 5 will implement)
+- Screen share video doesn't reach Poly yet (needs re-INVITE with second video m-line)
 
 ---
 

@@ -607,8 +607,9 @@ type inboundCall struct {
 	call        *rpc.SIPCall
 	media       *MediaPort
 	video       *VideoManager
-	dtmf        chan dtmf.Event // buffered
-	lkRoom      *Room           // LiveKit room; only active after correct pin is entered
+	screenShare *ScreenShareManager // Screen share manager
+	dtmf        chan dtmf.Event     // buffered
+	lkRoom      *Room               // LiveKit room; only active after correct pin is entered
 	callDur     func() time.Duration
 	joinDur     func() time.Duration
 	forwardDTMF atomic.Bool
@@ -1021,6 +1022,75 @@ func (c *inboundCall) SetupVideo(conf *config.Config, offer *sdpv2.SDP, answerBu
 	return nil
 }
 
+func (c *inboundCall) SetupScreenShare(conf *config.Config, offer *sdpv2.SDP) error {
+	c.log.Infow("🖥️ [Inbound] Setting up screen share support")
+
+	// For now, use placeholder BFCP server address
+	// TODO Phase 4: Extract from SDP BFCP m-line
+	bfcpServerAddr := "192.168.0.104:5070" // Placeholder - will extract from SDP in Phase 4
+
+	ssm, err := NewScreenShareManager(
+		c.log,
+		c.lkRoom,
+		offer.Addr,
+		&MediaOptions{
+			IP:                  c.s.sconf.MediaIP,
+			Ports:               conf.RTPPort,
+			MediaTimeoutInitial: c.s.conf.MediaTimeoutInitial,
+			MediaTimeout:        c.s.conf.MediaTimeout,
+			Stats:               &c.stats.Port,
+		},
+		bfcpServerAddr,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create screen share manager: %w", err)
+	}
+
+	// Setup BFCP client (placeholder IDs for now)
+	// TODO Phase 4: Extract from SDP attributes
+	ctx := context.Background()
+	if err := ssm.SetupBFCP(ctx, bfcpServerAddr, 1, 1, 1); err != nil {
+		c.log.Warnw("🖥️ [Inbound] Failed to setup BFCP client", err)
+		// Don't fail - screen share will work without BFCP for testing
+	}
+
+	// Store the screen share manager in the room so it can be called directly
+	// from participantVideoTrackSubscribed where we have access to track, pub, rp
+	c.lkRoom.SetScreenShareManager(ssm)
+
+	// Register re-INVITE callbacks (Phase 5)
+	ssm.SetOnStartCallback(func() error {
+		c.log.Infow("🖥️ [Inbound] Screen share started - re-INVITE needed")
+		// TODO Phase 5: return c.sendScreenShareReInvite(true)
+		return nil
+	})
+
+	ssm.SetOnStopCallback(func() error {
+		c.log.Infow("🖥️ [Inbound] Screen share stopped - re-INVITE needed")
+		// TODO Phase 5: return c.sendScreenShareReInvite(false)
+		return nil
+	})
+
+	c.screenShare = ssm
+	c.log.Infow("🖥️ [Inbound] Screen share support initialized")
+	return nil
+}
+
+// sendScreenShareReInvite sends a SIP re-INVITE to add or remove screen share stream
+// This is a stub for Phase 5 implementation
+func (c *inboundCall) sendScreenShareReInvite(addScreenShare bool) error {
+	c.log.Infow("🖥️ [Inbound] sendScreenShareReInvite called (stub)", "addScreenShare", addScreenShare)
+	// TODO Phase 5: Implement actual re-INVITE logic
+	// - Build SDP with camera video + optional screen share video
+	// - Add BFCP m-line with proper attributes
+	// - Send INVITE via SIP stack
+	// - Handle 200 OK response
+	// - Parse SDP answer
+	// - Update screen share connections
+	// - Send ACK
+	return fmt.Errorf("re-INVITE not implemented yet (Phase 5)")
+}
+
 func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncryption, conf *config.Config, features []livekit.SIPFeature) (answerData []byte, _ error) {
 	c.mon.SDPSize(len(offerData), true)
 	c.log.Debugw("SDP offer", "sdp", string(offerData))
@@ -1054,6 +1124,12 @@ func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncrypt
 
 	if err := c.SetupVideo(conf, offer, answerBuilder, features); err != nil {
 		return nil, fmt.Errorf("video setup failed: %w", err)
+	}
+
+	// Setup screen share support (Phase 3)
+	if err := c.SetupScreenShare(conf, offer); err != nil {
+		c.log.Warnw("🖥️ [Inbound] Failed to setup screen share", err)
+		// Don't fail the call - camera video still works
 	}
 
 	answer, err := answerBuilder.Build()
@@ -1303,6 +1379,12 @@ func (c *inboundCall) closeMedia() {
 	c.lkRoom.Close()
 	if c.media != nil {
 		c.media.Close()
+	}
+	if c.screenShare != nil {
+		c.log.Debugw("🖥️ [Inbound] Closing screen share manager")
+		if err := c.screenShare.Close(); err != nil {
+			c.log.Errorw("🖥️ [Inbound] Failed to close screen share manager", err)
+		}
 	}
 }
 
