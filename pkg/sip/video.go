@@ -169,12 +169,13 @@ func (v *VideoManager) Setup(media *sdpv2.SDPMedia) error {
 	v.log.Debugw("starting video manager")
 
 	if v.pipeline != nil {
-		v.pipeline.SetState(gst.StateNull)
-		v.pipeline = nil
-		if err := v.VideoIO.Close(); err != nil {
-			v.log.Errorw("failed to close previous video IO", err)
+		v.log.Infow("stopping existing pipeline for re-setup (re-INVITE)")
+		if err := v.pipeline.SetState(gst.StateNull); err != nil {
+			v.log.Errorw("failed to stop pipeline", err)
 		}
-		v.VideoIO = NewVideoIO()
+		v.pipeline = nil
+		// DON'T close/recreate VideoIO - the Copy() goroutines need the switches
+		// to gracefully terminate. New pipeline will reuse existing switches.
 	}
 
 	if err := v.SetupGstPipeline(media); err != nil {

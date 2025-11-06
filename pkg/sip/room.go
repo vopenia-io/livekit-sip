@@ -570,17 +570,31 @@ func (r *Room) SetTrackCallback(cb TrackCallback) {
 }
 
 func (r *Room) UpdateActiveParticipant(participantID string) {
+	r.trackMu.Lock()
+	defer r.trackMu.Unlock()
+
+	// If participantID is empty and we have no active participant,
+	// try to pick the first available participant from participantTracks
 	if participantID == "" && r.activeParticipant == "" {
-		return
+		for id := range r.participantTracks {
+			participantID = id
+			break
+		}
+		if participantID == "" {
+			return // No tracks available
+		}
 	}
-	if participantID == r.activeParticipant {
-		return
-	}
+
+	// If participantID is still empty, use the current activeParticipant
 	if participantID == "" {
 		participantID = r.activeParticipant
 	}
-	r.trackMu.Lock()
-	defer r.trackMu.Unlock()
+
+	// If no change and we already have an active participant, do nothing
+	if participantID == r.activeParticipant && r.activeParticipant != "" {
+		return
+	}
+
 	r.activeParticipant = participantID
 	track, ok := r.participantTracks[participantID]
 	if !ok {

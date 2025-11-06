@@ -34,6 +34,8 @@ require (
 )
 
 require (
+	github.com/go-gst/go-glib v1.4.0 // indirect
+	github.com/go-gst/go-gst v1.4.0 // indirect
 	github.com/nyaruka/phonenumbers v1.6.5 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/otel v1.37.0 // indirect
