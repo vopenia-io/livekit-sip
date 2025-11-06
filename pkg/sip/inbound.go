@@ -1023,13 +1023,10 @@ func (c *inboundCall) SetupVideo(conf *config.Config, offer *sdpv2.SDP, answerBu
 }
 
 func (c *inboundCall) SetupScreenShare(conf *config.Config, offer *sdpv2.SDP) error {
-	c.log.Infow("🖥️ [Inbound] [Phase4.1] Setting up screen share support")
+	c.log.Infow("🖥️ [Inbound] [Phase4.2] Setting up screen share support")
 
 	// Phase 4.1: Use BFCP server address from configuration
 	bfcpServerAddr := fmt.Sprintf("%s:%d", c.s.sconf.MediaIP, conf.BFCPPort)
-	c.log.Infow("🖥️ [Inbound] [Phase4.1] Using BFCP server",
-		"serverAddr", bfcpServerAddr,
-	)
 
 	ssm, err := NewScreenShareManager(
 		c.log,
@@ -1048,18 +1045,63 @@ func (c *inboundCall) SetupScreenShare(conf *config.Config, offer *sdpv2.SDP) er
 		return fmt.Errorf("failed to create screen share manager: %w", err)
 	}
 
-	// Phase 4.2: TODO - Extract BFCP from SDP OFFER
-	// For now, use default values
-	conferenceID := uint32(1)
-	userID := uint16(1)
-	floorID := uint16(1)
+	// Phase 4.2: Extract BFCP from SDP OFFER if present
+	var conferenceID uint32 = 1
+	var userID uint16 = 1
+	var floorID uint16 = 1
+
+	if offer.BFCP != nil {
+		c.log.Infow("🖥️ [Inbound] [Phase4.2] Parsed BFCP from SDP offer",
+			"serverAddr", offer.BFCP.ConnectionIP.String()+":"+fmt.Sprintf("%d", offer.BFCP.Port),
+			"conferenceID", offer.BFCP.ConferenceID,
+			"userID", offer.BFCP.UserID,
+			"floorID", offer.BFCP.FloorID,
+			"floorCtrl", offer.BFCP.FloorCtrl,
+			"mediaStream", offer.BFCP.MediaStream,
+			"setup", offer.BFCP.Setup,
+			"connection", offer.BFCP.Connection,
+		)
+
+		// Use parsed values
+		if offer.BFCP.ConferenceID > 0 {
+			conferenceID = offer.BFCP.ConferenceID
+		}
+		if offer.BFCP.UserID > 0 {
+			userID = offer.BFCP.UserID
+		}
+		if offer.BFCP.FloorID > 0 {
+			floorID = offer.BFCP.FloorID
+		}
+
+		// Phase 4.4: Handle SIP device pre-reserved floor
+		if offer.BFCP.FloorCtrl == "c-s" || offer.BFCP.FloorCtrl == "c-only" {
+			c.log.Infow("🖥️ [Inbound] [Phase4.2] SIP device pre-reserved floor (SIP→WebRTC) - placeholder",
+				"floorID", floorID,
+				"floorCtrl", offer.BFCP.FloorCtrl,
+				"note", "SIP→WebRTC screen share not implemented yet",
+			)
+		}
+	} else {
+		c.log.Infow("🖥️ [Inbound] [Phase4.2] No BFCP in SDP offer, using defaults",
+			"conferenceID", conferenceID,
+			"userID", userID,
+			"floorID", floorID,
+		)
+	}
+
+	c.log.Infow("🖥️ [Inbound] [Phase4.2] Setting up BFCP client",
+		"serverAddr", bfcpServerAddr,
+		"conferenceID", conferenceID,
+		"userID", userID,
+		"floorID", floorID,
+	)
 
 	ctx := context.Background()
 	if err := ssm.SetupBFCP(ctx, bfcpServerAddr, conferenceID, userID, floorID); err != nil {
-		c.log.Warnw("🖥️ [Inbound] [Phase4.1] Failed to setup BFCP client", err)
+		c.log.Warnw("🖥️ [Inbound] [Phase4.2] Failed to setup BFCP client", err)
 		// Don't fail - screen share will work without BFCP for testing
 	} else {
-		c.log.Infow("🖥️ [Inbound] [Phase4.1] BFCP client setup successful",
+		c.log.Infow("🖥️ [Inbound] [Phase4.2] BFCP client setup successful",
 			"serverAddr", bfcpServerAddr,
 			"conferenceID", conferenceID,
 			"userID", userID,
