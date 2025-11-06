@@ -619,6 +619,11 @@ type inboundCall struct {
 	jitterBuf   bool
 	projectID   string
 	disp        CallDispatch // TODO: do we really need to store this?
+
+	// Phase 5.2: Store negotiated SDP for re-INVITE
+	mu          sync.Mutex
+	initialOffer *sdpv2.SDP // Original SDP offer from SIP device
+	initialAnswer *sdpv2.SDP // Our SDP answer
 }
 
 func (s *Server) newInboundCall(
@@ -1107,14 +1112,12 @@ func (c *inboundCall) SetupScreenShare(conf *config.Config, offer *sdpv2.SDP) er
 	// Register re-INVITE callbacks (Phase 5)
 	ssm.SetOnStartCallback(func() error {
 		c.log.Infow("🖥️ [Inbound] Screen share started - re-INVITE needed")
-		// TODO return c.sendScreenShareReInvite(true)
-		return nil
+		return c.sendScreenShareReInvite(true)
 	})
 
 	ssm.SetOnStopCallback(func() error {
 		c.log.Infow("🖥️ [Inbound] Screen share stopped - re-INVITE needed")
-		// TODO  return c.sendScreenShareReInvite(false)
-		return nil
+		return c.sendScreenShareReInvite(false)
 	})
 
 	c.screenShare = ssm
@@ -1149,17 +1152,86 @@ func (c *inboundCall) buildBFCPAnswer(offerBFCP *sdpv2.BFCPMedia, conf *config.C
 
 // sendScreenShareReInvite sends a SIP re-INVITE to add or remove screen share stream
 // This is a stub for Phase 5 implementation
+// Phase 5.2-5.4: Build SDP for re-INVITE with optional screen share and BFCP
+func (c *inboundCall) buildReInviteSDP(includeScreenShare bool) (*sdpv2.SDP, error) {
+	c.log.Infow("🖥️ [re-INVITE] [Phase5.2] Building SDP", "includeScreenShare", includeScreenShare)
+
+	c.mu.Lock()
+	initialAnswer := c.initialAnswer
+	initialOffer := c.initialOffer
+	c.mu.Unlock()
+
+	if initialAnswer == nil {
+		return nil, fmt.Errorf("no initial answer stored - call not established")
+	}
+
+	// Phase 5.2: Clone the initial answer and modify it
+	builder := initialAnswer.Clone().Builder()
+	builder.SetAddress(c.s.sconf.MediaIP)
+
+	// Phase 5.2: Audio is already in the builder from the clone - just update ports if needed
+	c.log.Infow("🖥️ [re-INVITE] [Phase5.2] Audio from initial answer",
+		"hasAudio", initialAnswer.Audio != nil)
+
+	// Phase 5.2: Video (camera) is also already in the builder from the clone
+	if initialAnswer.Video != nil {
+		c.log.Infow("🖥️ [re-INVITE] [Phase5.2] Camera video from initial answer",
+			"codec", initialAnswer.Video.Codec.Name,
+			"port", initialAnswer.Video.Port)
+	}
+
+	// Phase 5.3: Add screen share video m-line (if requested)
+	if includeScreenShare && c.screenShare != nil {
+		c.log.Infow("🖥️ [re-INVITE] [Phase5.3] Adding screen share video m-line")
+		// TODO Phase 5.3: Add second video m-line with content:slides
+		// For now, just log that we would add it
+		c.log.Infow("🖥️ [re-INVITE] [Phase5.3] TODO: Add screen share m-line")
+	}
+
+	// Phase 5.4: Add BFCP m-line (if screen share is included and we have BFCP params)
+	if includeScreenShare && c.screenShare != nil && initialOffer != nil && initialOffer.BFCP != nil {
+		c.log.Infow("🖥️ [re-INVITE] [Phase5.4] Adding BFCP m-line as s-only server")
+		// TODO Phase 5.4: Add BFCP m-line
+		// For now, just log the parameters we would use
+		c.log.Infow("🖥️ [re-INVITE] [Phase5.4] BFCP params from offer",
+			"conferenceID", initialOffer.BFCP.ConferenceID,
+			"userID", initialOffer.BFCP.UserID,
+			"floorID", initialOffer.BFCP.FloorID,
+			"floorCtrl", "s-only", // We are server
+			"setup", "passive",    // We wait for client connection
+		)
+	}
+
+	sdp, err := builder.Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build SDP: %w", err)
+	}
+
+	c.log.Infow("🖥️ [re-INVITE] [Phase5.2] SDP built successfully")
+	return sdp, nil
+}
+
 func (c *inboundCall) sendScreenShareReInvite(addScreenShare bool) error {
-	c.log.Infow("🖥️ [Inbound] sendScreenShareReInvite called (stub)", "addScreenShare", addScreenShare)
-	// TODO Phase 5: Implement actual re-INVITE logic
-	// - Build SDP with camera video + optional screen share video
-	// - Add BFCP m-line with proper attributes
-	// - Send INVITE via SIP stack
-	// - Handle 200 OK response
-	// - Parse SDP answer
-	// - Update screen share connections
-	// - Send ACK
-	return fmt.Errorf("re-INVITE not implemented yet (Phase 5)")
+	c.log.Infow("🖥️ [Inbound] sendScreenShareReInvite called", "addScreenShare", addScreenShare)
+
+	// Phase 5.2: Build SDP (just test building, don't send yet)
+	sdp, err := c.buildReInviteSDP(addScreenShare)
+	if err != nil {
+		c.log.Errorw("🖥️ [re-INVITE] Failed to build SDP", err)
+		return fmt.Errorf("failed to build re-INVITE SDP: %w", err)
+	}
+
+	sdpBytes, err := sdp.Marshal()
+	if err != nil {
+		return fmt.Errorf("failed to marshal SDP: %w", err)
+	}
+
+	c.log.Infow("🖥️ [re-INVITE] [Phase5.2-TEST] SDP ready",
+		"size", len(sdpBytes),
+		"sdp", string(sdpBytes))
+
+	// Phase 5.5+: Actual sending logic will go here
+	return fmt.Errorf("re-INVITE sending not implemented yet (Phase 5.5)")
 }
 
 func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncryption, conf *config.Config, features []livekit.SIPFeature) (answerData []byte, _ error) {
@@ -1234,6 +1306,12 @@ func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncrypt
 
 	c.mon.SDPSize(len(answerData), false)
 	c.log.Debugw("SDP answer", "sdp", string(answerData))
+
+	// Phase 5.2: Store the initial offer and answer for re-INVITE
+	c.mu.Lock()
+	c.initialOffer = offer
+	c.initialAnswer = answer
+	c.mu.Unlock()
 
 	return answerData, nil
 }
