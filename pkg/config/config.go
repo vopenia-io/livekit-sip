@@ -38,6 +38,7 @@ import (
 const (
 	DefaultSIPPort    int = 5060
 	DefaultSIPPortTLS int = 5061
+	DefaultBFCPPort   int = 5070
 )
 
 var (
@@ -100,6 +101,9 @@ type Config struct {
 	EnableJitterBuffer     bool    `yaml:"enable_jitter_buffer"`
 	EnableJitterBufferProb float64 `yaml:"enable_jitter_buffer_prob"`
 
+	// BFCP floor control for screen sharing
+	BFCPPort int `yaml:"bfcp_port"` // BFCP server port (default 5070)
+
 	// internal
 	ServiceName string `yaml:"-"`
 	NodeID      string // Do not provide, will be overwritten
@@ -147,6 +151,9 @@ func (c *Config) Init() error {
 		if tc.ListenPort == 0 {
 			tc.ListenPort = tc.Port
 		}
+	}
+	if c.BFCPPort == 0 {
+		c.BFCPPort = DefaultBFCPPort
 	}
 	if c.RTPPort.Start == 0 {
 		c.RTPPort.Start = DefaultRTPPortRange.Start

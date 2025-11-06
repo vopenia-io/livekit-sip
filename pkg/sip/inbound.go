@@ -1023,9 +1023,13 @@ func (c *inboundCall) SetupVideo(conf *config.Config, offer *sdpv2.SDP, answerBu
 }
 
 func (c *inboundCall) SetupScreenShare(conf *config.Config, offer *sdpv2.SDP) error {
-	c.log.Infow("🖥️ [Inbound] Setting up screen share support")
+	c.log.Infow("🖥️ [Inbound] [Phase4.1] Setting up screen share support")
 
-	// TODO integrate BFCP server info for the client to connect
+	// Phase 4.1: Use BFCP server address from configuration
+	bfcpServerAddr := fmt.Sprintf("%s:%d", c.s.sconf.MediaIP, conf.BFCPPort)
+	c.log.Infow("🖥️ [Inbound] [Phase4.1] Using BFCP server",
+		"serverAddr", bfcpServerAddr,
+	)
 
 	ssm, err := NewScreenShareManager(
 		c.log,
@@ -1044,14 +1048,23 @@ func (c *inboundCall) SetupScreenShare(conf *config.Config, offer *sdpv2.SDP) er
 		return fmt.Errorf("failed to create screen share manager: %w", err)
 	}
 
-	// TODO client
-	// Extract from SDP OFFER if there are any BFCP m-line
-	// Extract from SDP attributes
+	// Phase 4.2: TODO - Extract BFCP from SDP OFFER
+	// For now, use default values
+	conferenceID := uint32(1)
+	userID := uint16(1)
+	floorID := uint16(1)
 
 	ctx := context.Background()
-	if err := ssm.SetupBFCP(ctx, bfcpServerAddr, 1, 1, 1); err != nil {
-		c.log.Warnw("🖥️ [Inbound] Failed to setup BFCP client", err)
+	if err := ssm.SetupBFCP(ctx, bfcpServerAddr, conferenceID, userID, floorID); err != nil {
+		c.log.Warnw("🖥️ [Inbound] [Phase4.1] Failed to setup BFCP client", err)
 		// Don't fail - screen share will work without BFCP for testing
+	} else {
+		c.log.Infow("🖥️ [Inbound] [Phase4.1] BFCP client setup successful",
+			"serverAddr", bfcpServerAddr,
+			"conferenceID", conferenceID,
+			"userID", userID,
+			"floorID", floorID,
+		)
 	}
 
 	// Store the screen share manager in the room so it can be called directly

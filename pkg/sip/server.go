@@ -40,6 +40,7 @@ import (
 
 	"github.com/livekit/sip/pkg/config"
 	"github.com/livekit/sip/pkg/stats"
+	"github.com/vopenia/bfcp"
 )
 
 const (
@@ -133,6 +134,9 @@ type Server struct {
 	getIOClient  GetIOInfoClient
 	sipListeners []io.Closer
 	sipUnhandled RequestHandler
+
+	// BFCP floor control server for screen sharing
+	bfcpServer *bfcp.Server
 
 	imu               sync.Mutex
 	inProgressInvites []*inProgressInvite
@@ -313,11 +317,137 @@ func (s *Server) Start(agent *sipgo.UserAgent, sc *ServiceConfig, tlsConf *tls.C
 		}
 	}
 
+	// Start BFCP floor control server for screen sharing
+	if err := s.startBFCP(); err != nil {
+		s.log.Warnw("[BFCP-Server] [Phase4.1] Failed to start BFCP server", err,
+			"port", s.conf.BFCPPort,
+		)
+		// Don't fail the entire server if BFCP fails - screen share just won't work
+	}
+
+	return nil
+}
+
+// startBFCP initializes and starts the BFCP floor control server for screen sharing
+func (s *Server) startBFCP() error {
+	listenIP := s.conf.ListenIP
+	if listenIP == "" {
+		listenIP = "0.0.0.0"
+	}
+
+	bfcpAddr := fmt.Sprintf("%s:%d", listenIP, s.conf.BFCPPort)
+
+	// Create BFCP server configuration
+	// Conference ID = 1 (can be dynamic later if needed)
+	bfcpConfig := bfcp.DefaultServerConfig(bfcpAddr, 1)
+	bfcpConfig.AutoGrant = false // Manual control for floor grants
+	bfcpConfig.MaxFloors = 10
+	bfcpConfig.EnableLogging = true
+
+	// Create BFCP server
+	s.bfcpServer = bfcp.NewServer(bfcpConfig)
+
+	// Add default floors
+	// Floor 1: SIP device presentation (SIP → WebRTC) - placeholder for future
+	s.bfcpServer.AddFloor(1)
+	// Floor 2: WebRTC screen share (WebRTC → SIP) - for Phase 5
+	s.bfcpServer.AddFloor(2)
+
+	// Set up event callbacks (Phase 4.4)
+	s.bfcpServer.OnClientConnect = func(remoteAddr string, userID uint16) {
+		s.log.Infow("[BFCP-Server] [Phase4.1] Client connected",
+			"remoteAddr", remoteAddr,
+			"userID", userID,
+		)
+	}
+
+	s.bfcpServer.OnClientDisconnect = func(remoteAddr string, userID uint16) {
+		s.log.Infow("[BFCP-Server] [Phase4.1] Client disconnected",
+			"remoteAddr", remoteAddr,
+			"userID", userID,
+		)
+	}
+
+	s.bfcpServer.OnFloorRequest = func(floorID, userID, requestID uint16) bool {
+		s.log.Infow("[BFCP-Server] [Phase4.1] Floor request received",
+			"floorID", floorID,
+			"userID", userID,
+			"requestID", requestID,
+		)
+
+		// Phase 4.4: Placeholder handling for SIP device floor requests
+		if floorID == 1 {
+			s.log.Infow("[BFCP-Server] [Phase4.1] Floor 1 acknowledged (SIP→WebRTC) - not implemented",
+				"floorID", floorID,
+				"userID", userID,
+			)
+			// Do NOT grant - SIP→WebRTC not implemented yet
+			return false
+		}
+
+		// Floor 2 grants will be handled in Phase 5
+		return false
+	}
+
+	s.bfcpServer.OnFloorGranted = func(floorID, userID, requestID uint16) {
+		s.log.Infow("[BFCP-Server] [Phase4.1] Floor granted",
+			"floorID", floorID,
+			"userID", userID,
+			"requestID", requestID,
+		)
+	}
+
+	s.bfcpServer.OnFloorReleased = func(floorID, userID uint16) {
+		s.log.Infow("[BFCP-Server] [Phase4.1] Floor released",
+			"floorID", floorID,
+			"userID", userID,
+		)
+	}
+
+	s.bfcpServer.OnFloorDenied = func(floorID, userID, requestID uint16) {
+		s.log.Infow("[BFCP-Server] [Phase4.1] Floor denied",
+			"floorID", floorID,
+			"userID", userID,
+			"requestID", requestID,
+		)
+	}
+
+	s.bfcpServer.OnError = func(err error) {
+		s.log.Errorw("[BFCP-Server] [Phase4.1] Server error", err)
+	}
+
+	// Start BFCP server in background
+	go func() {
+		s.log.Infow("[BFCP-Server] [Phase4.1] Starting BFCP floor control server",
+			"address", bfcpAddr,
+			"conferenceID", bfcpConfig.ConferenceID,
+			"floor1", "SIP→WebRTC (placeholder)",
+			"floor2", "WebRTC→SIP (Phase 5)",
+		)
+
+		if err := s.bfcpServer.ListenAndServe(); err != nil {
+			s.log.Errorw("[BFCP-Server] [Phase4.1] BFCP server error", err)
+		}
+	}()
+
+	s.log.Infow("[BFCP-Server] [Phase4.1] BFCP server initialization complete",
+		"listening", bfcpAddr,
+	)
+
 	return nil
 }
 
 func (s *Server) Stop() {
 	s.closing.Break()
+
+	// Stop BFCP server
+	if s.bfcpServer != nil {
+		s.log.Infow("[BFCP-Server] [Phase4.1] Stopping BFCP server")
+		if err := s.bfcpServer.Close(); err != nil {
+			s.log.Errorw("[BFCP-Server] [Phase4.1] Error closing BFCP server", err)
+		}
+	}
+
 	s.cmu.Lock()
 	calls := maps.Values(s.byRemoteTag)
 	s.byRemoteTag = make(map[RemoteTag]*inboundCall)
