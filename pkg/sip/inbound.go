@@ -1162,10 +1162,31 @@ func (c *inboundCall) buildReInviteSDP(includeScreenShare bool) (*sdpv2.SDP, err
 	c.mu.Unlock()
 
 	if initialAnswer == nil {
+		c.log.Errorw("🖥️ [re-INVITE] [Phase5.2] No initial answer stored!", nil)
 		return nil, fmt.Errorf("no initial answer stored - call not established")
 	}
 
+	c.log.Infow("🖥️ [re-INVITE] [Phase5.2] Initial answer state",
+		"hasAudio", initialAnswer.Audio != nil,
+		"hasVideo", initialAnswer.Video != nil,
+		"hasBFCP", initialAnswer.BFCP != nil,
+		"addr", initialAnswer.Addr)
+
+	if initialOffer != nil {
+		c.log.Infow("🖥️ [re-INVITE] [Phase5.2] Initial offer state (from SIP device)",
+			"hasAudio", initialOffer.Audio != nil,
+			"hasVideo", initialOffer.Video != nil,
+			"hasBFCP", initialOffer.BFCP != nil,
+			"bfcpConferenceID", func() uint32 {
+				if initialOffer.BFCP != nil {
+					return initialOffer.BFCP.ConferenceID
+				}
+				return 0
+			}())
+	}
+
 	// Phase 5.2: Clone the initial answer and modify it
+	c.log.Infow("🖥️ [re-INVITE] [Phase5.2] Cloning initial answer for modification")
 	builder := initialAnswer.Clone().Builder()
 	builder.SetAddress(c.s.sconf.MediaIP)
 
@@ -1214,7 +1235,7 @@ func (c *inboundCall) buildReInviteSDP(includeScreenShare bool) (*sdpv2.SDP, err
 func (c *inboundCall) sendScreenShareReInvite(addScreenShare bool) error {
 	c.log.Infow("🖥️ [Inbound] sendScreenShareReInvite called", "addScreenShare", addScreenShare)
 
-	// Phase 5.2: Build SDP (just test building, don't send yet)
+	// Phase 5.2: Build SDP
 	sdp, err := c.buildReInviteSDP(addScreenShare)
 	if err != nil {
 		c.log.Errorw("🖥️ [re-INVITE] Failed to build SDP", err)
@@ -1226,12 +1247,318 @@ func (c *inboundCall) sendScreenShareReInvite(addScreenShare bool) error {
 		return fmt.Errorf("failed to marshal SDP: %w", err)
 	}
 
-	c.log.Infow("🖥️ [re-INVITE] [Phase5.2-TEST] SDP ready",
+	c.log.Infow("🖥️ [re-INVITE] [Phase5.5] SDP ready",
 		"size", len(sdpBytes),
 		"sdp", string(sdpBytes))
 
-	// Phase 5.5+: Actual sending logic will go here
-	return fmt.Errorf("re-INVITE sending not implemented yet (Phase 5.5)")
+	// Phase 5.5: Create INVITE request
+	c.log.Infow("🖥️ [re-INVITE] [Phase5.5] Creating INVITE request")
+
+	// Log original dialog state for comparison
+	c.log.Debugw("🖥️ [re-INVITE] [Phase5.5] Original dialog state",
+		"originalFrom", c.cc.invite.From(),
+		"originalTo", c.cc.invite.To(),
+		"responseFrom", c.cc.inviteOk.From(),
+		"responseTo", c.cc.inviteOk.To(),
+		"originalCallID", c.cc.invite.CallID())
+
+	// Request-URI: Use Contact from remote party (INVITE) or fallback to From
+	requestURI := c.cc.invite.Recipient
+	if contact := c.cc.invite.Contact(); contact != nil {
+		requestURI = contact.Address
+	}
+
+	req := sip.NewRequest(sip.INVITE, requestURI)
+	req.SetBody(sdpBytes)
+	req.SipVersion = c.cc.invite.SipVersion
+
+	// From: We are the local party (To from initial INVITE, with our tag from 200 OK)
+	if localParty := c.cc.inviteOk.To(); localParty != nil {
+		fromHeader := &sip.FromHeader{
+			DisplayName: localParty.DisplayName,
+			Address:     localParty.Address,
+			Params:      localParty.Params,
+		}
+		req.AppendHeader(fromHeader)
+	}
+
+	// To: Remote party is the original From (with their tag)
+	if remoteParty := c.cc.invite.From(); remoteParty != nil {
+		toHeader := &sip.ToHeader{
+			DisplayName: remoteParty.DisplayName,
+			Address:     remoteParty.Address,
+			Params:      remoteParty.Params,
+		}
+		req.AppendHeader(toHeader)
+	}
+
+	// Call-ID: Must match the dialog
+	sip.CopyHeaders("Call-ID", c.cc.invite, req)
+
+	// Contact: Use our contact
+	if contact := c.cc.inviteOk.Contact(); contact != nil {
+		req.AppendHeader(contact)
+	}
+
+	// Route: Build route set from Record-Route (reversed)
+	if len(c.cc.invite.GetHeaders("Route")) > 0 {
+		sip.CopyHeaders("Route", c.cc.invite, req)
+	}
+
+	// Set Max-Forwards
+	maxForwardsHeader := sip.MaxForwardsHeader(70)
+	req.AppendHeader(&maxForwardsHeader)
+
+	// Set Content-Type for SDP
+	req.AppendHeader(sip.NewHeader("Content-Type", "application/sdp"))
+
+	// Set CSeq (auto-increments)
+	c.cc.setCSeq(req)
+
+	// Set Via header (new branch for new transaction)
+	req.PrependHeader(c.cc.generateViaHeader(req))
+
+	// Set source and destination for network layer
+	req.SetSource(c.cc.inviteOk.Source())
+	dest := c.cc.inviteOk.Destination()
+	if contact := c.cc.invite.Contact(); contact != nil {
+		dest = ConvertURI(&contact.Address).GetDest()
+	}
+	if route := c.cc.invite.RecordRoute(); route != nil {
+		dest = ConvertURI(&route.Address).GetDest()
+	}
+	req.SetDestination(dest)
+
+	c.log.Infow("🖥️ [re-INVITE] [Phase5.5] Sending INVITE",
+		"cseq", c.cc.nextRequestCSeq,
+		"from", req.From(),
+		"to", req.To(),
+		"callID", req.CallID())
+
+	c.log.Debugw("🖥️ [re-INVITE] [Phase5.5] Full INVITE request",
+		"request", req.String())
+
+	// Phase 5.5: Create transaction and send (with response handling)
+	c.log.Infow("🖥️ [re-INVITE] [Phase5.5] Creating transaction for re-INVITE")
+
+	// Log connection state before creating transaction
+	c.log.Infow("🖥️ [re-INVITE] [Phase5.5] Connection state",
+		"inviteSource", c.cc.invite.Source(),
+		"inviteDest", c.cc.invite.Destination(),
+		"inviteOkSource", c.cc.inviteOk.Source(),
+		"inviteOkDest", c.cc.inviteOk.Destination(),
+		"requestSource", req.Source(),
+		"requestDest", req.Destination())
+
+	tx, err := c.cc.Transaction(req)
+	if err != nil {
+		c.log.Errorw("🖥️ [re-INVITE] Failed to create transaction", err)
+		return fmt.Errorf("failed to create transaction: %w", err)
+	}
+	defer tx.Terminate()
+
+	c.log.Infow("🖥️ [re-INVITE] [Phase5.5] Transaction created successfully")
+	c.log.Infow("🖥️ [re-INVITE] [Phase5.5] 🔍 CRITICAL: Check if new TCP connection was created (watch for 'Dialing' in logs)")
+	c.log.Infow("🖥️ [re-INVITE] [Phase5.5] Waiting for response...")
+
+	// Phase 5.6: Wait for response (with timeout)
+	ctx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
+	defer cancel()
+
+	resp, err := c.waitForReInviteResponse(ctx, tx)
+	if err != nil {
+		c.log.Errorw("🖥️ [re-INVITE] Failed to get response", err)
+		return err
+	}
+
+	c.log.Infow("🖥️ [re-INVITE] [Phase5.6] Received response",
+		"status", resp.StatusCode,
+		"reason", resp.Reason,
+		"bodyLen", len(resp.Body()))
+
+	if resp.StatusCode != 200 {
+		c.log.Errorw("🖥️ [re-INVITE] ❌ Non-200 response",
+			nil,
+			"status", resp.StatusCode,
+			"reason", resp.Reason,
+			"responseHeaders", resp.String())
+	}
+
+	// Phase 5.7-5.9: Handle response
+	return c.handleReInviteResponse(req, resp, addScreenShare)
+}
+
+// Phase 5.6: Wait for response from re-INVITE transaction
+func (c *inboundCall) waitForReInviteResponse(ctx context.Context, tx sip.ClientTransaction) (*sip.Response, error) {
+	c.log.Infow("🖥️ [re-INVITE] [Phase5.6] Entering response wait loop")
+
+	for {
+		select {
+		case <-ctx.Done():
+			c.log.Errorw("🖥️ [re-INVITE] [Phase5.6] ⏰ Timeout waiting for response", nil)
+			tx.Cancel()
+			return nil, fmt.Errorf("timeout waiting for re-INVITE response")
+		case <-tx.Done():
+			c.log.Errorw("🖥️ [re-INVITE] [Phase5.6] ❌ Transaction done/failed", nil)
+			return nil, fmt.Errorf("re-INVITE transaction failed")
+		case resp := <-tx.Responses():
+			c.log.Infow("🖥️ [re-INVITE] [Phase5.6] Response received from channel",
+				"status", resp.StatusCode,
+				"reason", resp.Reason,
+				"from", resp.From(),
+				"to", resp.To(),
+				"callID", resp.CallID())
+
+			if resp.StatusCode >= 200 {
+				c.log.Infow("🖥️ [re-INVITE] [Phase5.6] ✅ Final response received",
+					"status", resp.StatusCode,
+					"reason", resp.Reason)
+				return resp, nil // Final response
+			}
+			// Log 1xx provisional responses
+			c.log.Infow("🖥️ [re-INVITE] [Phase5.6] 📞 Provisional response (continuing...)",
+				"status", resp.StatusCode,
+				"reason", resp.Reason)
+		}
+	}
+}
+
+// Phase 5.7-5.9: Handle re-INVITE response
+func (c *inboundCall) handleReInviteResponse(req *sip.Request, resp *sip.Response, addScreenShare bool) error {
+	c.log.Infow("🖥️ [re-INVITE] [Phase5.7] Handling response",
+		"status", resp.StatusCode,
+		"addScreenShare", addScreenShare)
+
+	if resp.StatusCode != 200 {
+		c.log.Errorw("🖥️ [re-INVITE] ❌ Request failed",
+			nil,
+			"status", resp.StatusCode,
+			"reason", resp.Reason,
+			"fullResponse", resp.String())
+		return fmt.Errorf("re-INVITE failed: %d %s", resp.StatusCode, resp.Reason)
+	}
+
+	c.log.Infow("🖥️ [re-INVITE] [Phase5.7] ✅ 200 OK received, parsing SDP answer")
+	c.log.Debugw("🖥️ [re-INVITE] [Phase5.7] Raw SDP body",
+		"sdp", string(resp.Body()))
+
+	// Phase 5.7: Parse SDP from 200 OK
+	sdp, err := sdpv2.NewSDP(resp.Body())
+	if err != nil {
+		c.log.Errorw("🖥️ [re-INVITE] Failed to parse SDP", err,
+			"sdpBody", string(resp.Body()))
+		return fmt.Errorf("failed to parse SDP: %w", err)
+	}
+
+	c.log.Infow("🖥️ [re-INVITE] [Phase5.7] ✅ SDP parsed successfully",
+		"hasAudio", sdp.Audio != nil,
+		"hasVideo", sdp.Video != nil,
+		"hasBFCP", sdp.BFCP != nil,
+		"addr", sdp.Addr)
+
+	if sdp.Audio != nil {
+		payloadType := uint8(0)
+		if sdp.Audio.Codec != nil {
+			payloadType = sdp.Audio.Codec.PayloadType
+		}
+		c.log.Infow("🖥️ [re-INVITE] [Phase5.7] Audio in SDP",
+			"port", sdp.Audio.Port,
+			"payloadType", payloadType,
+			"numCodecs", len(sdp.Audio.Codecs))
+	}
+	if sdp.Video != nil {
+		payloadType := uint8(0)
+		if sdp.Video.Codec != nil {
+			payloadType = sdp.Video.Codec.PayloadType
+		}
+		c.log.Infow("🖥️ [re-INVITE] [Phase5.7] Video in SDP",
+			"port", sdp.Video.Port,
+			"rtcpPort", sdp.Video.RTCPPort,
+			"payloadType", payloadType,
+			"numCodecs", len(sdp.Video.Codecs))
+	}
+	if sdp.BFCP != nil {
+		c.log.Infow("🖥️ [re-INVITE] [Phase5.7] BFCP in SDP",
+			"port", sdp.BFCP.Port,
+			"connectionIP", sdp.BFCP.ConnectionIP,
+			"floorCtrl", sdp.BFCP.FloorCtrl,
+			"conferenceID", sdp.BFCP.ConferenceID,
+			"userID", sdp.BFCP.UserID,
+			"floorID", sdp.BFCP.FloorID)
+	}
+
+	// Phase 5.8: Update screen share connections if needed
+	if addScreenShare {
+		if err := c.updateScreenShareConnections(sdp); err != nil {
+			c.log.Errorw("🖥️ [re-INVITE] Failed to update connections", err)
+			// Continue to send ACK even if connection update fails
+		}
+	}
+
+	// Phase 5.9: Send ACK to complete transaction
+	c.log.Infow("🖥️ [re-INVITE] [Phase5.9] Sending ACK")
+
+	ack := sip.NewAckRequest(req, resp, nil)
+	if err := c.cc.WriteRequest(ack); err != nil {
+		c.log.Errorw("🖥️ [re-INVITE] Failed to send ACK", err)
+		return fmt.Errorf("failed to send ACK: %w", err)
+	}
+
+	c.log.Infow("🖥️ [re-INVITE] [Phase5.9] ✅ ACK sent - transaction complete")
+
+	// Phase 5.10: Setup BFCP client connection (if needed)
+	if addScreenShare && sdp.BFCP != nil && c.screenShare != nil {
+		c.log.Infow("🖥️ [re-INVITE] [Phase5.10] Setting up BFCP client connection")
+
+		bfcpAddr := fmt.Sprintf("%s:%d", sdp.BFCP.ConnectionIP, sdp.BFCP.Port)
+		c.log.Infow("🖥️ [re-INVITE] [Phase5.10] BFCP server address",
+			"addr", bfcpAddr,
+			"conferenceID", sdp.BFCP.ConferenceID,
+			"userID", sdp.BFCP.UserID,
+			"floorID", sdp.BFCP.FloorID)
+
+		if err := c.screenShare.SetupBFCP(
+			c.ctx,
+			bfcpAddr,
+			sdp.BFCP.ConferenceID,
+			sdp.BFCP.UserID,
+			sdp.BFCP.FloorID,
+		); err != nil {
+			c.log.Errorw("🖥️ [re-INVITE] [Phase5.10] ⚠️ BFCP setup failed", err)
+			// Don't fail re-INVITE - screen share might work without floor control
+		} else {
+			c.log.Infow("🖥️ [re-INVITE] [Phase5.10] ✅ BFCP client connected")
+		}
+	}
+
+	return nil
+}
+
+// Phase 5.8: Update screen share RTP/RTCP connection destinations
+func (c *inboundCall) updateScreenShareConnections(sdp *sdpv2.SDP) error {
+	if sdp.Video == nil {
+		return fmt.Errorf("no video in SDP answer")
+	}
+
+	c.log.Infow("🖥️ [re-INVITE] [Phase5.8] Updating screen share connections",
+		"remote", sdp.Addr,
+		"rtpPort", sdp.Video.Port,
+		"rtcpPort", sdp.Video.RTCPPort)
+
+	// Update screen share manager with remote ports
+	if c.screenShare != nil {
+		rtpAddr := netip.AddrPortFrom(sdp.Addr, sdp.Video.Port)
+		rtcpAddr := netip.AddrPortFrom(sdp.Addr, sdp.Video.RTCPPort)
+
+		c.screenShare.rtpConn.SetDst(rtpAddr)
+		c.screenShare.rtcpConn.SetDst(rtcpAddr)
+
+		c.log.Infow("🖥️ [re-INVITE] [Phase5.8] ✅ Screen share connections updated",
+			"rtpDst", rtpAddr,
+			"rtcpDst", rtcpAddr)
+	}
+
+	return nil
 }
 
 func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncryption, conf *config.Config, features []livekit.SIPFeature) (answerData []byte, _ error) {
