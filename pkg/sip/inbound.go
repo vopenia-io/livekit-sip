@@ -1089,25 +1089,16 @@ func (c *inboundCall) SetupScreenShare(conf *config.Config, offer *sdpv2.SDP) er
 		)
 	}
 
-	c.log.Infow("🖥️ [Inbound] [Phase4.2] Setting up BFCP client",
+	// Phase 4.3: Don't setup BFCP client yet - defer until re-INVITE
+	// BFCP negotiation happens in re-INVITE when screen share is activated (Phase 5)
+	c.log.Infow("🖥️ [Inbound] [Phase4.2] BFCP client ready (will connect during re-INVITE)",
 		"serverAddr", bfcpServerAddr,
 		"conferenceID", conferenceID,
 		"userID", userID,
 		"floorID", floorID,
+		"note", "BFCP connection deferred to screen share activation",
 	)
-
-	ctx := context.Background()
-	if err := ssm.SetupBFCP(ctx, bfcpServerAddr, conferenceID, userID, floorID); err != nil {
-		c.log.Warnw("🖥️ [Inbound] [Phase4.2] Failed to setup BFCP client", err)
-		// Don't fail - screen share will work without BFCP for testing
-	} else {
-		c.log.Infow("🖥️ [Inbound] [Phase4.2] BFCP client setup successful",
-			"serverAddr", bfcpServerAddr,
-			"conferenceID", conferenceID,
-			"userID", userID,
-			"floorID", floorID,
-		)
-	}
+	// Don't call ssm.SetupBFCP() yet - will be done in Phase 5 re-INVITE
 
 	// Store the screen share manager in the room so it can be called directly
 	// from participantVideoTrackSubscribed where we have access to track, pub, rp
@@ -1129,6 +1120,31 @@ func (c *inboundCall) SetupScreenShare(conf *config.Config, offer *sdpv2.SDP) er
 	c.screenShare = ssm
 	c.log.Infow("🖥️ [Inbound] Screen share support initialized")
 	return nil
+}
+
+// buildBFCPAnswer constructs BFCP SDP answer as the BFCP server
+// Phase 4.3: Build BFCP SDP answer as server
+func (c *inboundCall) buildBFCPAnswer(offerBFCP *sdpv2.BFCPMedia, conf *config.Config) *sdpv2.BFCPMedia {
+	bfcpAnswer := &sdpv2.BFCPMedia{
+		// Phase 4.3: Port 0 means disabled initially - will be activated in re-INVITE (Phase 5)
+		Port:         0,
+		ConnectionIP: c.s.sconf.MediaIP,
+		// Phase 4.3: We are the BFCP server (server-only mode)
+		FloorCtrl: "s-only",
+		// Use same conference/user IDs from offer
+		ConferenceID: offerBFCP.ConferenceID,
+		UserID:       offerBFCP.UserID,
+		// Acknowledge the floor from offer
+		FloorID:     offerBFCP.FloorID,
+		MediaStream: offerBFCP.MediaStream,
+		// Phase 4.3: Setup role - we are passive (server), client connects to us
+		Setup: "passive",
+		// Phase 4.3: Connection mode - new connection
+		Connection:  "new",
+		Attributes:  make(map[string]string),
+	}
+
+	return bfcpAnswer
 }
 
 // sendScreenShareReInvite sends a SIP re-INVITE to add or remove screen share stream
@@ -1185,6 +1201,23 @@ func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncrypt
 	if err := c.SetupScreenShare(conf, offer); err != nil {
 		c.log.Warnw("🖥️ [Inbound] Failed to setup screen share", err)
 		// Don't fail the call - camera video still works
+	}
+
+	// Phase 4.3: Don't include BFCP in initial answer - defer to re-INVITE
+	// Per RFC 8856: Port 0 means rejection. To defer BFCP, omit it from answer.
+	// BFCP will be negotiated in re-INVITE when screen share is actually started (Phase 5)
+	if offer.BFCP != nil {
+		c.log.Infow("🖥️ [Inbound] [Phase4.3] BFCP detected in offer - deferring to re-INVITE",
+			"floorCtrl", offer.BFCP.FloorCtrl,
+			"conferenceID", offer.BFCP.ConferenceID,
+			"userID", offer.BFCP.UserID,
+			"floorID", offer.BFCP.FloorID,
+			"mediaStream", offer.BFCP.MediaStream,
+			"note", "BFCP will be negotiated when screen share starts",
+		)
+		// Store BFCP params for later use in re-INVITE
+		// Clear BFCP from answer - the answerBuilder cloned it from the offer
+		answerBuilder.SetBFCP(nil)
 	}
 
 	answer, err := answerBuilder.Build()

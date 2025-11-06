@@ -347,11 +347,8 @@ func (s *Server) startBFCP() error {
 	// Create BFCP server
 	s.bfcpServer = bfcp.NewServer(bfcpConfig)
 
-	// Add default floors
-	// Floor 1: SIP device presentation (SIP → WebRTC) - placeholder for future
-	s.bfcpServer.AddFloor(1)
-	// Floor 2: WebRTC screen share (WebRTC → SIP) - for Phase 5
-	s.bfcpServer.AddFloor(2)
+	// Floors will be created dynamically when clients request them
+	// No need to pre-create floors
 
 	// Set up event callbacks (Phase 4.4)
 	s.bfcpServer.OnClientConnect = func(remoteAddr string, userID uint16) {
@@ -369,23 +366,15 @@ func (s *Server) startBFCP() error {
 	}
 
 	s.bfcpServer.OnFloorRequest = func(floorID, userID, requestID uint16) bool {
-		s.log.Infow("[BFCP-Server] [Phase4.1] Floor request received",
+		s.log.Infow("[BFCP-Server] [Phase4.4] Floor request received",
 			"floorID", floorID,
 			"userID", userID,
 			"requestID", requestID,
 		)
 
-		// Phase 4.4: Placeholder handling for SIP device floor requests
-		if floorID == 1 {
-			s.log.Infow("[BFCP-Server] [Phase4.1] Floor 1 acknowledged (SIP→WebRTC) - not implemented",
-				"floorID", floorID,
-				"userID", userID,
-			)
-			// Do NOT grant - SIP→WebRTC not implemented yet
-			return false
-		}
-
-		// Floor 2 grants will be handled in Phase 5
+		// Phase 4.4: For now, don't auto-grant any floors
+		// Floor grant logic will be implemented in Phase 5 when screen share is activated
+		// The floor has been dynamically created by the handleFloorRequest
 		return false
 	}
 
@@ -421,8 +410,8 @@ func (s *Server) startBFCP() error {
 		s.log.Infow("[BFCP-Server] [Phase4.1] Starting BFCP floor control server",
 			"address", bfcpAddr,
 			"conferenceID", bfcpConfig.ConferenceID,
-			"floor1", "SIP→WebRTC (placeholder)",
-			"floor2", "WebRTC→SIP (Phase 5)",
+			"maxFloors", bfcpConfig.MaxFloors,
+			"note", "Floors will be created dynamically on demand",
 		)
 
 		if err := s.bfcpServer.ListenAndServe(); err != nil {
