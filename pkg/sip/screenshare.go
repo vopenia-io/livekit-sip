@@ -337,14 +337,16 @@ func (s *ScreenShareManager) SetupGstPipeline(media *sdpv2.SDPMedia) error {
 	if err != nil {
 		return fmt.Errorf("failed to create WebRTC RTP writer: %w", err)
 	}
-	go Copy(webrtcRtpIn, s.webrtcRtpIn)
+	s.log.Infow("🖥️ [ScreenShare] Starting WebRTC→GStreamer RTP copy goroutine")
+	go s.copyWithLogging(webrtcRtpIn, s.webrtcRtpIn, "WebRTC→GStreamer")
 
 	// Setup SIP RTP output
 	sipRtpOut, err := readerFromPipeline(pipeline, "sip_rtp_out")
 	if err != nil {
 		return fmt.Errorf("failed to create SIP RTP reader: %w", err)
 	}
-	go Copy(s.sipRtpOut, sipRtpOut)
+	s.log.Infow("🖥️ [ScreenShare] Starting GStreamer→SIP RTP copy goroutine")
+	go s.copyWithLogging(s.sipRtpOut, sipRtpOut, "GStreamer→SIP")
 
 	// Setup RTCP monitoring
 	webrtcRtcpMonitor := &rtcpMonitor{
@@ -723,6 +725,64 @@ func (s *ScreenShareManager) Close() error {
 
 	s.log.Infow("🖥️ [ScreenShare] ScreenShareManager closed")
 	return nil
+}
+
+// copyWithLogging copies data from src to dst with periodic logging of byte counts
+func (s *ScreenShareManager) copyWithLogging(dst io.WriteCloser, src io.ReadCloser, direction string) {
+	defer src.Close()
+	defer dst.Close()
+
+	s.log.Infow("🖥️ [ScreenShare] RTP copy started", "direction", direction)
+
+	buf := make([]byte, 32*1024) // 32KB buffer
+	var totalBytes int64
+	var packetCount int64
+	lastLogTime := time.Now()
+
+	for {
+		n, readErr := src.Read(buf)
+		if n > 0 {
+			totalBytes += int64(n)
+			packetCount++
+
+			// Write the data
+			_, writeErr := dst.Write(buf[:n])
+			if writeErr != nil {
+				s.log.Errorw("🖥️ [ScreenShare] RTP write error",
+					writeErr,
+					"direction", direction,
+					"totalBytes", totalBytes,
+					"packets", packetCount)
+				return
+			}
+
+			// Log every 5 seconds
+			if time.Since(lastLogTime) >= 5*time.Second {
+				s.log.Infow("🖥️ [ScreenShare] 📊 RTP flowing",
+					"direction", direction,
+					"totalBytes", totalBytes,
+					"packets", packetCount,
+					"avgPacketSize", totalBytes/packetCount)
+				lastLogTime = time.Now()
+			}
+		}
+
+		if readErr != nil {
+			if readErr == io.EOF {
+				s.log.Infow("🖥️ [ScreenShare] RTP copy completed (EOF)",
+					"direction", direction,
+					"totalBytes", totalBytes,
+					"packets", packetCount)
+			} else {
+				s.log.Errorw("🖥️ [ScreenShare] RTP read error",
+					readErr,
+					"direction", direction,
+					"totalBytes", totalBytes,
+					"packets", packetCount)
+			}
+			return
+		}
+	}
 }
 
 // SetOnStartCallback sets the callback to trigger re-INVITE when screen share starts
