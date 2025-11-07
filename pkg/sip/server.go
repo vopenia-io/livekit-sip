@@ -126,6 +126,12 @@ type Handler interface {
 	OnSessionEnd(ctx context.Context, callIdentifier *CallIdentifier, callInfo *livekit.SIPCallInfo, reason string)
 }
 
+type PendingFloorGrant struct {
+	FloorID   uint16
+	UserID    uint16
+	RequestID uint16
+}
+
 type Server struct {
 	log          logger.Logger
 	mon          *stats.Monitor
@@ -137,6 +143,10 @@ type Server struct {
 
 	// BFCP floor control server for screen sharing
 	bfcpServer *bfcp.Server
+
+	// Pending floor grants to send after client Hello completes
+	pendingGrantsMu sync.Mutex
+	pendingGrants   map[uint16]*PendingFloorGrant // key is floorID
 
 	imu               sync.Mutex
 	inProgressInvites []*inProgressInvite
@@ -169,14 +179,15 @@ func NewServer(region string, conf *config.Config, log logger.Logger, mon *stats
 		log = logger.GetLogger()
 	}
 	s := &Server{
-		log:         log,
-		conf:        conf,
-		region:      region,
-		mon:         mon,
-		getIOClient: getIOClient,
-		byRemoteTag: make(map[RemoteTag]*inboundCall),
-		byLocalTag:  make(map[LocalTag]*inboundCall),
-		byCallID:    make(map[string]*inboundCall),
+		log:           log,
+		conf:          conf,
+		region:        region,
+		mon:           mon,
+		getIOClient:   getIOClient,
+		byRemoteTag:   make(map[RemoteTag]*inboundCall),
+		byLocalTag:    make(map[LocalTag]*inboundCall),
+		byCallID:      make(map[string]*inboundCall),
+		pendingGrants: make(map[uint16]*PendingFloorGrant),
 	}
 	s.infos.byCallID = expirable.NewLRU[string, *inboundCallInfo](maxCallCache, nil, callCacheTTL)
 	s.initMediaRes()
@@ -340,7 +351,7 @@ func (s *Server) startBFCP() error {
 	// Create BFCP server configuration
 	// Conference ID = 1 (can be dynamic later if needed)
 	bfcpConfig := bfcp.DefaultServerConfig(bfcpAddr, 1)
-	bfcpConfig.AutoGrant = false // Manual control for floor grants
+	bfcpConfig.AutoGrant = true // Phase 5.17: Auto-grant floor for screen share flow
 	bfcpConfig.MaxFloors = 10
 	bfcpConfig.EnableLogging = true
 
@@ -356,6 +367,40 @@ func (s *Server) startBFCP() error {
 			"remoteAddr", remoteAddr,
 			"userID", userID,
 		)
+
+		// Phase 5.17: Process any pending floor requests after Hello handshake completes
+		// This follows the correct BFCP flow: FloorRequest → Pending → Granted
+		s.pendingGrantsMu.Lock()
+		pendingRequests := make([]*PendingFloorGrant, 0, len(s.pendingGrants))
+		for _, req := range s.pendingGrants {
+			pendingRequests = append(pendingRequests, req)
+		}
+		// Clear pending grants after collecting them
+		s.pendingGrants = make(map[uint16]*PendingFloorGrant)
+		s.pendingGrantsMu.Unlock()
+
+		// Inject simulated FloorRequests now that Polycom Hello is complete
+		for _, req := range pendingRequests {
+			s.log.Infow("[BFCP-Server] [Phase5.17] Processing pending floor request after Polycom Hello",
+				"remoteAddr", remoteAddr,
+				"controllerUserID", userID,
+				"floorID", req.FloorID,
+				"sharerUserID", req.UserID,
+			)
+			// Inject simulated FloorRequest from the sharer (WebRTC userID=2)
+			if requestID, err := s.bfcpServer.InjectFloorRequest(req.FloorID, req.UserID); err != nil {
+				s.log.Errorw("[BFCP-Server] [Phase5.17] Failed to inject floor request", err,
+					"floorID", req.FloorID,
+					"sharerUserID", req.UserID,
+				)
+			} else {
+				s.log.Infow("[BFCP-Server] [Phase5.17] ✅ Floor request injected successfully",
+					"floorID", req.FloorID,
+					"sharerUserID", req.UserID,
+					"requestID", requestID,
+				)
+			}
+		}
 	}
 
 	s.bfcpServer.OnClientDisconnect = func(remoteAddr string, userID uint16) {
@@ -372,10 +417,9 @@ func (s *Server) startBFCP() error {
 			"requestID", requestID,
 		)
 
-		// Phase 4.4: For now, don't auto-grant any floors
-		// Floor grant logic will be implemented in Phase 5 when screen share is activated
+		// Auto-grant floor requests for screen sharing
 		// The floor has been dynamically created by the handleFloorRequest
-		return false
+		return true
 	}
 
 	s.bfcpServer.OnFloorGranted = func(floorID, userID, requestID uint16) {

@@ -176,6 +176,53 @@ func (r *RtcpWriter) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
+func (r *RtcpWriter) Close() error {
+	return nil
+}
+
+// ParticipantRtcpWriter writes RTCP to a RemoteParticipant (for sending PLI to track senders)
+type ParticipantRtcpWriter struct {
+	rp    *lksdk.RemoteParticipant
+	track *webrtc.TrackRemote
+}
+
+func NewParticipantRtcpWriter(rp *lksdk.RemoteParticipant, track *webrtc.TrackRemote) *ParticipantRtcpWriter {
+	return &ParticipantRtcpWriter{
+		rp:    rp,
+		track: track,
+	}
+}
+
+func (r *ParticipantRtcpWriter) Write(p []byte) (n int, err error) {
+	pkts, err := rtcp.Unmarshal(p)
+	if err != nil {
+		return 0, err
+	}
+
+	// Handle PLI/FIR packets by requesting keyframe via RemoteParticipant
+	for _, pkt := range pkts {
+		switch pkt.(type) {
+		case *rtcp.PictureLossIndication:
+			// Use WritePLI to request keyframe from sender
+			if r.track != nil {
+				r.rp.WritePLI(r.track.SSRC())
+			}
+		case *rtcp.FullIntraRequest:
+			// FIR also requests keyframe
+			if r.track != nil {
+				r.rp.WritePLI(r.track.SSRC())
+			}
+		}
+		// Other RTCP packets are ignored for now (could be extended if needed)
+	}
+
+	return len(p), nil
+}
+
+func (r *ParticipantRtcpWriter) Close() error {
+	return nil
+}
+
 func NewRtcpReader(pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) *RtcpReader {
 	pipeReader, pipeWriter := io.Pipe()
 	rr := &RtcpReader{
