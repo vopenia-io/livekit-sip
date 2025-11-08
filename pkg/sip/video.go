@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"time"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
@@ -259,5 +260,18 @@ func (v *VideoManager) Start() error {
 	if err := v.pipeline.SetState(gst.StatePlaying); err != nil {
 		return fmt.Errorf("failed to set GStreamer pipeline to playing: %w", err)
 	}
+
+	// CRITICAL FIX: Wait for pipeline to actually reach PLAYING state
+	// SetState() is asynchronous - it returns immediately but the state transition takes time (~100-150ms)
+	// If we send 200 OK before pipeline is ready, early RTP packets cause corruption (green artifacts)
+	v.log.Debugw("waiting for GStreamer pipeline to reach PLAYING state...")
+	changeReturn, currentState := v.pipeline.GetState(gst.StatePlaying, gst.ClockTime(100*time.Millisecond))
+	if changeReturn == gst.StateChangeFailure {
+		return fmt.Errorf("GStreamer pipeline failed to reach PLAYING state")
+	}
+
+	v.log.Infow("GStreamer pipeline is PLAYING and ready for RTP packets",
+		"current_state", currentState.String(),
+		"change_result", changeReturn.String())
 	return nil
 }

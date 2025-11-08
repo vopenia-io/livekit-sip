@@ -330,10 +330,10 @@ func (s *Server) Start(agent *sipgo.UserAgent, sc *ServiceConfig, tlsConf *tls.C
 
 	// Start BFCP floor control server for screen sharing
 	if err := s.startBFCP(); err != nil {
-		s.log.Warnw("[BFCP-Server] [Phase4.1] Failed to start BFCP server", err,
+		s.log.Warnw("[BFCP-Server] Failed to start BFCP server", err,
 			"port", s.conf.BFCPPort,
 		)
-		// Don't fail the entire server if BFCP fails - screen share just won't work
+		// BFCP failure doesn't prevent server startup
 	}
 
 	return nil
@@ -348,53 +348,49 @@ func (s *Server) startBFCP() error {
 
 	bfcpAddr := fmt.Sprintf("%s:%d", listenIP, s.conf.BFCPPort)
 
-	// Create BFCP server configuration
-	// Conference ID = 1 (can be dynamic later if needed)
+	// Create BFCP server configuration with auto-grant enabled
 	bfcpConfig := bfcp.DefaultServerConfig(bfcpAddr, 1)
-	bfcpConfig.AutoGrant = true // Phase 5.17: Auto-grant floor for screen share flow
+	bfcpConfig.AutoGrant = true
 	bfcpConfig.MaxFloors = 10
 	bfcpConfig.EnableLogging = true
 
 	// Create BFCP server
 	s.bfcpServer = bfcp.NewServer(bfcpConfig)
 
-	// Floors will be created dynamically when clients request them
-	// No need to pre-create floors
+	// Floors are created dynamically when clients request them
 
-	// Set up event callbacks (Phase 4.4)
+	// Set up event callbacks
 	s.bfcpServer.OnClientConnect = func(remoteAddr string, userID uint16) {
-		s.log.Infow("[BFCP-Server] [Phase4.1] Client connected",
+		s.log.Infow("[BFCP-Server] Client connected",
 			"remoteAddr", remoteAddr,
 			"userID", userID,
 		)
 
-		// Phase 5.17: Process any pending floor requests after Hello handshake completes
-		// This follows the correct BFCP flow: FloorRequest → Pending → Granted
+		// Process pending floor requests after Hello handshake completes
 		s.pendingGrantsMu.Lock()
 		pendingRequests := make([]*PendingFloorGrant, 0, len(s.pendingGrants))
 		for _, req := range s.pendingGrants {
 			pendingRequests = append(pendingRequests, req)
 		}
-		// Clear pending grants after collecting them
 		s.pendingGrants = make(map[uint16]*PendingFloorGrant)
 		s.pendingGrantsMu.Unlock()
 
-		// Inject simulated FloorRequests now that Polycom Hello is complete
+		// Inject simulated FloorRequests after client Hello
 		for _, req := range pendingRequests {
-			s.log.Infow("[BFCP-Server] [Phase5.17] Processing pending floor request after Polycom Hello",
+			s.log.Infow("[BFCP-Server] Processing pending floor request after client Hello",
 				"remoteAddr", remoteAddr,
 				"controllerUserID", userID,
 				"floorID", req.FloorID,
 				"sharerUserID", req.UserID,
 			)
-			// Inject simulated FloorRequest from the sharer (WebRTC userID=2)
+			// Inject simulated FloorRequest from the sharer
 			if requestID, err := s.bfcpServer.InjectFloorRequest(req.FloorID, req.UserID); err != nil {
-				s.log.Errorw("[BFCP-Server] [Phase5.17] Failed to inject floor request", err,
+				s.log.Errorw("[BFCP-Server] Failed to inject floor request", err,
 					"floorID", req.FloorID,
 					"sharerUserID", req.UserID,
 				)
 			} else {
-				s.log.Infow("[BFCP-Server] [Phase5.17] ✅ Floor request injected successfully",
+				s.log.Infow("[BFCP-Server] ✅ Floor request injected successfully",
 					"floorID", req.FloorID,
 					"sharerUserID", req.UserID,
 					"requestID", requestID,
@@ -404,26 +400,25 @@ func (s *Server) startBFCP() error {
 	}
 
 	s.bfcpServer.OnClientDisconnect = func(remoteAddr string, userID uint16) {
-		s.log.Infow("[BFCP-Server] [Phase4.1] Client disconnected",
+		s.log.Infow("[BFCP-Server] Client disconnected",
 			"remoteAddr", remoteAddr,
 			"userID", userID,
 		)
 	}
 
 	s.bfcpServer.OnFloorRequest = func(floorID, userID, requestID uint16) bool {
-		s.log.Infow("[BFCP-Server] [Phase4.4] Floor request received",
+		s.log.Infow("[BFCP-Server] Floor request received",
 			"floorID", floorID,
 			"userID", userID,
 			"requestID", requestID,
 		)
 
 		// Auto-grant floor requests for screen sharing
-		// The floor has been dynamically created by the handleFloorRequest
 		return true
 	}
 
 	s.bfcpServer.OnFloorGranted = func(floorID, userID, requestID uint16) {
-		s.log.Infow("[BFCP-Server] [Phase4.1] Floor granted",
+		s.log.Infow("[BFCP-Server] Floor granted",
 			"floorID", floorID,
 			"userID", userID,
 			"requestID", requestID,
@@ -431,14 +426,14 @@ func (s *Server) startBFCP() error {
 	}
 
 	s.bfcpServer.OnFloorReleased = func(floorID, userID uint16) {
-		s.log.Infow("[BFCP-Server] [Phase4.1] Floor released",
+		s.log.Infow("[BFCP-Server] Floor released",
 			"floorID", floorID,
 			"userID", userID,
 		)
 	}
 
 	s.bfcpServer.OnFloorDenied = func(floorID, userID, requestID uint16) {
-		s.log.Infow("[BFCP-Server] [Phase4.1] Floor denied",
+		s.log.Infow("[BFCP-Server] Floor denied",
 			"floorID", floorID,
 			"userID", userID,
 			"requestID", requestID,
@@ -446,24 +441,23 @@ func (s *Server) startBFCP() error {
 	}
 
 	s.bfcpServer.OnError = func(err error) {
-		s.log.Errorw("[BFCP-Server] [Phase4.1] Server error", err)
+		s.log.Errorw("[BFCP-Server] Server error", err)
 	}
 
 	// Start BFCP server in background
 	go func() {
-		s.log.Infow("[BFCP-Server] [Phase4.1] Starting BFCP floor control server",
+		s.log.Infow("[BFCP-Server] Starting BFCP floor control server",
 			"address", bfcpAddr,
 			"conferenceID", bfcpConfig.ConferenceID,
 			"maxFloors", bfcpConfig.MaxFloors,
-			"note", "Floors will be created dynamically on demand",
 		)
 
 		if err := s.bfcpServer.ListenAndServe(); err != nil {
-			s.log.Errorw("[BFCP-Server] [Phase4.1] BFCP server error", err)
+			s.log.Errorw("[BFCP-Server] BFCP server error", err)
 		}
 	}()
 
-	s.log.Infow("[BFCP-Server] [Phase4.1] BFCP server initialization complete",
+	s.log.Infow("[BFCP-Server] BFCP server initialization complete",
 		"listening", bfcpAddr,
 	)
 
@@ -475,9 +469,9 @@ func (s *Server) Stop() {
 
 	// Stop BFCP server
 	if s.bfcpServer != nil {
-		s.log.Infow("[BFCP-Server] [Phase4.1] Stopping BFCP server")
+		s.log.Infow("[BFCP-Server] Stopping BFCP server")
 		if err := s.bfcpServer.Close(); err != nil {
-			s.log.Errorw("[BFCP-Server] [Phase4.1] Error closing BFCP server", err)
+			s.log.Errorw("[BFCP-Server] Error closing BFCP server", err)
 		}
 	}
 

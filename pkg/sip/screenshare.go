@@ -130,7 +130,7 @@ func (s *ScreenShareManager) SetupBFCP(ctx context.Context, serverAddr string, c
 	s.bfcpUserID = userID
 	s.bfcpFloorID = floorID
 
-	// Create BFCP client using real library
+	// Create BFCP client
 	config := &bfcp.ClientConfig{
 		ServerAddress:  serverAddr,
 		ConferenceID:   conferenceID,
@@ -209,12 +209,12 @@ func (s *ScreenShareManager) connectBFCP(ctx context.Context) error {
 
 	s.log.Infow("🖥️ [ScreenShare] ✅ BFCP TCP connection established")
 
-	// Send Hello message to establish BFCP session (optional - some servers don't support it)
+	// Send Hello message to establish BFCP session (optional per RFC 8855)
 	s.log.Infow("🖥️ [ScreenShare] Sending BFCP Hello...")
 	if err := s.bfcpClient.Hello(); err != nil {
-		s.log.Warnw("🖥️ [ScreenShare] ⚠️ BFCP Hello handshake failed (may not be supported by server)", err,
+		s.log.Warnw("🖥️ [ScreenShare] ⚠️ BFCP Hello handshake failed (may not be supported)", err,
 			"note", "Proceeding anyway - Hello/HelloAck is optional per RFC 8855")
-		// Don't fail - Hello is optional, server might only respond to FloorRequest
+		// Hello is optional, server might only respond to FloorRequest
 	} else {
 		s.log.Infow("🖥️ [ScreenShare] ✅ BFCP Hello handshake complete")
 	}
@@ -259,8 +259,7 @@ func (s *ScreenShareManager) requestFloorLocked(ctx context.Context) error {
 		"serverAddr", s.bfcpServerAddr,
 	)
 
-	// Request floor using real BFCP library
-	// beneficiaryID should match userID for requesting on behalf of self
+	// Request floor using BFCP library
 	requestID, err := s.bfcpClient.RequestFloor(s.bfcpFloorID, s.bfcpUserID, bfcp.PriorityNormal)
 	if err != nil {
 		s.log.Errorw("🖥️ [ScreenShare] [RequestFloor] ❌ Floor request failed", err)
@@ -273,10 +272,9 @@ func (s *ScreenShareManager) requestFloorLocked(ctx context.Context) error {
 		"requestID", requestID,
 	)
 
-	// Note: Floor grant will be handled by OnFloorGranted callback
-	// Don't set floorGranted here - wait for actual grant from server
+	// Floor grant will be handled by OnFloorGranted callback
 
-	s.log.Infow("🖥️ [ScreenShare] [RequestFloor] Exit - request pending (waiting for grant)")
+	s.log.Infow("🖥️ [ScreenShare] [RequestFloor] Request pending, waiting for grant")
 	return nil
 }
 
@@ -303,7 +301,7 @@ func (s *ScreenShareManager) releaseFloorLocked(ctx context.Context) error {
 		"requestID", s.bfcpRequestID,
 	)
 
-	// Release floor using real BFCP library
+	// Release floor using BFCP library
 	if err := s.bfcpClient.ReleaseFloor(s.bfcpFloorID); err != nil {
 		s.log.Errorw("🖥️ [ScreenShare] Floor release failed", err)
 		return fmt.Errorf("floor release failed: %w", err)
@@ -331,7 +329,7 @@ func (s *ScreenShareManager) OnScreenShareTrack(track *webrtc.TrackRemote, pub *
 	s.screenPub = pub
 	s.screenParticip = rp
 
-	// Start the screen share flow (no lock - we already hold it)
+	// Start the screen share flow
 	if err := s.startLocked(); err != nil {
 		return fmt.Errorf("failed to start screen share: %w", err)
 	}
@@ -347,96 +345,64 @@ func (s *ScreenShareManager) Start() error {
 }
 
 // startLocked is the internal implementation of Start without locking
-// PHASE 1: Trigger re-INVITE async, pipeline setup happens in Phase 2 after 200 OK
+// Triggers async re-INVITE; pipeline setup happens after 200 OK
 func (s *ScreenShareManager) startLocked() error {
 	if s.active {
 		s.log.Debugw("🖥️ [ScreenShare] Already active")
 		return nil
 	}
 
-	s.log.Infow("🖥️ [ScreenShare] ===== PHASE 1: Starting re-INVITE for screen share (async) =====")
+	s.log.Infow("🖥️ [ScreenShare] Starting re-INVITE for screen share (async)")
 
-	// Trigger re-INVITE to add screen share stream to SDP (async, non-blocking)
+	// Trigger re-INVITE to add screen share stream to SDP
 	s.log.Infow("🖥️ [ScreenShare] Sending SIP re-INVITE to add screen share m-line")
 	if s.onStartCallback != nil {
-		s.log.Infow("🖥️ [ScreenShare] Invoking re-INVITE callback (async, non-blocking)")
-		// Launch re-INVITE in background goroutine
-		// After 200 OK is received, inbound.go will call SetupPipelineAfterReInvite()
+		s.log.Infow("🖥️ [ScreenShare] Invoking re-INVITE callback (async)")
+		// Launch re-INVITE in background; SetupPipelineAfterReInvite called after 200 OK
 		go func() {
 			if err := s.onStartCallback(); err != nil {
 				s.log.Errorw("🖥️ [ScreenShare] ❌ re-INVITE callback failed", err)
 			} else {
-				s.log.Infow("🖥️ [ScreenShare] ✅ re-INVITE sent, waiting for 200 OK to trigger Phase 2")
+				s.log.Infow("🖥️ [ScreenShare] ✅ re-INVITE sent, waiting for 200 OK")
 			}
 		}()
-		s.log.Infow("🖥️ [ScreenShare] re-INVITE launched in background, not blocking track detection")
+		s.log.Infow("🖥️ [ScreenShare] re-INVITE launched in background")
 	} else {
 		s.log.Warnw("🖥️ [ScreenShare] ⚠️ No re-INVITE callback registered", nil)
 		return fmt.Errorf("no re-INVITE callback registered")
 	}
 
-	s.log.Infow("🖥️ [ScreenShare] ===== ✅ PHASE 1 complete (non-blocking): Waiting for 200 OK to trigger Phase 2 =====")
+	s.log.Infow("🖥️ [ScreenShare] ✅ re-INVITE initiated, waiting for 200 OK")
 	return nil
 }
 
-// SetupPipelineAfterReInvite is PHASE 2: Called after re-INVITE 200 OK with real port
-// This completes the screen share setup with actual destination port from SDP answer
+// SetupPipelineAfterReInvite completes screen share setup after re-INVITE 200 OK
+// Uses actual destination port from SDP answer
 func (s *ScreenShareManager) SetupPipelineAfterReInvite(media *sdpv2.SDPMedia) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.log.Infow("🖥️ [ScreenShare] ===== PHASE 2: Setting up pipeline after re-INVITE 200 OK =====",
+	s.log.Infow("🖥️ [ScreenShare] Setting up pipeline after re-INVITE 200 OK",
 		"rtpPort", media.Port,
 		"rtcpPort", media.RTCPPort)
 
-	// Request BFCP floor BEFORE setting up pipeline (Poly requires floor grant first)
+	// Request BFCP floor asynchronously (floor grant arrives via callback)
 	if s.bfcpClient != nil && s.bfcpClient.IsConnected() {
 		s.log.Infow("🖥️ [ScreenShare] Step 1/4: Requesting BFCP floor control")
 		ctx := context.Background()
 		if err := s.requestFloorLocked(ctx); err != nil {
 			s.log.Errorw("🖥️ [ScreenShare] ❌ Failed to request floor", err)
-			return fmt.Errorf("failed to request BFCP floor: %w", err)
+		} else {
+			s.log.Infow("🖥️ [ScreenShare] ✅ Floor request sent")
 		}
-
-		// Wait for floor grant (with timeout)
-		// IMPORTANT: Release lock while waiting to allow OnFloorGranted callback to run
-		s.log.Infow("🖥️ [ScreenShare] Waiting for floor grant from Poly...")
-		s.mu.Unlock()
-
-		grantTimeout := time.NewTimer(10 * time.Second)
-		defer grantTimeout.Stop()
-
-		checkInterval := time.NewTicker(100 * time.Millisecond)
-		defer checkInterval.Stop()
-
-		var floorGranted bool
-		for !floorGranted {
-			select {
-			case <-grantTimeout.C:
-				s.mu.Lock() // Re-acquire lock before returning
-				s.log.Errorw("🖥️ [ScreenShare] ❌ Timeout waiting for floor grant", nil)
-				return fmt.Errorf("timeout waiting for BFCP floor grant")
-			case <-checkInterval.C:
-				s.mu.Lock()
-				floorGranted = s.floorGranted
-				s.mu.Unlock()
-				if floorGranted {
-					s.log.Infow("🖥️ [ScreenShare] ✅ Floor granted! Proceeding with screen share setup")
-				}
-			}
-		}
-
-		s.mu.Lock() // Re-acquire lock to continue with pipeline setup
 	} else {
 		s.log.Warnw("🖥️ [ScreenShare] ⚠️ BFCP client not available, proceeding without floor control", nil)
 	}
 
 	// Setup GStreamer pipeline with codec from SDP answer
-	// Reuse video pipeline setup from video_pipeline.go (100% code reuse)
 	s.log.Infow("🖥️ [ScreenShare] Step 2/4: Setting up GStreamer pipeline")
 	if s.pipeline == nil {
-		// Create a temporary VideoManager-like structure to reuse SetupGstPipeline
-		// This reuses the exact same VP8→H264 transcoding pipeline as video
+		// Reuse video pipeline setup for VP8→H264 transcoding
 		vm := &VideoManager{
 			VideoIO:  s.VideoIO,
 			log:      s.log,
@@ -448,7 +414,7 @@ func (s *ScreenShareManager) SetupPipelineAfterReInvite(media *sdpv2.SDPMedia) e
 		}
 
 		s.pipeline = vm.pipeline
-		s.log.Infow("🖥️ [ScreenShare] ✅ GStreamer pipeline created using video_pipeline.go")
+		s.log.Infow("🖥️ [ScreenShare] ✅ GStreamer pipeline created")
 	} else {
 		s.log.Infow("🖥️ [ScreenShare] Pipeline already exists")
 	}
@@ -471,7 +437,7 @@ func (s *ScreenShareManager) SetupPipelineAfterReInvite(media *sdpv2.SDPMedia) e
 			_ = w.Close()
 		}
 
-		// Connect RTCP writer to send PLI/FIR back to WebRTC track sender
+		// Connect RTCP writer for PLI/FIR keyframe requests
 		rtcpWriter := NewParticipantRtcpWriter(s.screenParticip, s.screenTrack)
 		if w := s.webrtcRtcpOut.Swap(rtcpWriter); w != nil {
 			_ = w.Close()
@@ -483,34 +449,34 @@ func (s *ScreenShareManager) SetupPipelineAfterReInvite(media *sdpv2.SDPMedia) e
 		s.log.Warnw("🖥️ [ScreenShare] ⚠️ No screen share track available", nil)
 	}
 
-	// Connect UDP sockets with REAL destination port from SDP answer
-	s.log.Infow("🖥️ [ScreenShare] Connecting UDP sockets with real destination ports")
+	// Connect UDP sockets with destination port from SDP answer
+	s.log.Infow("🖥️ [ScreenShare] Connecting UDP sockets with destination ports")
 
-	// Set REAL UDP destination from SDP answer (not port 0!)
+	// Set UDP destination from SDP answer
 	rtpAddr := netip.AddrPortFrom(s.remote, media.Port)
 	s.rtpConn.SetDst(rtpAddr)
 	rtcpAddr := netip.AddrPortFrom(s.remote, media.RTCPPort)
 	s.rtcpConn.SetDst(rtcpAddr)
 
-	s.log.Infow("🖥️ [ScreenShare] ✅ Set REAL UDP destination from SDP answer",
+	s.log.Infow("🖥️ [ScreenShare] ✅ Set UDP destination from SDP answer",
 		"rtpDst", rtpAddr,
 		"rtcpDst", rtcpAddr)
 
-	// Connect SIP RTP output (GStreamer → UDP → Poly)
+	// Connect SIP RTP output (GStreamer → UDP → SIP device)
 	if w := s.sipRtpOut.Swap(s.rtpConn); w != nil {
 		s.log.Debugw("🖥️ [ScreenShare] Closing previous SIP RTP out writer")
 		_ = w.Close()
 	}
 	s.log.Infow("🖥️ [ScreenShare] ✅ SIP RTP output connected to UDP socket", "port", s.rtpConn.LocalAddr())
 
-	// Connect SIP RTCP output (for sending RTCP packets to Poly)
+	// Connect SIP RTCP output for sending RTCP packets
 	if w := s.sipRtcpOut.Swap(s.rtcpConn); w != nil {
 		s.log.Debugw("🖥️ [ScreenShare] Closing previous SIP RTCP out writer")
 		_ = w.Close()
 	}
 	s.log.Infow("🖥️ [ScreenShare] ✅ SIP RTCP output connected to UDP socket", "port", s.rtcpConn.LocalAddr())
 
-	// Connect SIP RTCP input (for receiving RTCP from Poly)
+	// Connect SIP RTCP input for receiving RTCP packets
 	if r := s.sipRtcpIn.Swap(s.rtcpConn); r != nil {
 		s.log.Debugw("🖥️ [ScreenShare] Closing previous SIP RTCP in reader")
 		_ = r.Close()
@@ -534,7 +500,7 @@ func (s *ScreenShareManager) SetupPipelineAfterReInvite(media *sdpv2.SDPMedia) e
 	// Request keyframe after pipeline is playing
 	if s.screenTrack != nil {
 		s.log.Infow("🖥️ [ScreenShare] Requesting initial keyframe from WebRTC")
-		// Send PLI (Picture Loss Indication) to request keyframe
+		// Send PLI to request keyframe
 		if s.webrtcRtcpOut != nil {
 			pli := &rtcp.PictureLossIndication{SenderSSRC: 0, MediaSSRC: 0}
 			if pliBytes, err := pli.Marshal(); err == nil {
@@ -546,7 +512,7 @@ func (s *ScreenShareManager) SetupPipelineAfterReInvite(media *sdpv2.SDPMedia) e
 	s.active = true
 	s.log.Infow("🖥️ [ScreenShare] Marked as active")
 
-	s.log.Infow("🖥️ [ScreenShare] ===== ✅ PHASE 2 complete: Screen share FULLY ACTIVE =====")
+	s.log.Infow("🖥️ [ScreenShare] ✅ Screen share fully active")
 	return nil
 }
 
@@ -587,10 +553,9 @@ func (s *ScreenShareManager) Stop() error {
 		_ = r.Close()
 	}
 
-	// Release BFCP floor (only needed for SIP→WebRTC, but keep for symmetry)
+	// Release BFCP floor
 	ctx := context.Background()
 	if err := s.releaseFloorLocked(ctx); err != nil {
-		// Don't log error if client not connected (expected for WebRTC→SIP)
 		if s.bfcpClient != nil && s.bfcpClient.IsConnected() {
 			s.log.Errorw("🖥️ [ScreenShare] Failed to release floor", err)
 		}
@@ -640,10 +605,9 @@ func (s *ScreenShareManager) Close() error {
 		return fmt.Errorf("failed to close video IO: %w", err)
 	}
 
-	// Close RTP connection with idempotency check to prevent double-close
+	// Close RTP connection
 	if s.rtpConn != nil {
 		if err := s.rtpConn.Close(); err != nil {
-			// Only log as debug if already closed, not as error
 			if !strings.Contains(err.Error(), "use of closed network connection") {
 				return fmt.Errorf("failed to close RTP connection: %w", err)
 			}
@@ -652,10 +616,9 @@ func (s *ScreenShareManager) Close() error {
 		s.rtpConn = nil
 	}
 
-	// Close RTCP connection with idempotency check to prevent double-close
+	// Close RTCP connection
 	if s.rtcpConn != nil {
 		if err := s.rtcpConn.Close(); err != nil {
-			// Only log as debug if already closed, not as error
 			if !strings.Contains(err.Error(), "use of closed network connection") {
 				return fmt.Errorf("failed to close RTCP connection: %w", err)
 			}

@@ -621,7 +621,7 @@ type inboundCall struct {
 	projectID   string
 	disp        CallDispatch // TODO: do we really need to store this?
 
-	// Phase 5.2: Store negotiated SDP for re-INVITE
+	// Store negotiated SDP for re-INVITE
 	mu          sync.Mutex
 	initialOffer *sdpv2.SDP // Original SDP offer from SIP device
 	initialAnswer *sdpv2.SDP // Our SDP answer
@@ -1035,9 +1035,9 @@ func (c *inboundCall) SetupVideo(conf *config.Config, offer *sdpv2.SDP, answerBu
 }
 
 func (c *inboundCall) SetupScreenShare(conf *config.Config, offer *sdpv2.SDP) error {
-	c.log.Infow("🖥️ [Inbound] [Phase4.2] Setting up screen share support")
+	c.log.Infow("🖥️ [Inbound] Setting up screen share support")
 
-	// Phase 4.1: Use BFCP server address from configuration
+	// Use BFCP server address from configuration
 	bfcpServerAddr := fmt.Sprintf("%s:%d", c.s.sconf.MediaIP, conf.BFCPPort)
 
 	ssm, err := NewScreenShareManager(
@@ -1057,14 +1057,13 @@ func (c *inboundCall) SetupScreenShare(conf *config.Config, offer *sdpv2.SDP) er
 		return fmt.Errorf("failed to create screen share manager: %w", err)
 	}
 
-	// Phase 4.2: Extract BFCP from SDP OFFER if present
+	// Extract BFCP from SDP offer if present
 	var conferenceID uint32 = 1
 	var userID uint16 = 1
-	// Hardcode FloorID to 2 for screen sharing (no dynamic floor management)
-	const floorID uint16 = 2
+	const floorID uint16 = 2 // FloorID for screen sharing
 
 	if offer.BFCP != nil {
-		c.log.Infow("🖥️ [Inbound] [Phase4.2] Parsed BFCP from SDP offer (FloorID hardcoded to 2)",
+		c.log.Infow("🖥️ [Inbound] Parsed BFCP from SDP offer",
 			"serverAddr", offer.BFCP.ConnectionIP.String()+":"+fmt.Sprintf("%d", offer.BFCP.Port),
 			"conferenceID", offer.BFCP.ConferenceID,
 			"userID", offer.BFCP.UserID,
@@ -1083,20 +1082,19 @@ func (c *inboundCall) SetupScreenShare(conf *config.Config, offer *sdpv2.SDP) er
 		if offer.BFCP.UserID > 0 {
 			userID = offer.BFCP.UserID
 		}
-		// FloorID is now hardcoded to 2 - ignore offer.BFCP.FloorID
+		// FloorID is hardcoded to 2 - ignore offer.BFCP.FloorID
 
-		// Phase 4.4: Handle SIP device pre-reserved floor
+		// Handle SIP device pre-reserved floor
 		if offer.BFCP.FloorCtrl == "c-s" || offer.BFCP.FloorCtrl == "c-only" {
-			// Mark this floor as reserved by the SIP device (e.g., Poly reserves Floor 1)
+			// Mark this floor as reserved by the SIP device
 			c.mu.Lock()
 			c.reservedFloors[floorID] = true
-			// Start our floor counter from the next available floor
 			if floorID >= c.nextFloorID {
 				c.nextFloorID = floorID + 1
 			}
 			c.mu.Unlock()
 
-			c.log.Infow("🖥️ [Inbound] [Phase4.2] SIP device pre-reserved floor (SIP→WebRTC)",
+			c.log.Infow("🖥️ [Inbound] SIP device pre-reserved floor (SIP→WebRTC)",
 				"reservedFloorID", floorID,
 				"floorCtrl", offer.BFCP.FloorCtrl,
 				"nextAvailableFloor", c.nextFloorID,
@@ -1104,29 +1102,26 @@ func (c *inboundCall) SetupScreenShare(conf *config.Config, offer *sdpv2.SDP) er
 			)
 		}
 	} else {
-		c.log.Infow("🖥️ [Inbound] [Phase4.2] No BFCP in SDP offer, using defaults",
+		c.log.Infow("🖥️ [Inbound] No BFCP in SDP offer, using defaults",
 			"conferenceID", conferenceID,
 			"userID", userID,
 			"floorID", floorID,
 		)
 	}
 
-	// Phase 4.3: Don't setup BFCP client yet - defer until re-INVITE
-	// BFCP negotiation happens in re-INVITE when screen share is activated (Phase 5)
-	c.log.Infow("🖥️ [Inbound] [Phase4.2] BFCP client ready (will connect during re-INVITE)",
+	// BFCP client setup deferred until re-INVITE when screen share is activated
+	c.log.Infow("🖥️ [Inbound] BFCP client ready (will connect during re-INVITE)",
 		"serverAddr", bfcpServerAddr,
 		"conferenceID", conferenceID,
 		"userID", userID,
 		"floorID", floorID,
 		"note", "BFCP connection deferred to screen share activation",
 	)
-	// Don't call ssm.SetupBFCP() yet - will be done in Phase 5 re-INVITE
 
-	// Store the screen share manager in the room so it can be called directly
-	// from participantVideoTrackSubscribed where we have access to track, pub, rp
+	// Store screen share manager in room for access from participantVideoTrackSubscribed
 	c.lkRoom.SetScreenShareManager(ssm)
 
-	// Register re-INVITE callbacks (Phase 5)
+	// Register re-INVITE callbacks
 	ssm.SetOnStartCallback(func() error {
 		c.log.Infow("🖥️ [Inbound] Screen share started - re-INVITE needed")
 		return c.sendScreenShareReInvite(true)
@@ -1143,13 +1138,13 @@ func (c *inboundCall) SetupScreenShare(conf *config.Config, offer *sdpv2.SDP) er
 }
 
 // buildBFCPAnswer constructs BFCP SDP answer as the BFCP server
-// Phase 4.3: Build BFCP SDP answer as server
+// buildBFCPAnswer builds BFCP SDP answer as server
 func (c *inboundCall) buildBFCPAnswer(offerBFCP *sdpv2.BFCPMedia, conf *config.Config) *sdpv2.BFCPMedia {
 	bfcpAnswer := &sdpv2.BFCPMedia{
-		// Phase 4.3: Port 0 means disabled initially - will be activated in re-INVITE (Phase 5)
+		// Port 0 means disabled initially - will be activated in re-INVITE
 		Port:         0,
 		ConnectionIP: c.s.sconf.MediaIP,
-		// Phase 4.3: We are the BFCP server (server-only mode)
+		// We are the BFCP server (server-only mode)
 		FloorCtrl: "s-only",
 		// Use same conference/user IDs from offer
 		ConferenceID: offerBFCP.ConferenceID,
@@ -1157,9 +1152,9 @@ func (c *inboundCall) buildBFCPAnswer(offerBFCP *sdpv2.BFCPMedia, conf *config.C
 		// Acknowledge the floor from offer
 		FloorID:     offerBFCP.FloorID,
 		MediaStream: offerBFCP.MediaStream,
-		// Phase 4.3: Setup role - we are passive (server), client connects to us
+		// Setup role - we are passive (server), client connects to us
 		Setup: "passive",
-		// Phase 4.3: Connection mode - new connection
+		// Connection mode - new connection
 		Connection:  "new",
 		Attributes:  make(map[string]string),
 	}
@@ -1169,14 +1164,17 @@ func (c *inboundCall) buildBFCPAnswer(offerBFCP *sdpv2.BFCPMedia, conf *config.C
 
 // allocateFloor dynamically allocates the next available BFCP floor ID
 // This avoids conflicts with floors reserved by the SIP device (e.g., Poly reserves Floor 1)
-func (c *inboundCall) allocateFloor() uint16 {
+func (c *inboundCall) allocateFloor() (uint16, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	const maxAttempts = 65536 // Max uint16 value + 1
+	startFloorID := c.nextFloorID
+
 	// Find next available floor (skip reserved floors)
-	for {
+	for attempts := 0; attempts < maxAttempts; attempts++ {
 		floorID := c.nextFloorID
-		c.nextFloorID++ // Increment for next allocation
+		c.nextFloorID++ // Increment for next allocation (wraps at 65536)
 
 		// Check if this floor is reserved by SIP device
 		if !c.reservedFloors[floorID] {
@@ -1184,22 +1182,36 @@ func (c *inboundCall) allocateFloor() uint16 {
 			c.reservedFloors[floorID] = true
 			c.log.Infow("🖥️ [BFCP] Floor allocated dynamically",
 				"allocatedFloorID", floorID,
-				"nextFloorID", c.nextFloorID)
-			return floorID
+				"nextFloorID", c.nextFloorID,
+				"attempts", attempts+1)
+			return floorID, nil
 		}
 
 		// This floor is reserved, try next one
 		c.log.Debugw("🖥️ [BFCP] Floor already reserved, skipping",
 			"skippedFloorID", floorID,
 			"tryingNext", c.nextFloorID)
+
+		// Check if we've wrapped around completely
+		if c.nextFloorID == startFloorID && attempts > 0 {
+			c.log.Errorw("🖥️ [BFCP] All floor IDs exhausted (wrapped around)", nil,
+				"startFloorID", startFloorID,
+				"attempts", attempts)
+			return 0, fmt.Errorf("no available floor IDs: all %d floors reserved", len(c.reservedFloors))
+		}
 	}
+
+	// Should never reach here, but safeguard
+	c.log.Errorw("🖥️ [BFCP] Floor allocation failed after max attempts", nil,
+		"maxAttempts", maxAttempts,
+		"reservedCount", len(c.reservedFloors))
+	return 0, fmt.Errorf("floor allocation failed: exceeded max attempts %d", maxAttempts)
 }
 
 // sendScreenShareReInvite sends a SIP re-INVITE to add or remove screen share stream
-// This is a stub for Phase 5 implementation
-// Phase 5.2-5.4: Build SDP for re-INVITE with optional screen share and BFCP
+// buildReInviteSDP builds SDP for re-INVITE with optional screen share and BFCP
 func (c *inboundCall) buildReInviteSDP(includeScreenShare bool) (*sdpv2.SDP, error) {
-	c.log.Infow("🖥️ [re-INVITE] [Phase5.2] Building SDP", "includeScreenShare", includeScreenShare)
+	c.log.Infow("🖥️ [re-INVITE] Building SDP", "includeScreenShare", includeScreenShare)
 
 	c.mu.Lock()
 	initialAnswer := c.initialAnswer
@@ -1207,18 +1219,18 @@ func (c *inboundCall) buildReInviteSDP(includeScreenShare bool) (*sdpv2.SDP, err
 	c.mu.Unlock()
 
 	if initialAnswer == nil {
-		c.log.Errorw("🖥️ [re-INVITE] [Phase5.2] No initial answer stored!", nil)
+		c.log.Errorw("🖥️ [re-INVITE] No initial answer stored!", nil)
 		return nil, fmt.Errorf("no initial answer stored - call not established")
 	}
 
-	c.log.Infow("🖥️ [re-INVITE] [Phase5.2] Initial answer state",
+	c.log.Infow("🖥️ [re-INVITE] Initial answer state",
 		"hasAudio", initialAnswer.Audio != nil,
 		"hasVideo", initialAnswer.Video != nil,
 		"hasBFCP", initialAnswer.BFCP != nil,
 		"addr", initialAnswer.Addr)
 
 	if initialOffer != nil {
-		c.log.Infow("🖥️ [re-INVITE] [Phase5.2] Initial offer state (from SIP device)",
+		c.log.Infow("🖥️ [re-INVITE] Initial offer state (from SIP device)",
 			"hasAudio", initialOffer.Audio != nil,
 			"hasVideo", initialOffer.Video != nil,
 			"hasBFCP", initialOffer.BFCP != nil,
@@ -1230,31 +1242,31 @@ func (c *inboundCall) buildReInviteSDP(includeScreenShare bool) (*sdpv2.SDP, err
 			}())
 	}
 
-	// Phase 5.2: Clone the initial answer and modify it
-	c.log.Infow("🖥️ [re-INVITE] [Phase5.2] Cloning initial answer for modification")
+	// Clone the initial answer and modify it
+	c.log.Infow("🖥️ [re-INVITE] Cloning initial answer for modification")
 	builder := initialAnswer.Clone().Builder()
 	builder.SetAddress(c.s.sconf.MediaIP)
 
-	// Phase 5.2: Audio is already in the builder from the clone - just update ports if needed
-	c.log.Infow("🖥️ [re-INVITE] [Phase5.2] Audio from initial answer",
+	// Audio is already in the builder from the clone
+	c.log.Infow("🖥️ [re-INVITE] Audio from initial answer",
 		"hasAudio", initialAnswer.Audio != nil)
 
-	// Phase 5.2: Video (camera) is also already in the builder from the clone
+	// Video (camera) is also already in the builder from the clone
 	if initialAnswer.Video != nil {
-		c.log.Infow("🖥️ [re-INVITE] [Phase5.2] Camera video from initial answer",
+		c.log.Infow("🖥️ [re-INVITE] Camera video from initial answer",
 			"codec", initialAnswer.Video.Codec.Name,
 			"port", initialAnswer.Video.Port)
 	}
 
-	// Phase 5.3: Add screen share video m-line (if requested)
+	// Add screen share video m-line (if requested)
 	if includeScreenShare && c.screenShare != nil {
-		c.log.Infow("🖥️ [re-INVITE] [Phase5.3] Adding screen share video m-line")
+		c.log.Infow("🖥️ [re-INVITE] Adding screen share video m-line")
 
 		// Get screen share UDP ports
 		rtpAddr := c.screenShare.rtpConn.LocalAddr().(*net.UDPAddr)
 		rtcpAddr := c.screenShare.rtcpConn.LocalAddr().(*net.UDPAddr)
 
-		c.log.Infow("🖥️ [re-INVITE] [Phase5.3] Screen share ports",
+		c.log.Infow("🖥️ [re-INVITE] Screen share ports",
 			"rtpPort", rtpAddr.Port,
 			"rtcpPort", rtcpAddr.Port)
 
@@ -1274,15 +1286,19 @@ func (c *inboundCall) buildReInviteSDP(includeScreenShare bool) (*sdpv2.SDP, err
 			return b.Build()
 		})
 
-		c.log.Infow("🖥️ [re-INVITE] [Phase5.3] ✅ Screen share video added")
+		c.log.Infow("🖥️ [re-INVITE] ✅ Screen share video added")
 	}
 
-	// Phase 5.4: Add BFCP m-line (if screen share is included and we have BFCP params)
+	// Add BFCP m-line (if screen share is included and we have BFCP params)
 	if includeScreenShare && c.screenShare != nil && initialOffer != nil && initialOffer.BFCP != nil {
-		c.log.Infow("🖥️ [re-INVITE] [Phase5.4] Adding BFCP m-line as s-only server")
+		c.log.Infow("🖥️ [re-INVITE] Adding BFCP m-line as s-only server")
 
 		// Dynamically allocate floor to avoid conflicts with SIP device reservations
-		allocatedFloorID := c.allocateFloor()
+		allocatedFloorID, err := c.allocateFloor()
+		if err != nil {
+			c.log.Errorw("🖥️ [re-INVITE] Failed to allocate floor ID", err)
+			return nil, fmt.Errorf("failed to allocate BFCP floor: %w", err)
+		}
 
 		// Build BFCP media section - activating BFCP by advertising port 5070
 		bfcpMedia := &sdpv2.BFCPMedia{
@@ -1299,7 +1315,7 @@ func (c *inboundCall) buildReInviteSDP(includeScreenShare bool) (*sdpv2.SDP, err
 
 		builder.SetBFCP(bfcpMedia)
 
-		c.log.Infow("🖥️ [re-INVITE] [Phase5.4] ✅ BFCP m-line added",
+		c.log.Infow("🖥️ [re-INVITE] ✅ BFCP m-line added",
 			"port", bfcpMedia.Port,
 			"conferenceID", bfcpMedia.ConferenceID,
 			"userID", bfcpMedia.UserID,
@@ -1312,7 +1328,7 @@ func (c *inboundCall) buildReInviteSDP(includeScreenShare bool) (*sdpv2.SDP, err
 		return nil, fmt.Errorf("failed to build SDP: %w", err)
 	}
 
-	c.log.Infow("🖥️ [re-INVITE] [Phase5.2] SDP built successfully")
+	c.log.Infow("🖥️ [re-INVITE] SDP built successfully")
 	return sdp, nil
 }
 
@@ -1325,7 +1341,7 @@ func (c *inboundCall) sendScreenShareReInvite(addScreenShare bool) error {
 		return nil
 	}
 
-	// Phase 5.2: Build SDP
+	// Build SDP
 	sdp, err := c.buildReInviteSDP(addScreenShare)
 	if err != nil {
 		c.log.Errorw("🖥️ [re-INVITE] Failed to build SDP", err)
@@ -1337,15 +1353,15 @@ func (c *inboundCall) sendScreenShareReInvite(addScreenShare bool) error {
 		return fmt.Errorf("failed to marshal SDP: %w", err)
 	}
 
-	c.log.Infow("🖥️ [re-INVITE] [Phase5.5] SDP ready",
+	c.log.Infow("🖥️ [re-INVITE] SDP ready",
 		"size", len(sdpBytes),
 		"hasCamera", sdp.Video != nil,
 		"hasScreenShare", sdp.ScreenShareVideo != nil,
 		"hasBFCP", sdp.BFCP != nil,
 		"sdp", string(sdpBytes))
 
-	// Phase 5.5: Create INVITE request
-	c.log.Infow("🖥️ [re-INVITE] [Phase5.5] Creating INVITE request")
+	// Create INVITE request
+	c.log.Infow("🖥️ [re-INVITE] Creating INVITE request")
 
 	// Check again if call is still active (race condition protection)
 	if c.cc == nil || c.cc.invite == nil || c.cc.inviteOk == nil {
@@ -1354,7 +1370,7 @@ func (c *inboundCall) sendScreenShareReInvite(addScreenShare bool) error {
 	}
 
 	// Log original dialog state for comparison
-	c.log.Debugw("🖥️ [re-INVITE] [Phase5.5] Original dialog state",
+	c.log.Debugw("🖥️ [re-INVITE] Original dialog state",
 		"originalFrom", c.cc.invite.From(),
 		"originalTo", c.cc.invite.To(),
 		"responseFrom", c.cc.inviteOk.From(),
@@ -1404,30 +1420,26 @@ func (c *inboundCall) sendScreenShareReInvite(addScreenShare bool) error {
 	// Record-Route headers in the initial INVITE's 200 OK response
 	recordRouteHeaders := c.cc.inviteOk.GetHeaders("Record-Route")
 	if len(recordRouteHeaders) > 0 {
-		c.log.Infow("🖥️ [re-INVITE] [Phase5.5] Building Route headers from Record-Route",
+		c.log.Infow("🖥️ [re-INVITE] Building Route headers from Record-Route",
 			"numRecordRoutes", len(recordRouteHeaders))
 
-		// Record-Route headers must be added in REVERSE order as Route headers
-		// This is per RFC 3261 Section 12.2.1.1
+		// Record-Route headers must be added in reverse order as Route headers (RFC 3261 Section 12.2.1.1)
 		for i := len(recordRouteHeaders) - 1; i >= 0; i-- {
-			// Convert Record-Route to Route by changing the header name
 			rrHeader := recordRouteHeaders[i]
 			routeHeader := sip.NewHeader("Route", rrHeader.Value())
 			req.AppendHeader(routeHeader)
-			c.log.Debugw("🖥️ [re-INVITE] [Phase5.5] Route header added",
+			c.log.Debugw("🖥️ [re-INVITE] Route header added",
 				"index", i,
 				"route", routeHeader.Value())
 		}
-		c.log.Infow("🖥️ [re-INVITE] [Phase5.5] ✅ Route headers built successfully",
+		c.log.Infow("🖥️ [re-INVITE] ✅ Route headers built successfully",
 			"numRoutes", len(req.GetHeaders("Route")))
 	} else {
-		// WORKAROUND: If no Record-Route headers exist (proxy didn't add them),
-		// but we know the call came through a proxy, manually add Route header
-		// Parse the Via header to determine the actual proxy address and port
+		// If no Record-Route headers exist, extract proxy from Via header
 		viaHeaders := c.cc.invite.GetHeaders("Via")
 		if len(viaHeaders) > 0 {
 			firstVia := viaHeaders[0].Value()
-			c.log.Infow("🖥️ [re-INVITE] [Phase5.5] No Record-Route, extracting proxy from Via header",
+			c.log.Infow("🖥️ [re-INVITE] No Record-Route, extracting proxy from Via header",
 				"via", firstVia,
 				"inviteSource", c.cc.invite.Source())
 
@@ -1449,16 +1461,16 @@ func (c *inboundCall) sendScreenShareReInvite(addScreenShare bool) error {
 				routeValue := fmt.Sprintf("<sip:%s;transport=%s;lr>", sentBy, transport)
 				routeHeader := sip.NewHeader("Route", routeValue)
 				req.AppendHeader(routeHeader)
-				c.log.Infow("🖥️ [re-INVITE] [Phase5.5] ✅ Route header added from Via (proxy routing)",
+				c.log.Infow("🖥️ [re-INVITE] ✅ Route header added from Via (proxy routing)",
 					"route", routeValue,
 					"proxyAddr", sentBy,
 					"transport", transport)
 			} else {
-				c.log.Warnw("🖥️ [re-INVITE] [Phase5.5] Cannot parse Via header", nil,
+				c.log.Warnw("🖥️ [re-INVITE] Cannot parse Via header", nil,
 					"via", firstVia)
 			}
 		} else {
-			c.log.Warnw("🖥️ [re-INVITE] [Phase5.5] No Record-Route and no Via - direct routing (no proxy)", nil)
+			c.log.Warnw("🖥️ [re-INVITE] No Record-Route and no Via - direct routing (no proxy)", nil)
 		}
 	}
 
@@ -1486,20 +1498,20 @@ func (c *inboundCall) sendScreenShareReInvite(addScreenShare bool) error {
 	}
 	req.SetDestination(dest)
 
-	c.log.Infow("🖥️ [re-INVITE] [Phase5.5] Sending INVITE",
+	c.log.Infow("🖥️ [re-INVITE] Sending INVITE",
 		"cseq", c.cc.nextRequestCSeq,
 		"from", req.From(),
 		"to", req.To(),
 		"callID", req.CallID())
 
-	c.log.Debugw("🖥️ [re-INVITE] [Phase5.5] Full INVITE request",
+	c.log.Debugw("🖥️ [re-INVITE] Full INVITE request",
 		"request", req.String())
 
-	// Phase 5.5: Create transaction and send (with response handling)
-	c.log.Infow("🖥️ [re-INVITE] [Phase5.5] Creating transaction for re-INVITE")
+	// Create transaction and send
+	c.log.Infow("🖥️ [re-INVITE] Creating transaction for re-INVITE")
 
 	// Log connection state before creating transaction
-	c.log.Infow("🖥️ [re-INVITE] [Phase5.5] Connection state",
+	c.log.Infow("🖥️ [re-INVITE] Connection state",
 		"inviteSource", c.cc.invite.Source(),
 		"inviteDest", c.cc.invite.Destination(),
 		"inviteOkSource", c.cc.inviteOk.Source(),
@@ -1512,65 +1524,88 @@ func (c *inboundCall) sendScreenShareReInvite(addScreenShare bool) error {
 		c.log.Errorw("🖥️ [re-INVITE] Failed to create transaction", err)
 		return fmt.Errorf("failed to create transaction: %w", err)
 	}
-	// DO NOT defer tx.Terminate() here!
-	// For INVITE transactions, we must send ACK BEFORE terminating
+	// Do not defer tx.Terminate() - INVITE transactions must send ACK before terminating
 	// Termination happens after ACK is sent in handleReInviteResponse()
 
-	c.log.Infow("🖥️ [re-INVITE] [Phase5.5] Transaction created successfully")
-	c.log.Infow("🖥️ [re-INVITE] [Phase5.5] 🔍 CRITICAL: Check if new TCP connection was created (watch for 'Dialing' in logs)")
-	c.log.Infow("🖥️ [re-INVITE] [Phase5.5] Waiting for response...")
+	c.log.Infow("🖥️ [re-INVITE] Transaction created successfully")
+	c.log.Infow("🖥️ [re-INVITE] 🔍 Check if new TCP connection was created (watch for 'Dialing' in logs)")
 
-	// Phase 5.6: Wait for response (with timeout)
-	ctx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
-	defer cancel()
+	// Handle response asynchronously to avoid blocking camera video
+	c.log.Infow("🖥️ [re-INVITE] Launching async response handler - returning immediately")
 
-	resp, err := c.waitForReInviteResponse(ctx, tx)
-	if err != nil {
-		c.log.Errorw("🖥️ [re-INVITE] Failed to get response", err)
-		tx.Terminate() // Clean up transaction on error
-		return err
-	}
+	go func() {
+		// Wait for response (with timeout) in background goroutine
+		ctx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
+		defer cancel()
 
-	c.log.Infow("🖥️ [re-INVITE] [Phase5.6] Received response",
-		"status", resp.StatusCode,
-		"reason", resp.Reason,
-		"bodyLen", len(resp.Body()))
+		c.log.Infow("🖥️ [re-INVITE] [Async] Waiting for response...")
 
-	if resp.StatusCode != 200 {
-		c.log.Errorw("🖥️ [re-INVITE] ❌ Non-200 response",
-			nil,
+		resp, err := c.waitForReInviteResponse(ctx, tx)
+		if err != nil {
+			c.log.Errorw("🖥️ [re-INVITE] [Async] Failed to get response", err)
+			tx.Terminate() // Clean up transaction on error
+			return
+		}
+
+		c.log.Infow("🖥️ [re-INVITE] [Async] Received response",
 			"status", resp.StatusCode,
 			"reason", resp.Reason,
-			"responseHeaders", resp.String())
-		tx.Terminate() // Clean up transaction on non-200 response
-		return fmt.Errorf("re-INVITE failed: %d %s", resp.StatusCode, resp.Reason)
-	}
+			"bodyLen", len(resp.Body()))
 
-	// Phase 5.7-5.9: Handle response (includes sending ACK and terminating transaction)
-	return c.handleReInviteResponse(req, resp, addScreenShare, tx)
+		if resp.StatusCode != 200 {
+			c.log.Errorw("🖥️ [re-INVITE] [Async] ❌ Non-200 response",
+				nil,
+				"status", resp.StatusCode,
+				"reason", resp.Reason,
+				"responseHeaders", resp.String())
+			tx.Terminate()
+			return
+		}
+
+		// CRITICAL SAFETY CHECK: Verify call is still active before handling response
+		// This prevents crashes if call closed while waiting for 200 OK
+		if c.done.Load() {
+			c.log.Infow("🖥️ [re-INVITE] [Async] Call closed during re-INVITE, aborting response handling")
+			tx.Terminate()
+			return
+		}
+
+		// Check if connection is still valid
+		if c.cc == nil {
+			c.log.Errorw("🖥️ [re-INVITE] [Async] Connection closed, cannot handle response", nil)
+			tx.Terminate()
+			return
+		}
+
+		// Handle response (includes sending ACK and terminating transaction)
+		if err := c.handleReInviteResponse(req, resp, addScreenShare, tx); err != nil {
+			c.log.Errorw("🖥️ [re-INVITE] [Async] Failed to handle response", err)
+		}
+	}()
+
+	// Return immediately - response handling continues in background
+	c.log.Infow("🖥️ [re-INVITE] ✅ re-INVITE sent asynchronously, not blocking caller")
+	return nil
 }
 
-// Phase 5.6: Wait for response from re-INVITE transaction
+// waitForReInviteResponse waits for response from re-INVITE transaction
 func (c *inboundCall) waitForReInviteResponse(ctx context.Context, tx sip.ClientTransaction) (*sip.Response, error) {
-	c.log.Infow("🖥️ [re-INVITE] [Phase5.6] Entering response wait loop")
+	c.log.Infow("🖥️ [re-INVITE] Entering response wait loop")
 
 	for {
 		select {
 		case <-ctx.Done():
-			c.log.Errorw("🖥️ [re-INVITE] [Phase5.6] ⏰ Timeout waiting for response", nil)
+			c.log.Errorw("🖥️ [re-INVITE] ⏰ Timeout waiting for response", nil)
 			tx.Cancel()
 			return nil, fmt.Errorf("timeout waiting for re-INVITE response")
-		// IMPORTANT: Do NOT check tx.Done() for INVITE transactions!
-		// INVITE uses 3-way handshake (INVITE → 200 OK → ACK)
-		// The transaction must stay alive until ACK is sent, so tx.Done() closes AFTER we get 200 OK
-		// If we wait for tx.Done() here, we'll never be able to send the ACK
+		// Do not check tx.Done() for INVITE transactions - transaction must stay alive until ACK is sent
 		case resp := <-tx.Responses():
 			if resp == nil {
-				c.log.Errorw("🖥️ [re-INVITE] [Phase5.6] ❌ Response channel closed (transaction failed)", nil)
+				c.log.Errorw("🖥️ [re-INVITE] ❌ Response channel closed (transaction failed)", nil)
 				return nil, fmt.Errorf("re-INVITE transaction failed: response channel closed")
 			}
 
-			c.log.Infow("🖥️ [re-INVITE] [Phase5.6] Response received from channel",
+			c.log.Infow("🖥️ [re-INVITE] Response received from channel",
 				"status", resp.StatusCode,
 				"reason", resp.Reason,
 				"from", resp.From(),
@@ -1578,28 +1613,28 @@ func (c *inboundCall) waitForReInviteResponse(ctx context.Context, tx sip.Client
 				"callID", resp.CallID())
 
 			if resp.StatusCode >= 200 {
-				c.log.Infow("🖥️ [re-INVITE] [Phase5.6] ✅ Final response received",
+				c.log.Infow("🖥️ [re-INVITE] ✅ Final response received",
 					"status", resp.StatusCode,
 					"reason", resp.Reason)
-				return resp, nil // Final response - ACK will be sent in handleReInviteResponse()
+				return resp, nil
 			}
 			// Log 1xx provisional responses
-			c.log.Infow("🖥️ [re-INVITE] [Phase5.6] 📞 Provisional response (continuing...)",
+			c.log.Infow("🖥️ [re-INVITE] 📞 Provisional response (continuing...)",
 				"status", resp.StatusCode,
 				"reason", resp.Reason)
 		}
 	}
 }
 
-// Phase 5.7-5.9: Handle re-INVITE response
+// handleReInviteResponse processes re-INVITE response
 func (c *inboundCall) handleReInviteResponse(req *sip.Request, resp *sip.Response, addScreenShare bool, tx sip.ClientTransaction) error {
-	c.log.Infow("🖥️ [re-INVITE] [Phase5.7] Handling response",
+	c.log.Infow("🖥️ [re-INVITE] Handling response",
 		"status", resp.StatusCode,
 		"addScreenShare", addScreenShare)
 
-	// Ensure transaction is terminated when we're done (after ACK is sent)
+	// Ensure transaction is terminated after ACK is sent
 	defer func() {
-		c.log.Infow("🖥️ [re-INVITE] [Phase5.9] Terminating transaction after ACK")
+		c.log.Infow("🖥️ [re-INVITE] Terminating transaction after ACK")
 		tx.Terminate()
 	}()
 
@@ -1612,11 +1647,11 @@ func (c *inboundCall) handleReInviteResponse(req *sip.Request, resp *sip.Respons
 		return fmt.Errorf("re-INVITE failed: %d %s", resp.StatusCode, resp.Reason)
 	}
 
-	c.log.Infow("🖥️ [re-INVITE] [Phase5.7] ✅ 200 OK received, parsing SDP answer")
-	c.log.Debugw("🖥️ [re-INVITE] [Phase5.7] Raw SDP body",
+	c.log.Infow("🖥️ [re-INVITE] ✅ 200 OK received, parsing SDP answer")
+	c.log.Debugw("🖥️ [re-INVITE] Raw SDP body",
 		"sdp", string(resp.Body()))
 
-	// Phase 5.7: Parse SDP from 200 OK
+	// Parse SDP from 200 OK
 	sdp, err := sdpv2.NewSDP(resp.Body())
 	if err != nil {
 		c.log.Errorw("🖥️ [re-INVITE] Failed to parse SDP", err,
@@ -1624,7 +1659,7 @@ func (c *inboundCall) handleReInviteResponse(req *sip.Request, resp *sip.Respons
 		return fmt.Errorf("failed to parse SDP: %w", err)
 	}
 
-	c.log.Infow("🖥️ [re-INVITE] [Phase5.7] ✅ SDP parsed successfully",
+	c.log.Infow("🖥️ [re-INVITE] ✅ SDP parsed successfully",
 		"hasAudio", sdp.Audio != nil,
 		"hasVideo", sdp.Video != nil,
 		"hasBFCP", sdp.BFCP != nil,
@@ -1635,7 +1670,7 @@ func (c *inboundCall) handleReInviteResponse(req *sip.Request, resp *sip.Respons
 		if sdp.Audio.Codec != nil {
 			payloadType = sdp.Audio.Codec.PayloadType
 		}
-		c.log.Infow("🖥️ [re-INVITE] [Phase5.7] Audio in SDP",
+		c.log.Infow("🖥️ [re-INVITE] Audio in SDP",
 			"port", sdp.Audio.Port,
 			"payloadType", payloadType,
 			"numCodecs", len(sdp.Audio.Codecs))
@@ -1645,14 +1680,14 @@ func (c *inboundCall) handleReInviteResponse(req *sip.Request, resp *sip.Respons
 		if sdp.Video.Codec != nil {
 			payloadType = sdp.Video.Codec.PayloadType
 		}
-		c.log.Infow("🖥️ [re-INVITE] [Phase5.7] Video in SDP",
+		c.log.Infow("🖥️ [re-INVITE] Video in SDP",
 			"port", sdp.Video.Port,
 			"rtcpPort", sdp.Video.RTCPPort,
 			"payloadType", payloadType,
 			"numCodecs", len(sdp.Video.Codecs))
 	}
 	if sdp.BFCP != nil {
-		c.log.Infow("🖥️ [re-INVITE] [Phase5.7] BFCP in SDP",
+		c.log.Infow("🖥️ [re-INVITE] BFCP in SDP",
 			"port", sdp.BFCP.Port,
 			"connectionIP", sdp.BFCP.ConnectionIP,
 			"floorCtrl", sdp.BFCP.FloorCtrl,
@@ -1661,13 +1696,13 @@ func (c *inboundCall) handleReInviteResponse(req *sip.Request, resp *sip.Respons
 			"floorID", sdp.BFCP.FloorID)
 	}
 
-	// Phase 5.7.1: Extract and select screen share codec if present
+	// Extract and select screen share codec if present
 	if sdp.ScreenShareVideo != nil {
 		payloadType := uint8(0)
 		if sdp.ScreenShareVideo.Codec != nil {
 			payloadType = sdp.ScreenShareVideo.Codec.PayloadType
 		}
-		c.log.Infow("🖥️ [re-INVITE] [Phase5.7] Screen share video in answer (before codec selection)",
+		c.log.Infow("🖥️ [re-INVITE] Screen share video in answer (before codec selection)",
 			"port", sdp.ScreenShareVideo.Port,
 			"rtcpPort", sdp.ScreenShareVideo.RTCPPort,
 			"payloadType", payloadType,
@@ -1675,83 +1710,76 @@ func (c *inboundCall) handleReInviteResponse(req *sip.Request, resp *sip.Respons
 
 		// Select codec from available codecs in answer
 		if err := sdp.ScreenShareVideo.SelectCodec(); err != nil {
-			c.log.Errorw("🖥️ [re-INVITE] [Phase5.7] ❌ Failed to select screen share codec", err)
+			c.log.Errorw("🖥️ [re-INVITE] ❌ Failed to select screen share codec", err)
 			return fmt.Errorf("screen share codec selection failed: %w", err)
 		}
 
 		if sdp.ScreenShareVideo.Codec != nil {
-			c.log.Infow("🖥️ [re-INVITE] [Phase5.7] ✅ Screen share codec selected",
+			c.log.Infow("🖥️ [re-INVITE] ✅ Screen share codec selected",
 				"codec", sdp.ScreenShareVideo.Codec.Name,
 				"payloadType", sdp.ScreenShareVideo.Codec.PayloadType)
 		} else {
-			c.log.Warnw("🖥️ [re-INVITE] [Phase5.7] ⚠️ No codec selected for screen share", nil)
+			c.log.Warnw("🖥️ [re-INVITE] ⚠️ No codec selected for screen share", nil)
 		}
 	}
 
-	// Phase 5.7.1: Initialize ScreenShareManager's BFCP client BEFORE pipeline setup
-	// This must happen before updateScreenShareConnections() which calls SetupPipelineAfterReInvite()
-	// because the pipeline setup checks if bfcpClient is available
+	// Initialize ScreenShareManager's BFCP client before pipeline setup
 	if addScreenShare && sdp.BFCP != nil {
-		// Hardcode FloorID to 2 for screen sharing (no dynamic floor management)
-		const floorID = uint16(2)
-		// Virtual sharer userID must be DIFFERENT from controller userID
+		const floorID = uint16(2) // FloorID for screen sharing
+		// Virtual sharer userID must be different from controller userID
 		controllerUserID := c.initialOffer.BFCP.UserID
 		sharerUserID := controllerUserID + 1
 
 		serverAddr := fmt.Sprintf("%s:%d", c.s.sconf.MediaIP, c.s.conf.BFCPPort)
-		// Use conferenceID from initial offer, NOT from 200 OK response (which may be 0)
+		// Use conferenceID from initial offer (not from 200 OK which may be 0)
 		conferenceID := c.initialOffer.BFCP.ConferenceID
 
-		c.log.Infow("🖥️ [re-INVITE] [Phase5.7.1] Setting up ScreenShareManager BFCP client (before pipeline)",
+		c.log.Infow("🖥️ [re-INVITE] Setting up ScreenShareManager BFCP client (before pipeline)",
 			"serverAddr", serverAddr,
 			"conferenceID", conferenceID,
 			"sharerUserID", sharerUserID,
 			"floorID", floorID)
 
 		if err := c.screenShare.SetupBFCP(context.Background(), serverAddr, conferenceID, sharerUserID, floorID); err != nil {
-			c.log.Errorw("🖥️ [re-INVITE] [Phase5.7.1] ❌ Failed to setup BFCP client", err)
+			c.log.Errorw("🖥️ [re-INVITE] ❌ Failed to setup BFCP client", err)
 			return fmt.Errorf("failed to setup BFCP client: %w", err)
 		}
 
-		c.log.Infow("🖥️ [re-INVITE] [Phase5.7.1] ✅ ScreenShareManager BFCP client initialized")
+		c.log.Infow("🖥️ [re-INVITE] ✅ ScreenShareManager BFCP client initialized")
 	}
 
-	// Phase 5.8: Update screen share connections if needed
+	// Update screen share connections if needed
 	if addScreenShare {
 		if err := c.updateScreenShareConnections(sdp); err != nil {
 			c.log.Errorw("🖥️ [re-INVITE] Failed to update connections", err)
-			// Continue to send ACK even if connection update fails
 		}
 	}
 
-	// Phase 5.9: Send ACK to complete transaction
-	c.log.Infow("🖥️ [re-INVITE] [Phase5.9] Sending ACK")
+	// Send ACK to complete transaction
+	c.log.Infow("🖥️ [re-INVITE] Sending ACK")
 
 	ack := sip.NewAckRequest(req, resp, nil)
 
-	// CRITICAL: For proxy environments (Kamailio), ACK must have Route headers
-	// Copy Route headers from the original INVITE request
-	// This ensures the proxy can route the ACK back to the endpoint
+	// For proxy environments, ACK must have Route headers
 	routeHeaders := req.GetHeaders("Route")
 	if len(routeHeaders) > 0 {
-		c.log.Infow("🖥️ [re-INVITE] [Phase5.9] Copying Route headers to ACK",
+		c.log.Infow("🖥️ [re-INVITE] Copying Route headers to ACK",
 			"numRoutes", len(routeHeaders))
 		for i, r := range routeHeaders {
 			ack.AppendHeader(r)
-			c.log.Debugw("🖥️ [re-INVITE] [Phase5.9] Route header copied",
+			c.log.Debugw("🖥️ [re-INVITE] Route header copied",
 				"index", i,
 				"route", r.String())
 		}
 	} else {
-		c.log.Warnw("🖥️ [re-INVITE] [Phase5.9] No Route headers in original INVITE - ACK may not reach endpoint through proxy", nil)
+		c.log.Warnw("🖥️ [re-INVITE] No Route headers in original INVITE - ACK may not reach endpoint through proxy", nil)
 	}
 
 	// Use response source/destination for proper connection routing
-	// This ensures we use the existing TCP connection
 	ack.SetSource(resp.Destination())
 	ack.SetDestination(resp.Source())
 
-	c.log.Infow("🖥️ [re-INVITE] [Phase5.9] ACK routing details",
+	c.log.Infow("🖥️ [re-INVITE] ACK routing details",
 		"ackSource", ack.Source(),
 		"ackDest", ack.Destination(),
 		"requestURI", ack.Recipient,
@@ -1764,34 +1792,24 @@ func (c *inboundCall) handleReInviteResponse(req *sip.Request, resp *sip.Respons
 		return fmt.Errorf("failed to send ACK: %w", err)
 	}
 
-	c.log.Infow("🖥️ [re-INVITE] [Phase5.9] ✅ ACK sent - transaction complete")
+	c.log.Infow("🖥️ [re-INVITE] ✅ ACK sent - transaction complete")
 
-	// Phase 5.10: BFCP floor management
-	// Note: We are ALWAYS the BFCP server (s-only, passive)
-	// Polycom connects to us when we advertise port in re-INVITE
-	// Virtual BFCP client (internal) handles WebRTC floor requests
+	// BFCP floor management - queue floor request to process after client Hello
 	if addScreenShare && sdp.BFCP != nil {
-		// Phase 5.17: Queue floor request to process AFTER Polycom's Hello
-		// This follows correct BFCP flow: controller connects → sharer requests → server grants
-		// Hardcode FloorID to 2 for screen sharing (no dynamic floor management)
-		const floorID = uint16(2)
+		const floorID = uint16(2) // FloorID for screen sharing
 
-		// Virtual sharer userID must be DIFFERENT from controller userID
-		// IMPORTANT: Use userID from INITIAL OFFER, not from 200 OK (which may be 0)
-		// Controller userID comes from initial INVITE (e.g., userID=2 from Polycom)
-		// Virtual sharer should use controller + 1 (e.g., if controller=2, sharer=3)
-		// This ensures they are distinct participants in BFCP
+		// Virtual sharer userID must be different from controller userID
 		controllerUserID := c.initialOffer.BFCP.UserID
 		sharerUserID := controllerUserID + 1
 
-		c.log.Infow("🖥️ [re-INVITE] [Phase5.17] BFCP floor activated - queuing floor request",
+		c.log.Infow("🖥️ [re-INVITE] BFCP floor activated - queuing floor request",
 			"floorID", floorID,
 			"mediaStream", sdp.BFCP.MediaStream,
 			"controllerUserID", controllerUserID,
 			"sharerUserID", sharerUserID,
 			"note", "Will inject FloorRequest after Polycom Hello completes")
 
-		// Queue the floor request - InjectFloorRequest() will create floor and request it
+		// Queue floor request to be processed after client Hello
 		c.s.pendingGrantsMu.Lock()
 		c.s.pendingGrants[floorID] = &PendingFloorGrant{
 			FloorID:   floorID,
@@ -2601,9 +2619,11 @@ func (c *sipInbound) AcceptAsKeepAlive() {
 func (c *sipInbound) Accept(ctx context.Context, sdpData []byte, headers map[string]string) error {
 	ctx, span := tracer.Start(ctx, "sipInbound.Accept")
 	defer span.End()
+
+	// Build response with lock held (brief)
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.inviteTx == nil {
+		c.mu.Unlock()
 		return errors.New("call already rejected")
 	}
 	r := sip.NewResponseFromRequest(c.invite, sip.StatusOK, "OK", sdpData)
@@ -2618,6 +2638,7 @@ func (c *sipInbound) Accept(ctx context.Context, sdpData []byte, headers map[str
 		r.AppendHeader(sip.NewHeader(k, v))
 	}
 	c.stopRinging()
+
 	retryAfter := inviteOkRetryInterval
 	maxRetries := inviteOKRetryAttempts
 	if !c.s.conf.Experimental.InboundWaitACK {
@@ -2629,9 +2650,12 @@ func (c *sipInbound) Accept(ctx context.Context, sdpData []byte, headers map[str
 		// That actually becomes an ACK timeout here.
 		retryAfter = inviteOkRetryIntervalMax
 	}
+	c.mu.Unlock()
+
 	var acceptErr error
 retries:
 	for try := 1; ; try++ {
+		// Send response (lock not needed - transaction is thread-safe)
 		if err := c.inviteTx.Respond(r); err != nil {
 			return err
 		}
@@ -2639,6 +2663,9 @@ retries:
 			// Reliable transport and we are not waiting for ACK - return immediately.
 			break retries
 		}
+
+		// CRITICAL FIX: Wait for ACK WITHOUT holding lock
+		// This allows concurrent re-INVITEs, BYE, and other operations
 		t := time.NewTimer(retryAfter)
 		select {
 		case <-c.inviteTx.Acks():
@@ -2648,7 +2675,9 @@ retries:
 			t.Stop()
 			break retries
 		case <-t.C:
+			// Timeout, will retry
 		}
+
 		if try > maxRetries {
 			// Only set error if an option is enabled.
 			// Otherwise, ignore missing ACK for now.
@@ -2660,8 +2689,13 @@ retries:
 		retryAfter *= 2
 		retryAfter = min(retryAfter, inviteOkRetryIntervalMax)
 	}
+
+	// Update state with lock held (brief)
+	c.mu.Lock()
 	// Other side likely thinks it's accepted, so update our state accordingly, even if no ACK follows.
 	c.accepted(r)
+	c.mu.Unlock()
+
 	return acceptErr
 }
 

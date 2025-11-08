@@ -84,22 +84,22 @@ func (r *rtcpMonitor) Read(p []byte) (n int, err error) {
 }
 
 const pipelineStr = `
-  appsrc name=sip_rtp_in format=3 is-live=true do-timestamp=true max-bytes=0 block=true
+  appsrc name=sip_rtp_in format=3 is-live=true do-timestamp=true max-bytes=5000000 block=false
       caps="application/x-rtp,media=video,encoding-name=H264,payload=%d,clock-rate=90000" !
-      rtpjitterbuffer name=sip_jitterbuffer latency=50 do-lost=true do-retransmission=false drop-on-latency=true !
+      rtpjitterbuffer name=sip_jitterbuffer latency=100 do-lost=true do-retransmission=false drop-on-latency=false !
       rtph264depay request-keyframe=true !
-      h264parse config-interval=-1 !
+      h264parse config-interval=1 !
       avdec_h264 max-threads=4 !
       videoconvert !
       videoscale add-borders=false !
       videorate !
       vp8enc deadline=1 target-bitrate=3000000 cpu-used=2 keyframe-max-dist=30 lag-in-frames=0 threads=4 buffer-initial-size=100 buffer-optimal-size=120 buffer-size=150 min-quantizer=4 max-quantizer=40 cq-level=13 error-resilient=1 !
       rtpvp8pay pt=96 mtu=1200 picture-id-mode=15-bit !
-      appsink name=webrtc_rtp_out emit-signals=false drop=false max-buffers=30 sync=false
+      appsink name=webrtc_rtp_out emit-signals=false drop=false max-buffers=100 sync=false
 
-  appsrc name=webrtc_rtp_in format=3 is-live=true do-timestamp=true max-bytes=0 block=false
+  appsrc name=webrtc_rtp_in format=3 is-live=true do-timestamp=true max-bytes=2000000 block=false
       caps="application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,payload=96" !
-      rtpjitterbuffer name=webrtc_jitterbuffer latency=50 do-lost=true do-retransmission=false drop-on-latency=true !
+      rtpjitterbuffer name=webrtc_jitterbuffer latency=100 do-lost=true do-retransmission=false drop-on-latency=false !
       rtpvp8depay request-keyframe=true !
       vp8dec !
       videoconvert !
@@ -107,7 +107,7 @@ const pipelineStr = `
       x264enc bitrate=2000 key-int-max=30 bframes=0 rc-lookahead=0 sliced-threads=true sync-lookahead=0 tune=zerolatency speed-preset=ultrafast !
       h264parse config-interval=1 !
       rtph264pay pt=%d mtu=1200 config-interval=1 aggregate-mode=zero-latency !
-      appsink name=sip_rtp_out emit-signals=false drop=false max-buffers=30 sync=false
+      appsink name=sip_rtp_out emit-signals=false drop=false max-buffers=100 sync=false
 `
 
 func writerFromPipeline(pipeline *gst.Pipeline, name string) (*GstWriter, error) {
@@ -222,10 +222,11 @@ func (v *VideoManager) SetupGstPipeline(media *sdpv2.SDPMedia) error {
 		v.log.Debugw("Connected SIP jitter buffer signals for packet loss detection")
 	}
 
-	// Proactive PLI sender - send PLI every 3 seconds as fallback recovery mechanism
+	// Proactive PLI sender - send PLI every 1 second as fallback recovery mechanism
 	// This ensures we get fresh keyframes even if automatic detection fails
+	// Reduced from 3s to 1s to recover faster from progressive corruption
 	go func() {
-		ticker := time.NewTicker(3 * time.Second)
+		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
 			v.sendPLI(v.webrtcRtcpOut, "WebRTC (periodic)")
