@@ -626,9 +626,10 @@ type inboundCall struct {
 	initialOffer *sdpv2.SDP // Original SDP offer from SIP device
 	initialAnswer *sdpv2.SDP // Our SDP answer
 
-	// BFCP floor management - dynamic allocation to avoid conflicts
-	reservedFloors map[uint16]bool // Floors reserved by SIP device (e.g., Poly reserves Floor 1)
-	nextFloorID    uint16          // Next available floor for WebRTC→SIP screen share
+	// BFCP conference and floor management
+	bfcpConferenceID uint32          // Unique conference ID for this call
+	reservedFloors   map[uint16]bool // Floors reserved by SIP device (e.g., Poly reserves Floor 1)
+	nextFloorID      uint16          // Next available floor for WebRTC→SIP screen share
 }
 
 func (s *Server) newInboundCall(
@@ -1109,10 +1110,27 @@ func (c *inboundCall) SetupScreenShare(conf *config.Config, offer *sdpv2.SDP) er
 		)
 	}
 
+	// Create unique BFCP conference for this call
+	allocatedConferenceID := c.s.allocateConferenceID()
+	confMgr := c.s.bfcpServer.GetConferenceManager()
+
+	_, err = confMgr.CreateConference(allocatedConferenceID, userID)
+	if err != nil {
+		return fmt.Errorf("failed to create BFCP conference: %w", err)
+	}
+
+	// Store conference ID for this call
+	c.bfcpConferenceID = allocatedConferenceID
+
+	c.log.Infow("🖥️ [BFCP] Conference created for call",
+		"conferenceID", allocatedConferenceID,
+		"sipDeviceUserID", userID,
+	)
+
 	// BFCP client setup deferred until re-INVITE when screen share is activated
 	c.log.Infow("🖥️ [Inbound] BFCP client ready (will connect during re-INVITE)",
 		"serverAddr", bfcpServerAddr,
-		"conferenceID", conferenceID,
+		"conferenceID", allocatedConferenceID,
 		"userID", userID,
 		"floorID", floorID,
 		"note", "BFCP connection deferred to screen share activation",
@@ -1163,49 +1181,21 @@ func (c *inboundCall) buildBFCPAnswer(offerBFCP *sdpv2.BFCPMedia, conf *config.C
 }
 
 // allocateFloor dynamically allocates the next available BFCP floor ID
-// This avoids conflicts with floors reserved by the SIP device (e.g., Poly reserves Floor 1)
+// Uses ConferenceManager to ensure proper floor allocation within the conference
 func (c *inboundCall) allocateFloor() (uint16, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	const maxAttempts = 65536 // Max uint16 value + 1
-	startFloorID := c.nextFloorID
-
-	// Find next available floor (skip reserved floors)
-	for attempts := 0; attempts < maxAttempts; attempts++ {
-		floorID := c.nextFloorID
-		c.nextFloorID++ // Increment for next allocation (wraps at 65536)
-
-		// Check if this floor is reserved by SIP device
-		if !c.reservedFloors[floorID] {
-			// Mark as allocated (reserved by us now)
-			c.reservedFloors[floorID] = true
-			c.log.Infow("🖥️ [BFCP] Floor allocated dynamically",
-				"allocatedFloorID", floorID,
-				"nextFloorID", c.nextFloorID,
-				"attempts", attempts+1)
-			return floorID, nil
-		}
-
-		// This floor is reserved, try next one
-		c.log.Debugw("🖥️ [BFCP] Floor already reserved, skipping",
-			"skippedFloorID", floorID,
-			"tryingNext", c.nextFloorID)
-
-		// Check if we've wrapped around completely
-		if c.nextFloorID == startFloorID && attempts > 0 {
-			c.log.Errorw("🖥️ [BFCP] All floor IDs exhausted (wrapped around)", nil,
-				"startFloorID", startFloorID,
-				"attempts", attempts)
-			return 0, fmt.Errorf("no available floor IDs: all %d floors reserved", len(c.reservedFloors))
-		}
+	confMgr := c.s.bfcpServer.GetConferenceManager()
+	floorID, err := confMgr.AllocateFloor(c.bfcpConferenceID)
+	if err != nil {
+		c.log.Errorw("🖥️ [BFCP] Floor allocation failed", err,
+			"conferenceID", c.bfcpConferenceID)
+		return 0, fmt.Errorf("failed to allocate floor: %w", err)
 	}
 
-	// Should never reach here, but safeguard
-	c.log.Errorw("🖥️ [BFCP] Floor allocation failed after max attempts", nil,
-		"maxAttempts", maxAttempts,
-		"reservedCount", len(c.reservedFloors))
-	return 0, fmt.Errorf("floor allocation failed: exceeded max attempts %d", maxAttempts)
+	c.log.Infow("🖥️ [BFCP] Floor allocated via ConferenceManager",
+		"allocatedFloorID", floorID,
+		"conferenceID", c.bfcpConferenceID)
+
+	return floorID, nil
 }
 
 // sendScreenShareReInvite sends a SIP re-INVITE to add or remove screen share stream
@@ -1307,10 +1297,10 @@ func (c *inboundCall) buildReInviteSDP(includeScreenShare bool) (*sdpv2.SDP, err
 			FloorCtrl:    "s-only",  // We are ALWAYS BFCP server
 			Setup:        "passive", // We ALWAYS wait for client connection
 			Connection:   "new",
-			ConferenceID: initialOffer.BFCP.ConferenceID,
-			UserID:       initialOffer.BFCP.UserID,   // Keep same user context
-			FloorID:      allocatedFloorID,           // Dynamically allocated to avoid conflicts
-			MediaStream:  3,                          // Screen share is 3rd m-line (audio, camera, screenshare)
+			ConferenceID: c.bfcpConferenceID,        // Use allocated conference ID for this call
+			UserID:       initialOffer.BFCP.UserID,  // Keep same user context
+			FloorID:      allocatedFloorID,          // Dynamically allocated to avoid conflicts
+			MediaStream:  3,                         // Screen share is 3rd m-line (audio, camera, screenshare)
 		}
 
 		builder.SetBFCP(bfcpMedia)
@@ -1794,34 +1784,39 @@ func (c *inboundCall) handleReInviteResponse(req *sip.Request, resp *sip.Respons
 
 	c.log.Infow("🖥️ [re-INVITE] ✅ ACK sent - transaction complete")
 
-	// BFCP floor management - queue floor request to process after client Hello
+	// BFCP floor management - inject floor request via ConferenceManager
 	if addScreenShare && sdp.BFCP != nil {
-		const floorID = uint16(2) // FloorID for screen sharing
-
 		// Virtual sharer userID must be different from controller userID
 		controllerUserID := c.initialOffer.BFCP.UserID
 		sharerUserID := controllerUserID + 1
 
-		c.log.Infow("🖥️ [re-INVITE] BFCP floor activated - queuing floor request",
+		// Use the dynamically allocated floor ID from the re-INVITE SDP
+		floorID := sdp.BFCP.FloorID
+
+		c.log.Infow("🖥️ [re-INVITE] BFCP floor activated - injecting floor request",
 			"floorID", floorID,
+			"conferenceID", c.bfcpConferenceID,
 			"mediaStream", sdp.BFCP.MediaStream,
 			"controllerUserID", controllerUserID,
 			"sharerUserID", sharerUserID,
-			"note", "Will inject FloorRequest after Polycom Hello completes")
+			"note", "ConferenceManager will queue until client Hello completes")
 
-		// Queue floor request to be processed after client Hello
-		c.s.pendingGrantsMu.Lock()
-		c.s.pendingGrants[floorID] = &PendingFloorGrant{
-			FloorID:   floorID,
-			UserID:    sharerUserID,
-			RequestID: 0, // Will be generated in InjectFloorRequest
+		// Inject floor request via ConferenceManager (handles pending queue internally)
+		confMgr := c.s.bfcpServer.GetConferenceManager()
+		requestID, err := confMgr.InjectFloorRequest(c.bfcpConferenceID, floorID, sharerUserID)
+		if err != nil {
+			c.log.Errorw("🖥️ [re-INVITE] Failed to inject floor request", err,
+				"conferenceID", c.bfcpConferenceID,
+				"floorID", floorID,
+				"sharerUserID", sharerUserID)
+		} else {
+			c.log.Infow("🖥️ [re-INVITE] [Phase5.17] ✅ Floor request injected",
+				"conferenceID", c.bfcpConferenceID,
+				"floorID", floorID,
+				"controllerUserID", controllerUserID,
+				"sharerUserID", sharerUserID,
+				"requestID", requestID)
 		}
-		c.s.pendingGrantsMu.Unlock()
-
-		c.log.Infow("🖥️ [re-INVITE] [Phase5.17] 📋 Floor request queued - waiting for Polycom connection",
-			"floorID", floorID,
-			"controllerUserID", controllerUserID,
-			"sharerUserID", sharerUserID)
 	}
 
 	return nil
@@ -2211,6 +2206,18 @@ func (c *inboundCall) closeMedia() {
 		c.log.Debugw("🖥️ [Inbound] Closing screen share manager")
 		if err := c.screenShare.Close(); err != nil {
 			c.log.Errorw("🖥️ [Inbound] Failed to close screen share manager", err)
+		}
+	}
+
+	// Clean up BFCP conference
+	if c.bfcpConferenceID != 0 {
+		confMgr := c.s.bfcpServer.GetConferenceManager()
+		if err := confMgr.DeleteConference(c.bfcpConferenceID); err != nil {
+			c.log.Warnw("🖥️ [BFCP] Failed to delete conference", err,
+				"conferenceID", c.bfcpConferenceID)
+		} else {
+			c.log.Infow("🖥️ [BFCP] Conference deleted",
+				"conferenceID", c.bfcpConferenceID)
 		}
 	}
 }

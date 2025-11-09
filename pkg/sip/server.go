@@ -24,6 +24,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/frostbyte73/core"
@@ -126,12 +127,6 @@ type Handler interface {
 	OnSessionEnd(ctx context.Context, callIdentifier *CallIdentifier, callInfo *livekit.SIPCallInfo, reason string)
 }
 
-type PendingFloorGrant struct {
-	FloorID   uint16
-	UserID    uint16
-	RequestID uint16
-}
-
 type Server struct {
 	log          logger.Logger
 	mon          *stats.Monitor
@@ -142,11 +137,8 @@ type Server struct {
 	sipUnhandled RequestHandler
 
 	// BFCP floor control server for screen sharing
-	bfcpServer *bfcp.Server
-
-	// Pending floor grants to send after client Hello completes
-	pendingGrantsMu sync.Mutex
-	pendingGrants   map[uint16]*PendingFloorGrant // key is floorID
+	bfcpServer        *bfcp.Server
+	nextConferenceID  atomic.Uint32
 
 	imu               sync.Mutex
 	inProgressInvites []*inProgressInvite
@@ -179,15 +171,14 @@ func NewServer(region string, conf *config.Config, log logger.Logger, mon *stats
 		log = logger.GetLogger()
 	}
 	s := &Server{
-		log:           log,
-		conf:          conf,
-		region:        region,
-		mon:           mon,
-		getIOClient:   getIOClient,
-		byRemoteTag:   make(map[RemoteTag]*inboundCall),
-		byLocalTag:    make(map[LocalTag]*inboundCall),
-		byCallID:      make(map[string]*inboundCall),
-		pendingGrants: make(map[uint16]*PendingFloorGrant),
+		log:         log,
+		conf:        conf,
+		region:      region,
+		mon:         mon,
+		getIOClient: getIOClient,
+		byRemoteTag: make(map[RemoteTag]*inboundCall),
+		byLocalTag:  make(map[LocalTag]*inboundCall),
+		byCallID:    make(map[string]*inboundCall),
 	}
 	s.infos.byCallID = expirable.NewLRU[string, *inboundCallInfo](maxCallCache, nil, callCacheTTL)
 	s.initMediaRes()
@@ -365,38 +356,6 @@ func (s *Server) startBFCP() error {
 			"remoteAddr", remoteAddr,
 			"userID", userID,
 		)
-
-		// Process pending floor requests after Hello handshake completes
-		s.pendingGrantsMu.Lock()
-		pendingRequests := make([]*PendingFloorGrant, 0, len(s.pendingGrants))
-		for _, req := range s.pendingGrants {
-			pendingRequests = append(pendingRequests, req)
-		}
-		s.pendingGrants = make(map[uint16]*PendingFloorGrant)
-		s.pendingGrantsMu.Unlock()
-
-		// Inject simulated FloorRequests after client Hello
-		for _, req := range pendingRequests {
-			s.log.Infow("[BFCP-Server] Processing pending floor request after client Hello",
-				"remoteAddr", remoteAddr,
-				"controllerUserID", userID,
-				"floorID", req.FloorID,
-				"sharerUserID", req.UserID,
-			)
-			// Inject simulated FloorRequest from the sharer
-			if requestID, err := s.bfcpServer.InjectFloorRequest(req.FloorID, req.UserID); err != nil {
-				s.log.Errorw("[BFCP-Server] Failed to inject floor request", err,
-					"floorID", req.FloorID,
-					"sharerUserID", req.UserID,
-				)
-			} else {
-				s.log.Infow("[BFCP-Server] ✅ Floor request injected successfully",
-					"floorID", req.FloorID,
-					"sharerUserID", req.UserID,
-					"requestID", requestID,
-				)
-			}
-		}
 	}
 
 	s.bfcpServer.OnClientDisconnect = func(remoteAddr string, userID uint16) {
@@ -462,6 +421,11 @@ func (s *Server) startBFCP() error {
 	)
 
 	return nil
+}
+
+// allocateConferenceID generates a unique BFCP conference ID for each call
+func (s *Server) allocateConferenceID() uint32 {
+	return s.nextConferenceID.Add(1)
 }
 
 func (s *Server) Stop() {
