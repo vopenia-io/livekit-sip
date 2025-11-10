@@ -51,6 +51,7 @@ import (
 	"github.com/livekit/sip/pkg/config"
 	"github.com/livekit/sip/pkg/stats"
 	"github.com/livekit/sip/res"
+	"github.com/vopenia/bfcp"
 )
 
 const (
@@ -626,7 +627,11 @@ type inboundCall struct {
 	initialAnswer *sdpv2.SDP // Our SDP answer
 
 	// BFCP conference and floor management
+	bfcpClient       *bfcp.Client     // BFCP client for floor control
 	bfcpConferenceID uint32          // Unique conference ID for this call
+	bfcpUserID       uint16          // User ID for BFCP
+	bfcpFloorID      uint16          // Floor ID for screen sharing
+	bfcpFloorGranted bool            // Whether floor has been granted
 	reservedFloors   map[uint16]bool // Floors reserved by SIP device (e.g., Poly reserves Floor 1)
 	nextFloorID      uint16          // Next available floor for WebRTC→SIP screen share
 }
@@ -1110,9 +1115,91 @@ func (c *inboundCall) SetupScreenShare(conf *config.Config, offer *sdpv2.SDP) er
 		"floorID", floorID,
 	)
 
-	// BFCP setup will be handled in Phase 3 when we move it into inbound.go
-	// For now, just create the VideoManager for screenshare
-	c.log.Infow("🖥️ [Inbound] Screen share support initialized (VideoManager)")
+	// Setup BFCP client for WebRTC→SIP screen sharing
+	bfcpServerAddr := fmt.Sprintf("%s:%d", c.s.sconf.MediaIP, conf.BFCPPort)
+	sharerUserID := userID + 1 // Separate user ID for screen sharer (WebRTC→SIP)
+
+	c.log.Infow("🖥️ [Inbound] Setting up BFCP client for screen share",
+		"serverAddr", bfcpServerAddr,
+		"conferenceID", allocatedConferenceID,
+		"sharerUserID", sharerUserID,
+		"floorID", floorID,
+	)
+
+	// Store BFCP parameters
+	c.bfcpConferenceID = allocatedConferenceID
+	c.bfcpUserID = sharerUserID
+	c.bfcpFloorID = floorID
+
+	// Create BFCP client
+	clientConfig := &bfcp.ClientConfig{
+		ServerAddress:  bfcpServerAddr,
+		ConferenceID:   allocatedConferenceID,
+		UserID:         sharerUserID,
+		EnableLogging:  true,
+		ConnectTimeout: 10 * time.Second,
+	}
+	c.bfcpClient = bfcp.NewClient(clientConfig)
+
+	// Set up BFCP event callbacks
+	c.bfcpClient.OnConnected = func() {
+		c.log.Infow("🖥️ [BFCP] ✅ Connected to BFCP server")
+	}
+
+	c.bfcpClient.OnDisconnected = func() {
+		c.log.Infow("🖥️ [BFCP] ⚠️ Disconnected from BFCP server")
+	}
+
+	c.bfcpClient.OnFloorGranted = func(floorID, requestID uint16) {
+		c.bfcpFloorGranted = true
+		c.log.Infow("🖥️ [BFCP] ✅✅✅ Floor GRANTED - triggering re-INVITE ✅✅✅", "floorID", floorID, "requestID", requestID)
+
+		// Trigger re-INVITE now that floor is granted
+		go func() {
+			if err := c.sendScreenShareReInvite(true); err != nil {
+				c.log.Errorw("🖥️ [BFCP] ❌ re-INVITE failed after floor grant", err)
+			} else {
+				c.log.Infow("🖥️ [BFCP] ✅ re-INVITE sent successfully after floor grant")
+			}
+		}()
+	}
+
+	c.bfcpClient.OnFloorDenied = func(floorID, requestID uint16, errorCode bfcp.ErrorCode) {
+		c.log.Warnw("🖥️ [BFCP] ❌ Floor DENIED", nil, "floorID", floorID, "requestID", requestID, "errorCode", errorCode)
+	}
+
+	c.bfcpClient.OnFloorRevoked = func(floorID uint16) {
+		c.bfcpFloorGranted = false
+		c.log.Infow("🖥️ [BFCP] ⚠️ Floor REVOKED", "floorID", floorID)
+	}
+
+	c.bfcpClient.OnFloorReleased = func(floorID uint16) {
+		c.bfcpFloorGranted = false
+		c.log.Infow("🖥️ [BFCP] Floor RELEASED", "floorID", floorID)
+	}
+
+	c.bfcpClient.OnError = func(err error) {
+		c.log.Errorw("🖥️ [BFCP] Error", err)
+	}
+
+	// Connect to BFCP server
+	c.log.Infow("🖥️ [BFCP] Connecting to BFCP server", "addr", bfcpServerAddr)
+	if err := c.bfcpClient.Connect(); err != nil {
+		return fmt.Errorf("failed to connect to BFCP server: %w", err)
+	}
+
+	c.log.Infow("🖥️ [BFCP] ✅ BFCP TCP connection established")
+
+	// Send Hello message (optional per RFC 8855)
+	c.log.Infow("🖥️ [BFCP] Sending BFCP Hello...")
+	if err := c.bfcpClient.Hello(); err != nil {
+		c.log.Warnw("🖥️ [BFCP] ⚠️ BFCP Hello handshake failed (may not be supported)", err)
+		// Hello is optional, proceed anyway
+	} else {
+		c.log.Infow("🖥️ [BFCP] ✅ BFCP Hello handshake complete")
+	}
+
+	c.log.Infow("🖥️ [Inbound] ✅ Screen share support initialized (BFCP + VideoManager)")
 	return nil
 }
 
