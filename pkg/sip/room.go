@@ -262,6 +262,24 @@ func (r *Room) Connect(conf *config.Config, rconf RoomConfig) error {
 			},
 			OnTrackUnsubscribed: func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
 				r.log.Debugw("track unsubscribed", "kind", pub.Kind(), "participant", rp.Identity(), "pID", rp.SID(), "trackID", pub.SID(), "trackName", pub.Name())
+
+				// Check if this is a screen share track that needs cleanup
+				if pub.Kind() == lksdk.TrackKindVideo && pub.Source() == livekit.TrackSource_SCREEN_SHARE {
+					r.log.Infow("🖥️ [Room] Screen share track unsubscribed - stopping screen share")
+					r.trackMu.Lock()
+					ssm := r.screenShareMgr
+					r.trackMu.Unlock()
+
+					if ssm != nil {
+						go func() {
+							if err := ssm.Stop(); err != nil {
+								r.log.Errorw("🖥️ [Room] Failed to stop screen share", err)
+							}
+						}()
+					}
+					return
+				}
+
 				switch pub.Kind() {
 				case lksdk.TrackKindAudio:
 					// no-op

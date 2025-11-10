@@ -1267,6 +1267,7 @@ func (c *inboundCall) buildReInviteSDP(includeScreenShare bool) (*sdpv2.SDP, err
 			b.SetRTPPort(uint16(rtpAddr.Port))
 			b.SetRTCPPort(uint16(rtcpAddr.Port))
 			b.SetDirection(sdpv2.DirectionSendRecv)
+			b.SetContent("slides")
 			b.AddCodec(func(cb *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
 				cb.SetPayloadType(cameraCodec.PayloadType)
 				cb.SetCodec(cameraCodec.Codec)
@@ -1784,40 +1785,9 @@ func (c *inboundCall) handleReInviteResponse(req *sip.Request, resp *sip.Respons
 
 	c.log.Infow("🖥️ [re-INVITE] ✅ ACK sent - transaction complete")
 
-	// BFCP floor management - inject floor request via ConferenceManager
-	if addScreenShare && sdp.BFCP != nil {
-		// Virtual sharer userID must be different from controller userID
-		controllerUserID := c.initialOffer.BFCP.UserID
-		sharerUserID := controllerUserID + 1
-
-		// Use the dynamically allocated floor ID from the re-INVITE SDP
-		floorID := sdp.BFCP.FloorID
-
-		c.log.Infow("🖥️ [re-INVITE] BFCP floor activated - injecting floor request",
-			"floorID", floorID,
-			"conferenceID", c.bfcpConferenceID,
-			"mediaStream", sdp.BFCP.MediaStream,
-			"controllerUserID", controllerUserID,
-			"sharerUserID", sharerUserID,
-			"note", "ConferenceManager will queue until client Hello completes")
-
-		// Inject floor request via ConferenceManager (handles pending queue internally)
-		confMgr := c.s.bfcpServer.GetConferenceManager()
-		requestID, err := confMgr.InjectFloorRequest(c.bfcpConferenceID, floorID, sharerUserID)
-		if err != nil {
-			c.log.Errorw("🖥️ [re-INVITE] Failed to inject floor request", err,
-				"conferenceID", c.bfcpConferenceID,
-				"floorID", floorID,
-				"sharerUserID", sharerUserID)
-		} else {
-			c.log.Infow("🖥️ [re-INVITE] [Phase5.17] ✅ Floor request injected",
-				"conferenceID", c.bfcpConferenceID,
-				"floorID", floorID,
-				"controllerUserID", controllerUserID,
-				"sharerUserID", sharerUserID,
-				"requestID", requestID)
-		}
-	}
+	// NOTE: BFCP floor request is NOT needed here for WebRTC→Poly flow
+	// The ScreenShareManager already requested the floor via BFCP client before re-INVITE
+	// This inject would only be needed if Poly initiated screen share (not implemented yet)
 
 	return nil
 }
