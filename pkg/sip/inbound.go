@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
-	"net"
 	"net/netip"
 	"slices"
 	"strings"
@@ -608,7 +607,7 @@ type inboundCall struct {
 	call        *rpc.SIPCall
 	media       *MediaPort
 	video       *VideoManager
-	screenShare *ScreenShareManager // Screen share manager
+	screenshare *VideoManager       // Screen share video manager (uses VideoManager like video)
 	dtmf        chan dtmf.Event     // buffered
 	lkRoom      *Room               // LiveKit room; only active after correct pin is entered
 	callDur     func() time.Duration
@@ -1038,26 +1037,6 @@ func (c *inboundCall) SetupVideo(conf *config.Config, offer *sdpv2.SDP, answerBu
 func (c *inboundCall) SetupScreenShare(conf *config.Config, offer *sdpv2.SDP) error {
 	c.log.Infow("🖥️ [Inbound] Setting up screen share support")
 
-	// Use BFCP server address from configuration
-	bfcpServerAddr := fmt.Sprintf("%s:%d", c.s.sconf.MediaIP, conf.BFCPPort)
-
-	ssm, err := NewScreenShareManager(
-		c.log,
-		c.lkRoom,
-		offer.Addr,
-		&MediaOptions{
-			IP:                  c.s.sconf.MediaIP,
-			Ports:               conf.RTPPort,
-			MediaTimeoutInitial: c.s.conf.MediaTimeoutInitial,
-			MediaTimeout:        c.s.conf.MediaTimeout,
-			Stats:               &c.stats.Port,
-		},
-		bfcpServerAddr,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to create screen share manager: %w", err)
-	}
-
 	// Extract BFCP from SDP offer if present
 	var conferenceID uint32 = 1
 	var userID uint16 = 1
@@ -1131,40 +1110,9 @@ func (c *inboundCall) SetupScreenShare(conf *config.Config, offer *sdpv2.SDP) er
 		"floorID", floorID,
 	)
 
-	// Setup BFCP client immediately so it's ready when screen share starts
-	// We need floor control established BEFORE sending re-INVITE
-	sharerUserID := userID + 1 // Separate user ID for screen sharer (WebRTC→SIP)
-	c.log.Infow("🖥️ [Inbound] Setting up BFCP client for screen share",
-		"serverAddr", bfcpServerAddr,
-		"conferenceID", allocatedConferenceID,
-		"sharerUserID", sharerUserID,
-		"floorID", floorID,
-		"note", "BFCP setup happens early, floor requested when track detected",
-	)
-
-	if err := ssm.SetupBFCP(context.Background(), bfcpServerAddr, allocatedConferenceID, sharerUserID, floorID); err != nil {
-		c.log.Errorw("🖥️ [Inbound] ❌ Failed to setup BFCP client", err)
-		return fmt.Errorf("failed to setup BFCP client: %w", err)
-	}
-
-	c.log.Infow("🖥️ [Inbound] ✅ BFCP client setup complete and connected")
-
-	// Store screen share manager in room for access from participantVideoTrackSubscribed
-	c.lkRoom.SetScreenShareManager(ssm)
-
-	// Register re-INVITE callbacks
-	ssm.SetOnStartCallback(func() error {
-		c.log.Infow("🖥️ [Inbound] Screen share started - re-INVITE needed")
-		return c.sendScreenShareReInvite(true)
-	})
-
-	ssm.SetOnStopCallback(func() error {
-		c.log.Infow("🖥️ [Inbound] Screen share stopped - re-INVITE needed")
-		return c.sendScreenShareReInvite(false)
-	})
-
-	c.screenShare = ssm
-	c.log.Infow("🖥️ [Inbound] Screen share support initialized")
+	// BFCP setup will be handled in Phase 3 when we move it into inbound.go
+	// For now, just create the VideoManager for screenshare
+	c.log.Infow("🖥️ [Inbound] Screen share support initialized (VideoManager)")
 	return nil
 }
 
@@ -1262,23 +1210,23 @@ func (c *inboundCall) buildReInviteSDP(includeScreenShare bool) (*sdpv2.SDP, err
 	}
 
 	// Add screen share video m-line (if requested)
-	if includeScreenShare && c.screenShare != nil {
+	if includeScreenShare && c.screenshare != nil {
 		c.log.Infow("🖥️ [re-INVITE] Adding screen share video m-line")
 
-		// Get screen share UDP ports
-		rtpAddr := c.screenShare.rtpConn.LocalAddr().(*net.UDPAddr)
-		rtcpAddr := c.screenShare.rtcpConn.LocalAddr().(*net.UDPAddr)
+		// Get screen share UDP ports using public methods
+		rtpPort := c.screenshare.RtpPort()
+		rtcpPort := c.screenshare.RtcpPort()
 
 		c.log.Infow("🖥️ [re-INVITE] Screen share ports",
-			"rtpPort", rtpAddr.Port,
-			"rtcpPort", rtcpAddr.Port)
+			"rtpPort", rtpPort,
+			"rtcpPort", rtcpPort)
 
 		// Use builder to add screen share video
 		builder.SetScreenShareVideo(func(b *sdpv2.SDPMediaBuilder) (*sdpv2.SDPMedia, error) {
 			cameraCodec := initialAnswer.Video.Codec
 
-			b.SetRTPPort(uint16(rtpAddr.Port))
-			b.SetRTCPPort(uint16(rtcpAddr.Port))
+			b.SetRTPPort(uint16(rtpPort))
+			b.SetRTCPPort(uint16(rtcpPort))
 			b.SetDirection(sdpv2.DirectionSendRecv)
 			b.SetContent("slides")
 			b.AddCodec(func(cb *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
@@ -1294,7 +1242,7 @@ func (c *inboundCall) buildReInviteSDP(includeScreenShare bool) (*sdpv2.SDP, err
 	}
 
 	// Add BFCP m-line (if screen share is included and we have BFCP params)
-	if includeScreenShare && c.screenShare != nil && initialOffer != nil && initialOffer.BFCP != nil {
+	if includeScreenShare && c.screenshare != nil && initialOffer != nil && initialOffer.BFCP != nil {
 		c.log.Infow("🖥️ [re-INVITE] Adding BFCP m-line as s-only server")
 
 		// Dynamically allocate floor to avoid conflicts with SIP device reservations
@@ -1891,7 +1839,7 @@ func (c *inboundCall) updateScreenShareConnections(sdp *sdpv2.SDP) error {
 		"screenShareRTCPPort", screenShareRTCPPort)
 
 	// PHASE 2: Setup pipeline with real port from SDP answer
-	if c.screenShare != nil && sdp.ScreenShareVideo != nil {
+	if c.screenshare != nil && sdp.ScreenShareVideo != nil {
 		// Check if codec is available in SDP answer
 		if sdp.ScreenShareVideo.Codec == nil {
 			c.log.Errorw("🖥️ [re-INVITE] [Phase5.8] ❌ No codec in screen share SDP answer", nil)
@@ -1907,9 +1855,13 @@ func (c *inboundCall) updateScreenShareConnections(sdp *sdpv2.SDP) error {
 		c.log.Infow("is it broken here?", "sdp", sdp)
 
 		// This completes Phase 2: Setup GStreamer pipeline, connect UDP with real port, start pipeline
-		if err := c.screenShare.SetupPipelineAfterReInvite(sdp.ScreenShareVideo); err != nil {
+		if err := c.screenshare.Setup(sdp.ScreenShareVideo); err != nil {
 			c.log.Errorw("🖥️ [re-INVITE] [Phase5.8] ❌ Failed to setup pipeline after re-INVITE", err)
 			return fmt.Errorf("failed to setup screen share pipeline: %w", err)
+		}
+		if err := c.screenshare.Start(); err != nil {
+			c.log.Errorw("🖥️ [re-INVITE] [Phase5.8] ❌ Failed to start pipeline after re-INVITE", err)
+			return fmt.Errorf("failed to start screen share pipeline: %w", err)
 		}
 
 		c.log.Infow("🖥️ [re-INVITE] [Phase5.8] ✅ Screen share pipeline fully active")
@@ -1997,13 +1949,7 @@ func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncrypt
 	c.initialAnswer = answer
 	c.mu.Unlock()
 
-	// Pass initial negotiated codec to screen share manager as fallback
-	if c.screenShare != nil && answer.Video != nil && answer.Video.Codec != nil {
-		c.screenShare.SetNegotiatedCodec(answer.Video.Codec)
-		c.log.Infow("🖥️ [ScreenShare] Initial camera codec passed to screen share manager",
-			"codec", answer.Video.Codec.Name,
-			"payloadType", answer.Video.Codec.PayloadType)
-	}
+	// Note: VideoManager receives codec during Setup() call, no need to set it separately
 
 	return answerData, nil
 }
@@ -2238,9 +2184,9 @@ func (c *inboundCall) closeMedia() {
 	if c.media != nil {
 		c.media.Close()
 	}
-	if c.screenShare != nil {
+	if c.screenshare != nil {
 		c.log.Debugw("🖥️ [Inbound] Closing screen share manager")
-		if err := c.screenShare.Close(); err != nil {
+		if err := c.screenshare.Close(); err != nil {
 			c.log.Errorw("🖥️ [Inbound] Failed to close screen share manager", err)
 		}
 	}
