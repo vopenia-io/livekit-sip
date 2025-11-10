@@ -65,6 +65,11 @@ type ParticipantInfo struct {
 
 type TrackCallback = func(ti *TrackInput)
 
+type ParticipantTracks struct {
+	Video       *TrackInput
+	ScreenShare *TrackInput
+}
+
 type Room struct {
 	log        logger.Logger
 	roomLog    logger.Logger // deferred logger
@@ -80,13 +85,13 @@ type Room struct {
 	closed     core.Fuse
 	stats      *RoomStats
 
-	participantTracks   map[string]TrackInput
+	participantTracks   map[string]ParticipantTracks
 	activeParticipant   string
 	trackMu             sync.Mutex
-	trackCallback       TrackCallback        // Camera video callback
-	screenShareCallback TrackCallback        // Screen share callback
-	screenShareMgr      *ScreenShareManager  // Screen share manager for direct access
+	videoCallback       TrackCallback // Camera video callback
+	screenShareCallback TrackCallback // Screen share callback
 	videoOut            *TrackOutput
+	// screenShareOut      *TrackOutput
 }
 
 type ParticipantConfig struct {
@@ -113,7 +118,7 @@ func NewRoom(log logger.Logger, st *RoomStats) *Room {
 	r := &Room{log: log,
 		stats:             st,
 		out:               msdk.NewSwitchWriter(RoomSampleRate),
-		participantTracks: make(map[string]TrackInput),
+		participantTracks: make(map[string]ParticipantTracks),
 	}
 	out := newMediaWriterCount(r.out, &st.OutputFrames, &st.OutputSamples)
 
@@ -262,24 +267,6 @@ func (r *Room) Connect(conf *config.Config, rconf RoomConfig) error {
 			},
 			OnTrackUnsubscribed: func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
 				r.log.Debugw("track unsubscribed", "kind", pub.Kind(), "participant", rp.Identity(), "pID", rp.SID(), "trackID", pub.SID(), "trackName", pub.Name())
-
-				// Check if this is a screen share track that needs cleanup
-				if pub.Kind() == lksdk.TrackKindVideo && pub.Source() == livekit.TrackSource_SCREEN_SHARE {
-					r.log.Infow("🖥️ [Room] Screen share track unsubscribed - stopping screen share")
-					r.trackMu.Lock()
-					ssm := r.screenShareMgr
-					r.trackMu.Unlock()
-
-					if ssm != nil {
-						go func() {
-							if err := ssm.Stop(); err != nil {
-								r.log.Errorw("🖥️ [Room] Failed to stop screen share", err)
-							}
-						}()
-					}
-					return
-				}
-
 				switch pub.Kind() {
 				case lksdk.TrackKindAudio:
 					// no-op
@@ -583,22 +570,16 @@ func (r *Room) DeleteParticipantTrack(participantID string) {
 	}
 }
 
-func (r *Room) SetTrackCallback(cb TrackCallback) {
+func (r *Room) SetVideoCallback(cb TrackCallback) {
 	r.trackMu.Lock()
 	defer r.trackMu.Unlock()
-	r.trackCallback = cb
+	r.videoCallback = cb
 }
 
 func (r *Room) SetScreenShareCallback(cb TrackCallback) {
 	r.trackMu.Lock()
 	defer r.trackMu.Unlock()
 	r.screenShareCallback = cb
-}
-
-func (r *Room) SetScreenShareManager(ssm *ScreenShareManager) {
-	r.trackMu.Lock()
-	defer r.trackMu.Unlock()
-	r.screenShareMgr = ssm
 }
 
 func (r *Room) UpdateActiveParticipant(participantID string) {
@@ -609,7 +590,7 @@ func (r *Room) UpdateActiveParticipant(participantID string) {
 		"requestedID", participantID,
 		"currentActive", r.activeParticipant,
 		"numTracks", len(r.participantTracks),
-		"hasCallback", r.trackCallback != nil)
+		"hasCallback", r.videoCallback != nil)
 
 	// If participantID is empty and we have no active participant,
 	// try to pick the first available participant from participantTracks
@@ -630,8 +611,8 @@ func (r *Room) UpdateActiveParticipant(participantID string) {
 		participantID = r.activeParticipant
 	}
 
-	// Check if track exists before doing anything
-	track, ok := r.participantTracks[participantID]
+	// Check if tracks exists before doing anything
+	tracks, ok := r.participantTracks[participantID]
 	if !ok {
 		r.roomLog.Debugw("Track not found for participant, skipping", "participantID", participantID)
 		return
@@ -645,9 +626,12 @@ func (r *Room) UpdateActiveParticipant(participantID string) {
 
 	// Set active participant and invoke callback
 	r.activeParticipant = participantID
-	r.roomLog.Infow("Invoking video track callback", "participantID", participantID, "hasCallback", r.trackCallback != nil)
-	if r.trackCallback != nil {
-		r.trackCallback(&track)
+	r.roomLog.Infow("Invoking video track callback", "participantID", participantID, "hasCallback", r.videoCallback != nil)
+	if r.videoCallback != nil && tracks.Video != nil {
+		r.videoCallback(tracks.Video)
+	}
+	if r.screenShareCallback != nil && tracks.ScreenShare != nil {
+		r.screenShareCallback(tracks.ScreenShare)
 	}
 }
 
@@ -656,26 +640,6 @@ func (r *Room) participantVideoTrackSubscribed(track *webrtc.TrackRemote, pub *l
 	if !r.ready.IsBroken() {
 		log.Warnw("ignoring track, room not ready", nil)
 		return
-	}
-
-	// Check if this is a screen share track
-	if pub.Source() == livekit.TrackSource_SCREEN_SHARE {
-		log.Infow("🖥️ [Room] handling SCREEN SHARE track")
-		r.trackMu.Lock()
-		ssm := r.screenShareMgr
-		r.trackMu.Unlock()
-
-		if ssm != nil {
-			log.Infow("🖥️ [Room] Invoking ScreenShareManager.OnScreenShareTrack")
-			go func() {
-				if err := ssm.OnScreenShareTrack(track, pub, rp); err != nil {
-					log.Errorw("🖥️ [Room] Failed to handle screen share track", err)
-				}
-			}()
-		} else {
-			log.Warnw("🖥️ [Room] No screen share manager registered", nil)
-		}
-		return // Don't process as regular video
 	}
 
 	log.Infow("handling new video track")
@@ -687,20 +651,20 @@ func (r *Room) participantVideoTrackSubscribed(track *webrtc.TrackRemote, pub *l
 	func() {
 		r.trackMu.Lock()
 		defer r.trackMu.Unlock()
-		r.participantTracks[id] = *ti
+		tracks := r.participantTracks[id]
+		switch pub.Source() {
+		case livekit.TrackSource_CAMERA:
+			tracks.Video = ti
+		case livekit.TrackSource_SCREEN_SHARE:
+			tracks.ScreenShare = ti
+		default:
+			log.Warnw("unsupported video source for subscription", fmt.Errorf("source=%s", pub.Source()))
+			return
+		}
+		r.participantTracks[id] = tracks
 	}()
 
 	r.UpdateActiveParticipant(id)
-
-	// if cb, ok := r.videoTrackCallback[pub.Name()]; ok {
-	// 	go cb(track, pub, rp, conf)
-	// 	return
-	// }
-	// if cb, ok := r.videoTrackCallback["*"]; ok {
-	// 	go cb(track, pub, rp, conf)
-	// 	return
-	// }
-	// log.Warnw("no video track callback registered for this track", nil)
 }
 
 func (r *Room) LocalParticipant() *lksdk.LocalParticipant {

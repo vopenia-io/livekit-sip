@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
-	"net"
 	"net/netip"
 	"slices"
 	"strings"
@@ -31,6 +30,7 @@ import (
 
 	msdk "github.com/livekit/media-sdk"
 	"github.com/livekit/protocol/rpc"
+	"github.com/vopenia/bfcp"
 
 	"github.com/frostbyte73/core"
 	"github.com/icholy/digest"
@@ -608,9 +608,10 @@ type inboundCall struct {
 	call        *rpc.SIPCall
 	media       *MediaPort
 	video       *VideoManager
-	screenShare *ScreenShareManager // Screen share manager
-	dtmf        chan dtmf.Event     // buffered
-	lkRoom      *Room               // LiveKit room; only active after correct pin is entered
+	screenshare *VideoManager
+	bfcp        *bfcp.Client
+	dtmf        chan dtmf.Event // buffered
+	lkRoom      *Room           // LiveKit room; only active after correct pin is entered
 	callDur     func() time.Duration
 	joinDur     func() time.Duration
 	forwardDTMF atomic.Bool
@@ -982,6 +983,23 @@ func (c *inboundCall) SetupAudio(conf *config.Config, offer *sdpv2.SDP, answerBu
 }
 
 func (c *inboundCall) SetupVideo(conf *config.Config, offer *sdpv2.SDP, answerBuilder *sdpv2.SDPBuilder, features []livekit.SIPFeature) error {
+	if c.video == nil {
+		c.log.Infow("creating video manager")
+		video, err := NewVideoManager(c.log, c.lkRoom, offer, &MediaOptions{
+			IP:                  c.s.sconf.MediaIP,
+			Ports:               conf.RTPPort,
+			MediaTimeoutInitial: c.s.conf.MediaTimeoutInitial,
+			MediaTimeout:        c.s.conf.MediaTimeout,
+			Stats:               &c.stats.Port,
+		})
+		if err != nil {
+			return fmt.Errorf("video manager creation failed: %w", err)
+		}
+		c.video = video
+
+		c.lkRoom.SetVideoCallback(c.video.OnWebrtcTrack)
+	}
+
 	if offer.Video != nil {
 		if err := offer.Video.SelectCodec(); err != nil {
 			return fmt.Errorf("video codec selection failed: %w, video: %v", err, offer.Video)
@@ -991,29 +1009,12 @@ func (c *inboundCall) SetupVideo(conf *config.Config, offer *sdpv2.SDP, answerBu
 			return fmt.Errorf("no video codec in SDP offer: %w", sdp.ErrNoCommonMedia)
 		}
 
-		if c.video == nil {
-			video, err := NewVideoManager(c.log, c.lkRoom, offer, &MediaOptions{
-				IP:                  c.s.sconf.MediaIP,
-				Ports:               conf.RTPPort,
-				MediaTimeoutInitial: c.s.conf.MediaTimeoutInitial,
-				MediaTimeout:        c.s.conf.MediaTimeout,
-				Stats:               &c.stats.Port,
-			})
-			if err != nil {
-				return fmt.Errorf("video manager creation failed: %w", err)
-			}
-			c.video = video
+		if err := c.video.Stop(); err != nil {
+			return fmt.Errorf("video manager stop failed: %w", err)
+		}
 
-			if err := c.video.Setup(offer.Video); err != nil {
-				return fmt.Errorf("video setup failed: %w", err)
-			}
-			if err := c.video.Start(); err != nil {
-				return fmt.Errorf("video start failed: %w", err)
-			}
-		} else {
-			if err := c.video.Setup(offer.Video); err != nil {
-				return fmt.Errorf("video setup failed: %w", err)
-			}
+		if err := c.video.Setup(offer.Video); err != nil {
+			return fmt.Errorf("video setup failed: %w", err)
 		}
 
 		answerBuilder.SetVideo(func(b *sdpv2.SDPMediaBuilder) (*sdpv2.SDPMedia, error) {
@@ -1026,145 +1027,276 @@ func (c *inboundCall) SetupVideo(conf *config.Config, offer *sdpv2.SDP, answerBu
 				SetDirection(offer.Video.Direction.Reverse()).
 				Build()
 		})
-	} else if c.video != nil {
+
+		if err := c.video.Start(); err != nil {
+			return fmt.Errorf("failed to start video: %w", err)
+		}
+	} else {
 		c.log.Infow("closing video manager as no video in offer")
-		// video was previously established, but not in this offer
-		c.video.Close()
-		c.video = nil
+		if err := c.video.Stop(); err != nil {
+			return fmt.Errorf("video manager stop failed: %w", err)
+		}
 	}
+
 	return nil
 }
 
-func (c *inboundCall) SetupScreenShare(conf *config.Config, offer *sdpv2.SDP) error {
-	c.log.Infow("🖥️ [Inbound] Setting up screen share support")
-
-	// Use BFCP server address from configuration
-	bfcpServerAddr := fmt.Sprintf("%s:%d", c.s.sconf.MediaIP, conf.BFCPPort)
-
-	ssm, err := NewScreenShareManager(
-		c.log,
-		c.lkRoom,
-		offer.Addr,
-		&MediaOptions{
+func (c *inboundCall) SetupScreenShare(conf *config.Config, offer *sdpv2.SDP, answerBuilder *sdpv2.SDPBuilder, features []livekit.SIPFeature) error {
+	if c.screenshare == nil {
+		c.log.Infow("creating video manager")
+		video, err := NewVideoManager(c.log, c.lkRoom, offer, &MediaOptions{
 			IP:                  c.s.sconf.MediaIP,
 			Ports:               conf.RTPPort,
 			MediaTimeoutInitial: c.s.conf.MediaTimeoutInitial,
 			MediaTimeout:        c.s.conf.MediaTimeout,
 			Stats:               &c.stats.Port,
-		},
-		bfcpServerAddr,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to create screen share manager: %w", err)
+		})
+		if err != nil {
+			return fmt.Errorf("video manager creation failed: %w", err)
+		}
+		c.screenshare = video
+
+		c.lkRoom.SetScreenShareCallback(c.screenshare.OnWebrtcTrack)
 	}
 
+	if offer.ScreenShareVideo != nil {
+		if err := offer.ScreenShareVideo.SelectCodec(); err != nil {
+			return fmt.Errorf("video codec selection failed: %w, screenshare: %v", err, offer.ScreenShareVideo)
+		}
+		c.log.Infow("video SDP", "data", offer.ScreenShareVideo)
+		if offer.ScreenShareVideo.Codec == nil {
+			return fmt.Errorf("no video codec in SDP offer: %w", sdp.ErrNoCommonMedia)
+		}
+
+		if err := c.screenshare.Stop(); err != nil {
+			return fmt.Errorf("video manager stop failed: %w", err)
+		}
+
+		if err := c.screenshare.Setup(offer.ScreenShareVideo); err != nil {
+			return fmt.Errorf("video setup failed: %w", err)
+		}
+
+		answerBuilder.SetVideo(func(b *sdpv2.SDPMediaBuilder) (*sdpv2.SDPMedia, error) {
+			return b.
+				AddCodec(func(_ *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
+					return offer.ScreenShareVideo.Codec, nil
+				}, true).
+				SetRTPPort(uint16(c.screenshare.RtpPort())).
+				SetRTCPPort(uint16(c.screenshare.RtcpPort())).
+				SetDirection(offer.ScreenShareVideo.Direction.Reverse()).
+				Build()
+		})
+
+		if err := c.screenshare.Start(); err != nil {
+			return fmt.Errorf("failed to start screenshare: %w", err)
+		}
+	} else {
+		c.log.Infow("closing screenshare manager as no screenshare in offer")
+		if err := c.screenshare.Stop(); err != nil {
+			return fmt.Errorf("video manager stop failed: %w", err)
+		}
+	}
+
+	return nil
+
+	// c.log.Infow("🖥️ [Inbound] Setting up screen share support")
+
+	// // Use BFCP server address from configuration
+	// bfcpServerAddr := fmt.Sprintf("%s:%d", c.s.sconf.MediaIP, conf.BFCPPort)
+
+	// ssm, err := NewScreenShareManager(
+	// 	c.log,
+	// 	c.lkRoom,
+	// 	offer.Addr,
+	// 	&MediaOptions{
+	// 		IP:                  c.s.sconf.MediaIP,
+	// 		Ports:               conf.RTPPort,
+	// 		MediaTimeoutInitial: c.s.conf.MediaTimeoutInitial,
+	// 		MediaTimeout:        c.s.conf.MediaTimeout,
+	// 		Stats:               &c.stats.Port,
+	// 	},
+	// 	bfcpServerAddr,
+	// )
+	// if err != nil {
+	// 	return fmt.Errorf("failed to create screen share manager: %w", err)
+	// }
+
 	// Extract BFCP from SDP offer if present
+	// var conferenceID uint32 = 1
+	// var userID uint16 = 1
+	// const floorID uint16 = 2 // FloorID for screen sharing
+
+	// if offer.BFCP != nil {
+	// 	c.log.Infow("🖥️ [Inbound] Parsed BFCP from SDP offer",
+	// 		"serverAddr", offer.BFCP.ConnectionIP.String()+":"+fmt.Sprintf("%d", offer.BFCP.Port),
+	// 		"conferenceID", offer.BFCP.ConferenceID,
+	// 		"userID", offer.BFCP.UserID,
+	// 		"floorID", floorID,
+	// 		"offerFloorID", offer.BFCP.FloorID,
+	// 		"floorCtrl", offer.BFCP.FloorCtrl,
+	// 		"mediaStream", offer.BFCP.MediaStream,
+	// 		"setup", offer.BFCP.Setup,
+	// 		"connection", offer.BFCP.Connection,
+	// 	)
+
+	// 	// Use parsed values
+	// 	if offer.BFCP.ConferenceID > 0 {
+	// 		conferenceID = offer.BFCP.ConferenceID
+	// 	}
+	// 	if offer.BFCP.UserID > 0 {
+	// 		userID = offer.BFCP.UserID
+	// 	}
+	// 	// FloorID is hardcoded to 2 - ignore offer.BFCP.FloorID
+
+	// 	// Handle SIP device pre-reserved floor
+	// 	if offer.BFCP.FloorCtrl == "c-s" || offer.BFCP.FloorCtrl == "c-only" {
+	// 		// Mark this floor as reserved by the SIP device
+	// 		c.mu.Lock()
+	// 		c.reservedFloors[floorID] = true
+	// 		if floorID >= c.nextFloorID {
+	// 			c.nextFloorID = floorID + 1
+	// 		}
+	// 		c.mu.Unlock()
+
+	// 		c.log.Infow("🖥️ [Inbound] SIP device pre-reserved floor (SIP→WebRTC)",
+	// 			"reservedFloorID", floorID,
+	// 			"floorCtrl", offer.BFCP.FloorCtrl,
+	// 			"nextAvailableFloor", c.nextFloorID,
+	// 			"note", "Floor reserved for potential SIP→WebRTC screen share",
+	// 		)
+	// 	}
+	// } else {
+	// 	c.log.Infow("🖥️ [Inbound] No BFCP in SDP offer, using defaults",
+	// 		"conferenceID", conferenceID,
+	// 		"userID", userID,
+	// 		"floorID", floorID,
+	// 	)
+	// }
+
+	// // Create unique BFCP conference for this call
+	// allocatedConferenceID := c.s.allocateConferenceID()
+	// confMgr := c.s.bfcpServer.GetConferenceManager()
+
+	// bfcpConf, err := confMgr.CreateConference(allocatedConferenceID, userID)
+	// if err != nil {
+	// 	return fmt.Errorf("failed to create BFCP conference: %w", err)
+	// }
+
+	// // Store conference ID for this call
+	// c.bfcpConferenceID = allocatedConferenceID
+
+	// // Add floor 2 for WebRTC→SIP screen sharing
+	// bfcpConf.AddFloor(floorID)
+
+	// c.log.Infow("🖥️ [BFCP] Conference created for call with floor for screen share",
+	// 	"conferenceID", allocatedConferenceID,
+	// 	"sipDeviceUserID", userID,
+	// 	"floorID", floorID,
+	// )
+
+	// // Setup BFCP client immediately so it's ready when screen share starts
+	// // We need floor control established BEFORE sending re-INVITE
+	// sharerUserID := userID + 1 // Separate user ID for screen sharer (WebRTC→SIP)
+	// c.log.Infow("🖥️ [Inbound] Setting up BFCP client for screen share",
+	// 	"serverAddr", bfcpServerAddr,
+	// 	"conferenceID", allocatedConferenceID,
+	// 	"sharerUserID", sharerUserID,
+	// 	"floorID", floorID,
+	// 	"note", "BFCP setup happens early, floor requested when track detected",
+	// )
+
+	// if err := ssm.SetupBFCP(context.Background(), bfcpServerAddr, allocatedConferenceID, sharerUserID, floorID); err != nil {
+	// 	c.log.Errorw("🖥️ [Inbound] ❌ Failed to setup BFCP client", err)
+	// 	return fmt.Errorf("failed to setup BFCP client: %w", err)
+	// }
+
+	// c.log.Infow("🖥️ [Inbound] ✅ BFCP client setup complete and connected")
+
+	// // Store screen share manager in room for access from participantVideoTrackSubscribed
+	// c.lkRoom.SetScreenShareManager(ssm)
+
+	// // Register re-INVITE callbacks
+	// ssm.SetOnStartCallback(func() error {
+	// 	c.log.Infow("🖥️ [Inbound] Screen share started - re-INVITE needed")
+	// 	return c.sendScreenShareReInvite(true)
+	// })
+
+	// ssm.SetOnStopCallback(func() error {
+	// 	c.log.Infow("🖥️ [Inbound] Screen share stopped - re-INVITE needed")
+	// 	return c.sendScreenShareReInvite(false)
+	// })
+
+	// c.screenShare = ssm
+	// c.log.Infow("🖥️ [Inbound] Screen share support initialized")
+	// return nil
+}
+
+func (c *inboundCall) SetupBFCP(conf *config.Config, offer *sdpv2.SDP, answerBuilder *sdpv2.SDPBuilder, features []livekit.SIPFeature) error {
+	if offer.BFCP == nil {
+		return nil
+	}
+
 	var conferenceID uint32 = 1
 	var userID uint16 = 1
 	const floorID uint16 = 2 // FloorID for screen sharing
 
-	if offer.BFCP != nil {
-		c.log.Infow("🖥️ [Inbound] Parsed BFCP from SDP offer",
-			"serverAddr", offer.BFCP.ConnectionIP.String()+":"+fmt.Sprintf("%d", offer.BFCP.Port),
-			"conferenceID", offer.BFCP.ConferenceID,
+	if offer.BFCP.ConferenceID > 0 {
+		conferenceID = offer.BFCP.ConferenceID
+	}
+	if offer.BFCP.UserID > 0 {
+		userID = offer.BFCP.UserID
+	}
+
+	bfcpAddr := fmt.Sprintf("%s:%d", c.s.sconf.MediaIP, conf.BFCPPort)
+
+	c.log.Infow("Setting up BFCP support",
+		"serverAddr", bfcpAddr,
+		"conferenceID", conferenceID,
+		"userID", userID,
+		"floorID", floorID,
+	)
+
+	config := &bfcp.ClientConfig{
+		ServerAddress:  bfcpAddr,
+		ConferenceID:   c.bfcpConferenceID,
+		UserID:         userID,
+		EnableLogging:  true,
+		ConnectTimeout: 10 * time.Second,
+	}
+	bfcpClient := bfcp.NewClient(config)
+	c.bfcp = bfcpClient
+
+	if err := c.bfcp.Connect(); err != nil {
+		return fmt.Errorf("failed to connect to BFCP server: %w", err)
+	}
+
+	if err := c.bfcp.Hello(); err != nil {
+		c.log.Warnw("BFCP Hello failed", err)
+	}
+
+	requestID, err := bfcpClient.RequestFloor(floorID, userID, bfcp.PriorityNormal)
+	if err != nil {
+		return fmt.Errorf("failed to request floor: %w", err)
+	}
+
+	c.log.Infow("BFCP floor requested",
+		"conferenceID", c.bfcpConferenceID,
+		"userID", offer.BFCP.UserID,
+		"floorID", floorID,
+		"requestID", requestID,
+	)
+
+	c.bfcp.OnFloorGranted = func(floorID uint16, requestID uint16) {
+		c.log.Infow("BFCP floor granted",
+			"conferenceID", c.bfcpConferenceID,
 			"userID", offer.BFCP.UserID,
 			"floorID", floorID,
-			"offerFloorID", offer.BFCP.FloorID,
-			"floorCtrl", offer.BFCP.FloorCtrl,
-			"mediaStream", offer.BFCP.MediaStream,
-			"setup", offer.BFCP.Setup,
-			"connection", offer.BFCP.Connection,
+			"requestID", requestID,
 		)
 
-		// Use parsed values
-		if offer.BFCP.ConferenceID > 0 {
-			conferenceID = offer.BFCP.ConferenceID
-		}
-		if offer.BFCP.UserID > 0 {
-			userID = offer.BFCP.UserID
-		}
-		// FloorID is hardcoded to 2 - ignore offer.BFCP.FloorID
-
-		// Handle SIP device pre-reserved floor
-		if offer.BFCP.FloorCtrl == "c-s" || offer.BFCP.FloorCtrl == "c-only" {
-			// Mark this floor as reserved by the SIP device
-			c.mu.Lock()
-			c.reservedFloors[floorID] = true
-			if floorID >= c.nextFloorID {
-				c.nextFloorID = floorID + 1
-			}
-			c.mu.Unlock()
-
-			c.log.Infow("🖥️ [Inbound] SIP device pre-reserved floor (SIP→WebRTC)",
-				"reservedFloorID", floorID,
-				"floorCtrl", offer.BFCP.FloorCtrl,
-				"nextAvailableFloor", c.nextFloorID,
-				"note", "Floor reserved for potential SIP→WebRTC screen share",
-			)
-		}
-	} else {
-		c.log.Infow("🖥️ [Inbound] No BFCP in SDP offer, using defaults",
-			"conferenceID", conferenceID,
-			"userID", userID,
-			"floorID", floorID,
-		)
+		c.sendScreenShareReInvite(true)
 	}
 
-	// Create unique BFCP conference for this call
-	allocatedConferenceID := c.s.allocateConferenceID()
-	confMgr := c.s.bfcpServer.GetConferenceManager()
-
-	bfcpConf, err := confMgr.CreateConference(allocatedConferenceID, userID)
-	if err != nil {
-		return fmt.Errorf("failed to create BFCP conference: %w", err)
-	}
-
-	// Store conference ID for this call
-	c.bfcpConferenceID = allocatedConferenceID
-
-	// Add floor 2 for WebRTC→SIP screen sharing
-	bfcpConf.AddFloor(floorID)
-
-	c.log.Infow("🖥️ [BFCP] Conference created for call with floor for screen share",
-		"conferenceID", allocatedConferenceID,
-		"sipDeviceUserID", userID,
-		"floorID", floorID,
-	)
-
-	// Setup BFCP client immediately so it's ready when screen share starts
-	// We need floor control established BEFORE sending re-INVITE
-	sharerUserID := userID + 1 // Separate user ID for screen sharer (WebRTC→SIP)
-	c.log.Infow("🖥️ [Inbound] Setting up BFCP client for screen share",
-		"serverAddr", bfcpServerAddr,
-		"conferenceID", allocatedConferenceID,
-		"sharerUserID", sharerUserID,
-		"floorID", floorID,
-		"note", "BFCP setup happens early, floor requested when track detected",
-	)
-
-	if err := ssm.SetupBFCP(context.Background(), bfcpServerAddr, allocatedConferenceID, sharerUserID, floorID); err != nil {
-		c.log.Errorw("🖥️ [Inbound] ❌ Failed to setup BFCP client", err)
-		return fmt.Errorf("failed to setup BFCP client: %w", err)
-	}
-
-	c.log.Infow("🖥️ [Inbound] ✅ BFCP client setup complete and connected")
-
-	// Store screen share manager in room for access from participantVideoTrackSubscribed
-	c.lkRoom.SetScreenShareManager(ssm)
-
-	// Register re-INVITE callbacks
-	ssm.SetOnStartCallback(func() error {
-		c.log.Infow("🖥️ [Inbound] Screen share started - re-INVITE needed")
-		return c.sendScreenShareReInvite(true)
-	})
-
-	ssm.SetOnStopCallback(func() error {
-		c.log.Infow("🖥️ [Inbound] Screen share stopped - re-INVITE needed")
-		return c.sendScreenShareReInvite(false)
-	})
-
-	c.screenShare = ssm
-	c.log.Infow("🖥️ [Inbound] Screen share support initialized")
 	return nil
 }
 
@@ -1261,71 +1393,71 @@ func (c *inboundCall) buildReInviteSDP(includeScreenShare bool) (*sdpv2.SDP, err
 			"port", initialAnswer.Video.Port)
 	}
 
-	// Add screen share video m-line (if requested)
-	if includeScreenShare && c.screenShare != nil {
-		c.log.Infow("🖥️ [re-INVITE] Adding screen share video m-line")
+	// // Add screen share video m-line (if requested)
+	// if includeScreenShare && c.screenShare != nil {
+	// 	c.log.Infow("🖥️ [re-INVITE] Adding screen share video m-line")
 
-		// Get screen share UDP ports
-		rtpAddr := c.screenShare.rtpConn.LocalAddr().(*net.UDPAddr)
-		rtcpAddr := c.screenShare.rtcpConn.LocalAddr().(*net.UDPAddr)
+	// 	// Get screen share UDP ports
+	// 	rtpAddr := c.screenShare.rtpConn.LocalAddr().(*net.UDPAddr)
+	// 	rtcpAddr := c.screenShare.rtcpConn.LocalAddr().(*net.UDPAddr)
 
-		c.log.Infow("🖥️ [re-INVITE] Screen share ports",
-			"rtpPort", rtpAddr.Port,
-			"rtcpPort", rtcpAddr.Port)
+	// 	c.log.Infow("🖥️ [re-INVITE] Screen share ports",
+	// 		"rtpPort", rtpAddr.Port,
+	// 		"rtcpPort", rtcpAddr.Port)
 
-		// Use builder to add screen share video
-		builder.SetScreenShareVideo(func(b *sdpv2.SDPMediaBuilder) (*sdpv2.SDPMedia, error) {
-			cameraCodec := initialAnswer.Video.Codec
+	// 	// Use builder to add screen share video
+	// 	builder.SetScreenShareVideo(func(b *sdpv2.SDPMediaBuilder) (*sdpv2.SDPMedia, error) {
+	// 		cameraCodec := initialAnswer.Video.Codec
 
-			b.SetRTPPort(uint16(rtpAddr.Port))
-			b.SetRTCPPort(uint16(rtcpAddr.Port))
-			b.SetDirection(sdpv2.DirectionSendRecv)
-			b.SetContent("slides")
-			b.AddCodec(func(cb *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
-				cb.SetPayloadType(cameraCodec.PayloadType)
-				cb.SetCodec(cameraCodec.Codec)
-				return cb.Build()
-			}, true)
+	// 		b.SetRTPPort(uint16(rtpAddr.Port))
+	// 		b.SetRTCPPort(uint16(rtcpAddr.Port))
+	// 		b.SetDirection(sdpv2.DirectionSendRecv)
+	// 		b.SetContent("slides")
+	// 		b.AddCodec(func(cb *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
+	// 			cb.SetPayloadType(cameraCodec.PayloadType)
+	// 			cb.SetCodec(cameraCodec.Codec)
+	// 			return cb.Build()
+	// 		}, true)
 
-			return b.Build()
-		})
+	// 		return b.Build()
+	// 	})
 
-		c.log.Infow("🖥️ [re-INVITE] ✅ Screen share video added")
-	}
+	// 	c.log.Infow("🖥️ [re-INVITE] ✅ Screen share video added")
+	// }
 
 	// Add BFCP m-line (if screen share is included and we have BFCP params)
-	if includeScreenShare && c.screenShare != nil && initialOffer != nil && initialOffer.BFCP != nil {
-		c.log.Infow("🖥️ [re-INVITE] Adding BFCP m-line as s-only server")
+	// if includeScreenShare && c.screenShare != nil && initialOffer != nil && initialOffer.BFCP != nil {
+	// 	c.log.Infow("🖥️ [re-INVITE] Adding BFCP m-line as s-only server")
 
-		// Dynamically allocate floor to avoid conflicts with SIP device reservations
-		allocatedFloorID, err := c.allocateFloor()
-		if err != nil {
-			c.log.Errorw("🖥️ [re-INVITE] Failed to allocate floor ID", err)
-			return nil, fmt.Errorf("failed to allocate BFCP floor: %w", err)
-		}
+	// 	// Dynamically allocate floor to avoid conflicts with SIP device reservations
+	// 	allocatedFloorID, err := c.allocateFloor()
+	// 	if err != nil {
+	// 		c.log.Errorw("🖥️ [re-INVITE] Failed to allocate floor ID", err)
+	// 		return nil, fmt.Errorf("failed to allocate BFCP floor: %w", err)
+	// 	}
 
-		// Build BFCP media section - activating BFCP by advertising port 5070
-		bfcpMedia := &sdpv2.BFCPMedia{
-			Port:         uint16(c.s.conf.BFCPPort), // Activate: advertise port 5070 (was 0 in initial INVITE)
-			ConnectionIP: c.s.sconf.MediaIP,
-			FloorCtrl:    "s-only",  // We are ALWAYS BFCP server
-			Setup:        "passive", // We ALWAYS wait for client connection
-			Connection:   "new",
-			ConferenceID: c.bfcpConferenceID,       // Use allocated conference ID for this call
-			UserID:       initialOffer.BFCP.UserID, // Keep same user context
-			FloorID:      allocatedFloorID,         // Dynamically allocated to avoid conflicts
-			MediaStream:  3,                        // Screen share is 3rd m-line (audio, camera, screenshare)
-		}
+	// 	// Build BFCP media section - activating BFCP by advertising port 5070
+	// 	bfcpMedia := &sdpv2.BFCPMedia{
+	// 		Port:         uint16(c.s.conf.BFCPPort), // Activate: advertise port 5070 (was 0 in initial INVITE)
+	// 		ConnectionIP: c.s.sconf.MediaIP,
+	// 		FloorCtrl:    "s-only",  // We are ALWAYS BFCP server
+	// 		Setup:        "passive", // We ALWAYS wait for client connection
+	// 		Connection:   "new",
+	// 		ConferenceID: c.bfcpConferenceID,       // Use allocated conference ID for this call
+	// 		UserID:       initialOffer.BFCP.UserID, // Keep same user context
+	// 		FloorID:      allocatedFloorID,         // Dynamically allocated to avoid conflicts
+	// 		MediaStream:  3,                        // Screen share is 3rd m-line (audio, camera, screenshare)
+	// 	}
 
-		builder.SetBFCP(bfcpMedia)
+	// 	builder.SetBFCP(bfcpMedia)
 
-		c.log.Infow("🖥️ [re-INVITE] ✅ BFCP m-line added",
-			"port", bfcpMedia.Port,
-			"conferenceID", bfcpMedia.ConferenceID,
-			"userID", bfcpMedia.UserID,
-			"floorID", bfcpMedia.FloorID,
-			"mediaStream", bfcpMedia.MediaStream)
-	}
+	// 	c.log.Infow("🖥️ [re-INVITE] ✅ BFCP m-line added",
+	// 		"port", bfcpMedia.Port,
+	// 		"conferenceID", bfcpMedia.ConferenceID,
+	// 		"userID", bfcpMedia.UserID,
+	// 		"floorID", bfcpMedia.FloorID,
+	// 		"mediaStream", bfcpMedia.MediaStream)
+	// }
 
 	sdp, err := builder.Build()
 	if err != nil {
@@ -1891,29 +2023,29 @@ func (c *inboundCall) updateScreenShareConnections(sdp *sdpv2.SDP) error {
 		"screenShareRTCPPort", screenShareRTCPPort)
 
 	// PHASE 2: Setup pipeline with real port from SDP answer
-	if c.screenShare != nil && sdp.ScreenShareVideo != nil {
-		// Check if codec is available in SDP answer
-		if sdp.ScreenShareVideo.Codec == nil {
-			c.log.Errorw("🖥️ [re-INVITE] [Phase5.8] ❌ No codec in screen share SDP answer", nil)
-			return fmt.Errorf("no codec in screen share SDP answer")
-		}
+	// if c.screenShare != nil && sdp.ScreenShareVideo != nil {
+	// 	// Check if codec is available in SDP answer
+	// 	if sdp.ScreenShareVideo.Codec == nil {
+	// 		c.log.Errorw("🖥️ [re-INVITE] [Phase5.8] ❌ No codec in screen share SDP answer", nil)
+	// 		return fmt.Errorf("no codec in screen share SDP answer")
+	// 	}
 
-		c.log.Infow("🖥️ [re-INVITE] [Phase5.8] Calling setupPipelineAfterReInvite with real ports",
-			"rtpPort", sdp.ScreenShareVideo.Port,
-			"rtcpPort", sdp.ScreenShareVideo.RTCPPort,
-			"codec", sdp.ScreenShareVideo.Codec.Name,
-			"payloadType", sdp.ScreenShareVideo.Codec.PayloadType)
+	// 	c.log.Infow("🖥️ [re-INVITE] [Phase5.8] Calling setupPipelineAfterReInvite with real ports",
+	// 		"rtpPort", sdp.ScreenShareVideo.Port,
+	// 		"rtcpPort", sdp.ScreenShareVideo.RTCPPort,
+	// 		"codec", sdp.ScreenShareVideo.Codec.Name,
+	// 		"payloadType", sdp.ScreenShareVideo.Codec.PayloadType)
 
-		c.log.Infow("is it broken here?", "sdp", sdp)
+	// 	c.log.Infow("is it broken here?", "sdp", sdp)
 
-		// This completes Phase 2: Setup GStreamer pipeline, connect UDP with real port, start pipeline
-		if err := c.screenShare.SetupPipelineAfterReInvite(sdp.ScreenShareVideo); err != nil {
-			c.log.Errorw("🖥️ [re-INVITE] [Phase5.8] ❌ Failed to setup pipeline after re-INVITE", err)
-			return fmt.Errorf("failed to setup screen share pipeline: %w", err)
-		}
+	// 	// This completes Phase 2: Setup GStreamer pipeline, connect UDP with real port, start pipeline
+	// 	if err := c.screenShare.SetupPipelineAfterReInvite(sdp.ScreenShareVideo); err != nil {
+	// 		c.log.Errorw("🖥️ [re-INVITE] [Phase5.8] ❌ Failed to setup pipeline after re-INVITE", err)
+	// 		return fmt.Errorf("failed to setup screen share pipeline: %w", err)
+	// 	}
 
-		c.log.Infow("🖥️ [re-INVITE] [Phase5.8] ✅ Screen share pipeline fully active")
-	}
+	// 	c.log.Infow("🖥️ [re-INVITE] [Phase5.8] ✅ Screen share pipeline fully active")
+	// }
 
 	return nil
 }
@@ -1954,7 +2086,7 @@ func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncrypt
 	}
 
 	// Setup screen share support (Phase 3)
-	if err := c.SetupScreenShare(conf, offer); err != nil {
+	if err := c.SetupScreenShare(conf, offer, answerBuilder, features); err != nil {
 		c.log.Warnw("🖥️ [Inbound] Failed to setup screen share", err)
 		// Don't fail the call - camera video still works
 	}
@@ -1998,12 +2130,12 @@ func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncrypt
 	c.mu.Unlock()
 
 	// Pass initial negotiated codec to screen share manager as fallback
-	if c.screenShare != nil && answer.Video != nil && answer.Video.Codec != nil {
-		c.screenShare.SetNegotiatedCodec(answer.Video.Codec)
-		c.log.Infow("🖥️ [ScreenShare] Initial camera codec passed to screen share manager",
-			"codec", answer.Video.Codec.Name,
-			"payloadType", answer.Video.Codec.PayloadType)
-	}
+	// if c.screenShare != nil && answer.Video != nil && answer.Video.Codec != nil {
+	// 	c.screenShare.SetNegotiatedCodec(answer.Video.Codec)
+	// 	c.log.Infow("🖥️ [ScreenShare] Initial camera codec passed to screen share manager",
+	// 		"codec", answer.Video.Codec.Name,
+	// 		"payloadType", answer.Video.Codec.PayloadType)
+	// }
 
 	return answerData, nil
 }
@@ -2238,12 +2370,12 @@ func (c *inboundCall) closeMedia() {
 	if c.media != nil {
 		c.media.Close()
 	}
-	if c.screenShare != nil {
-		c.log.Debugw("🖥️ [Inbound] Closing screen share manager")
-		if err := c.screenShare.Close(); err != nil {
-			c.log.Errorw("🖥️ [Inbound] Failed to close screen share manager", err)
-		}
-	}
+	// if c.screenShare != nil {
+	// 	c.log.Debugw("🖥️ [Inbound] Closing screen share manager")
+	// 	if err := c.screenShare.Close(); err != nil {
+	// 		c.log.Errorw("🖥️ [Inbound] Failed to close screen share manager", err)
+	// 	}
+	// }
 
 	// Clean up BFCP conference
 	if c.bfcpConferenceID != 0 {
@@ -2316,11 +2448,7 @@ func (c *inboundCall) publishTracks() error {
 		c.media.WriteAudioTo(local)
 	}
 
-	if c.video != nil {
-		return c.video.PublishVideoTrack()
-	} else {
-		return c.lkRoom.StopVideo()
-	}
+	return c.video.PublishVideoTrack()
 }
 
 func (c *inboundCall) joinRoom(ctx context.Context, rconf RoomConfig, status CallStatus) error {
