@@ -85,7 +85,6 @@ type Room struct {
 	trackMu             sync.Mutex
 	trackCallback       TrackCallback        // Camera video callback
 	screenShareCallback TrackCallback        // Screen share callback
-	screenShareMgr      *ScreenShareManager  // Screen share manager for direct access
 	videoOut            *TrackOutput
 }
 
@@ -265,18 +264,8 @@ func (r *Room) Connect(conf *config.Config, rconf RoomConfig) error {
 
 				// Check if this is a screen share track that needs cleanup
 				if pub.Kind() == lksdk.TrackKindVideo && pub.Source() == livekit.TrackSource_SCREEN_SHARE {
-					r.log.Infow("🖥️ [Room] Screen share track unsubscribed - stopping screen share")
-					r.trackMu.Lock()
-					ssm := r.screenShareMgr
-					r.trackMu.Unlock()
-
-					if ssm != nil {
-						go func() {
-							if err := ssm.Stop(); err != nil {
-								r.log.Errorw("🖥️ [Room] Failed to stop screen share", err)
-							}
-						}()
-					}
+					r.log.Infow("🖥️ [Room] Screen share track unsubscribed")
+					// Cleanup will be handled by inbound call via BFCP floor release
 					return
 				}
 
@@ -595,12 +584,6 @@ func (r *Room) SetScreenShareCallback(cb TrackCallback) {
 	r.screenShareCallback = cb
 }
 
-func (r *Room) SetScreenShareManager(ssm *ScreenShareManager) {
-	r.trackMu.Lock()
-	defer r.trackMu.Unlock()
-	r.screenShareMgr = ssm
-}
-
 func (r *Room) UpdateActiveParticipant(participantID string) {
 	r.trackMu.Lock()
 	defer r.trackMu.Unlock()
@@ -662,18 +645,15 @@ func (r *Room) participantVideoTrackSubscribed(track *webrtc.TrackRemote, pub *l
 	if pub.Source() == livekit.TrackSource_SCREEN_SHARE {
 		log.Infow("🖥️ [Room] handling SCREEN SHARE track")
 		r.trackMu.Lock()
-		ssm := r.screenShareMgr
+		cb := r.screenShareCallback
 		r.trackMu.Unlock()
 
-		if ssm != nil {
-			log.Infow("🖥️ [Room] Invoking ScreenShareManager.OnScreenShareTrack")
-			go func() {
-				if err := ssm.OnScreenShareTrack(track, pub, rp); err != nil {
-					log.Errorw("🖥️ [Room] Failed to handle screen share track", err)
-				}
-			}()
+		if cb != nil {
+			log.Infow("🖥️ [Room] Invoking screen share callback")
+			ti := NewTrackInput(track, pub, rp, conf)
+			go cb(ti)
 		} else {
-			log.Warnw("🖥️ [Room] No screen share manager registered", nil)
+			log.Warnw("🖥️ [Room] No screen share callback registered", nil)
 		}
 		return // Don't process as regular video
 	}
