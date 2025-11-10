@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"sync"
 	"time"
 
 	"github.com/go-gst/go-glib/glib"
@@ -13,6 +14,14 @@ import (
 	mrtp "github.com/livekit/media-sdk/rtp"
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
 	"github.com/livekit/protocol/logger"
+)
+
+// VideoStatus represents the current state of the VideoManager
+type VideoStatus int
+
+const (
+	VideoStatusStopped VideoStatus = iota
+	VideoStatusStarted
 )
 
 var mainLoop *glib.MainLoop
@@ -57,6 +66,9 @@ type VideoManager struct {
 	pipeline *gst.Pipeline
 	recv     bool
 	send     bool
+
+	mu       sync.Mutex
+	status   VideoStatus
 }
 
 type VideoIO struct {
@@ -255,7 +267,19 @@ func (v *VideoManager) Setup(media *sdpv2.SDPMedia) error {
 }
 
 func (v *VideoManager) Start() error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
+	if v.status == VideoStatusStarted {
+		v.log.Debugw("video manager already started, skipping")
+		return nil
+	}
+
 	v.log.Debugw("starting video manager")
+
+	if v.pipeline == nil {
+		return fmt.Errorf("cannot start: pipeline not set up")
+	}
 
 	if err := v.pipeline.SetState(gst.StatePlaying); err != nil {
 		return fmt.Errorf("failed to set GStreamer pipeline to playing: %w", err)
@@ -273,5 +297,41 @@ func (v *VideoManager) Start() error {
 	v.log.Infow("GStreamer pipeline is PLAYING and ready for RTP packets",
 		"current_state", currentState.String(),
 		"change_result", changeReturn.String())
+
+	v.status = VideoStatusStarted
+	return nil
+}
+
+// Stop sets the pipeline to NULL state without closing resources
+// This allows the pipeline to be restarted later with Start()
+func (v *VideoManager) Stop() error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
+	if v.status == VideoStatusStopped {
+		v.log.Debugw("video manager already stopped, skipping")
+		return nil
+	}
+
+	v.log.Debugw("stopping video manager")
+
+	if v.pipeline != nil {
+		if err := v.pipeline.SetState(gst.StateNull); err != nil {
+			return fmt.Errorf("failed to set GStreamer pipeline to null: %w", err)
+		}
+
+		// Wait for pipeline to reach NULL state
+		v.log.Debugw("waiting for GStreamer pipeline to reach NULL state...")
+		changeReturn, currentState := v.pipeline.GetState(gst.StateNull, gst.ClockTime(100*time.Millisecond))
+		if changeReturn == gst.StateChangeFailure {
+			return fmt.Errorf("GStreamer pipeline failed to reach NULL state")
+		}
+
+		v.log.Infow("GStreamer pipeline is NULL",
+			"current_state", currentState.String(),
+			"change_result", changeReturn.String())
+	}
+
+	v.status = VideoStatusStopped
 	return nil
 }
