@@ -44,27 +44,26 @@ func (b *BFCPSDPBuilder) BuildAnswer(offer *sdpv2.BFCPMedia) *sdpv2.BFCPMedia {
 	}
 
 	// Build answer that instructs SIP device to connect to our BFCP server
-	// CRITICAL: We echo back Poly's ConferenceID and UserID, but NOT FloorID
-	// FloorID comes from the offer parameter (which we set to Floor 2 in re-INVITE)
-	// This forces Poly to use our floor numbering (Floor 2) instead of its Floor 1
-	// CRITICAL: We are ALWAYS the BFCP server, so we ALWAYS respond with s-only
-	// This forces the SIP device to be the client and connect to us
-	answerFloorCtrl := "s-only" // We're ALWAYS server-only
+	// CRITICAL: We echo back Poly's ConferenceID, UserID, and FloorID
+	// FloorID comes from the offer parameter (preserving Poly's original Floor 1)
+	// CRITICAL FIX: Use "c-s" (client-server) instead of "s-only" for Poly compatibility
+	// Poly devices expect "c-s" mode where both can control floors
+	answerFloorCtrl := "c-s" // Client-server mode for Poly compatibility
 
 	answer := &sdpv2.BFCPMedia{
 		Port:         uint16(b.bfcpServerPort), // Tell device our BFCP server port (5070)
 		ConnectionIP: serverIP,                 // Tell device our BFCP server IP
-		FloorCtrl:    answerFloorCtrl,          // Dynamic: s-only if they're c-only, else c-only
+		FloorCtrl:    answerFloorCtrl,          // c-s for Poly compatibility (was s-only)
 		ConferenceID: offer.ConferenceID,       // Echo back Poly's conference ID from initial offer
 		UserID:       offer.UserID,             // Echo back the device's user ID
-		FloorID:      offer.FloorID,            // Use OUR floor ID (Floor 2) - passed in via offer parameter
+		FloorID:      offer.FloorID,            // Echo back Poly's floor ID (preserve Floor 1)
 		MediaStream:  offer.MediaStream,        // Echo back the media stream (should be 3 for slides)
-		Setup:        "passive",                // We're the server (passive), device connects (active)
+		Setup:        "active",                 // We initiate TCP connection (Poly offered actpass)
 		Connection:   "new",                    // New connection
 	}
 
 	if EnableBFCPDebugLogging {
-		b.log.Infow("🔵 [BFCP-SDP] Built BFCP answer (forcing Floor 2)",
+		b.log.Infow("🔵 [BFCP-SDP] Built BFCP answer (preserving Poly's Floor ID)",
 			"offerPort", offer.Port,
 			"offerFloorCtrl", offer.FloorCtrl,
 			"offerSetup", offer.Setup,
@@ -78,7 +77,7 @@ func (b *BFCPSDPBuilder) BuildAnswer(offer *sdpv2.BFCPMedia) *sdpv2.BFCPMedia {
 			"answerUserID", answer.UserID,
 			"answerFloorID", answer.FloorID,
 			"serverIP", b.bfcpServerIP,
-			"note", "We are BFCP server - rejecting Poly's Floor 1, using Floor 2",
+			"note", "c-s mode, active setup - Poly compatibility fix",
 		)
 	}
 

@@ -608,8 +608,10 @@ type inboundCall struct {
 	call        *rpc.SIPCall
 	media       *MediaPort
 	video       *VideoManager
-	screenshare       *VideoManager  // Screen share video manager (uses VideoManager like video)
-	screenShareTrack  *TrackInput    // Pending screenshare track (connected after pipeline is ready)
+	screenshare              *VideoManager // Screen share video manager (uses VideoManager like video)
+	screenShareTrack         *TrackInput   // Pending screenshare track (connected after pipeline is ready)
+	screenShareTrackTime     time.Time     // When the WebRTC track arrived (for timing diagnostics)
+	screenshareSetupComplete bool          // Whether screenshare Setup() has been called (for bidirectional auto-connect)
 	dtmf              chan dtmf.Event     // buffered
 	lkRoom            *Room               // LiveKit room; only active after correct pin is entered
 	callDur     func() time.Duration
@@ -1258,13 +1260,13 @@ func (c *inboundCall) buildReInviteSDP(includeScreenShare bool) (*sdpv2.SDP, err
 	if includeScreenShare && c.screenshare != nil && initialOffer != nil && initialOffer.BFCP != nil {
 		c.log.Infow("🖥️ [re-INVITE] Adding BFCP m-line - telling SIP device to connect as client")
 
-		// CRITICAL: Always use Floor 2 for screenshare/content (standard convention)
-		// Floor 1 from Poly's initial offer is for camera
-		// Floor 2 is for content/screenshare (Polycom/Cisco convention)
-		screenshareFloorID := ScreenShareFloorID // Floor 2
+		// CRITICAL FIX: Preserve Poly's original Floor ID from initial offer
+		// Poly negotiated Floor 1 initially, we should maintain consistency
+		// Changing floor IDs mid-call causes confusion and rejection
+		polyFloorID := initialOffer.BFCP.FloorID // Preserve Poly's Floor 1
 
 		// Build BFCP SDP answer using dedicated builder
-		// This tells the SIP device: connect to our BFCP server at port 5070 as client-only
+		// This tells the SIP device: connect to our BFCP server with c-s mode and active setup
 		bfcpBuilder := NewBFCPSDPBuilder(
 			c.log,
 			c.s.sconf.MediaIP.String(),
@@ -1272,8 +1274,8 @@ func (c *inboundCall) buildReInviteSDP(includeScreenShare bool) (*sdpv2.SDP, err
 			c.bfcpConferenceID,
 		)
 
-		// Create modified offer preserving Poly's ConferenceID and UserID
-		// But use Floor 2 for screenshare (not Floor 1 from camera)
+		// Create modified offer preserving ALL of Poly's original BFCP parameters
+		// This ensures consistency with initial negotiation
 		modifiedOffer := &sdpv2.BFCPMedia{
 			Port:         initialOffer.BFCP.Port,
 			ConnectionIP: initialOffer.BFCP.ConnectionIP,
@@ -1282,7 +1284,7 @@ func (c *inboundCall) buildReInviteSDP(includeScreenShare bool) (*sdpv2.SDP, err
 			Connection:   initialOffer.BFCP.Connection,
 			ConferenceID: initialOffer.BFCP.ConferenceID, // Poly's ConferenceID from initial offer
 			UserID:       initialOffer.BFCP.UserID,       // Poly's UserID from initial offer
-			FloorID:      screenshareFloorID,             // Floor 2 for screenshare/content
+			FloorID:      polyFloorID,                    // Preserve Poly's Floor 1 (was forcing Floor 2)
 			MediaStream:  3,                              // Screen share is 3rd m-line (audio, camera, screenshare)
 			Attributes:   initialOffer.BFCP.Attributes,
 		}
@@ -1290,8 +1292,8 @@ func (c *inboundCall) buildReInviteSDP(includeScreenShare bool) (*sdpv2.SDP, err
 		c.log.Infow("🖥️ [re-INVITE] BFCP offer values being used",
 			"polyConferenceID", initialOffer.BFCP.ConferenceID,
 			"polyUserID", initialOffer.BFCP.UserID,
-			"screenshareFloorID", screenshareFloorID,
-			"note", "Floor 2 = screenshare/content",
+			"polyFloorID", polyFloorID,
+			"note", "Preserving Poly's original Floor ID for consistency",
 			"mediaStream", 3)
 
 		bfcpMedia := bfcpBuilder.BuildAnswer(modifiedOffer)
@@ -1330,10 +1332,13 @@ func (c *inboundCall) onScreenShareTrack(ti *TrackInput) {
 		return
 	}
 
-	// Create screenshare VideoManager if it doesn't exist
 	c.mu.Lock()
+	// Create VideoManager to allocate ports for SDP building
+	// But do NOT call Setup() or Start() yet - that happens when we get SDP answer
 	if c.screenshare == nil {
-		// Create a minimal SDP for VideoManager (will be configured properly during re-INVITE)
+		c.log.Infow("🖥️ [ScreenShare] Creating VideoManager to allocate ports for SDP")
+
+		// Create minimal SDP just for port allocation
 		sdp := &sdpv2.SDP{
 			Addr: c.initialOffer.Addr,
 		}
@@ -1345,31 +1350,45 @@ func (c *inboundCall) onScreenShareTrack(ti *TrackInput) {
 			MediaTimeout:        c.s.conf.MediaTimeout,
 			Stats:               &c.stats.Port,
 		})
-		if err == nil {
-			vm.label = "screenshare"
-		}
 		if err != nil {
 			c.mu.Unlock()
-			c.log.Errorw("Failed to create screenshare VideoManager", err)
+			c.log.Errorw("Failed to create screenshare VideoManager for port allocation", err)
 			return
 		}
+		vm.label = "screenshare"
 		c.screenshare = vm
+		c.log.Infow("🖥️ [ScreenShare] VideoManager created for port allocation (Setup/Start deferred)")
 	}
 
-	// Save the track for later connection (after pipeline is created)
+	// Save the track for later connection (when we call Setup/Start after getting SDP answer)
 	c.screenShareTrack = ti
+	c.screenShareTrackTime = time.Now() // Track when the WebRTC data source arrived
+
+	// BIDIRECTIONAL AUTO-CONNECT: If Setup() was already called, connect track immediately
+	if c.screenshareSetupComplete {
+		c.log.Infow("🖥️ [ScreenShare] Setup already complete - auto-connecting track NOW",
+			"time_since_setup", time.Since(c.screenShareTrackTime).String())
+		c.screenshare.SetWebrtcRtpIn(ti.RtpIn)
+		c.screenshare.SetWebrtcRtcpIn(ti.RtcpIn)
+		c.log.Infow("🖥️ [ScreenShare] ✅ Track auto-connected via callback (track arrived after Setup)")
+	}
+
 	c.mu.Unlock()
 
+	c.log.Infow("🖥️ [ScreenShare] WebRTC track arrived, requesting BFCP floor",
+		"track_arrival_time", time.Now().Format("15:04:05.000"))
+
 	// Request floor asynchronously (floor grant callback will trigger re-INVITE)
-	// CRITICAL: Always use Floor 2 for screenshare/content (standard convention)
-	// Floor 1 is for camera, Floor 2 is for content/screenshare
-	floorID := ScreenShareFloorID // Floor 2
+	// NOTE: We use Floor 2 internally for WebRTC-side floor control
+	// But in the SDP sent to Poly, we preserve Poly's original Floor 1
+	// This separation allows internal consistency while maintaining Poly compatibility
+	floorID := ScreenShareFloorID // Floor 2 (internal WebRTC floor)
 
 	go func() {
 		c.log.Infow("🖥️ [BFCP-Client-WebRTC] Requesting screenshare floor",
 			"floorID", floorID,
 			"userID", c.bfcpUserID,
-			"note", "Floor 2 = screenshare/content")
+			"note", "Internal Floor 2 - SDP will use Poly's Floor 1")
 		_, err := c.bfcpClient.RequestFloor(floorID, c.bfcpUserID, bfcp.PriorityNormal)
 		if err != nil {
 			c.log.Errorw("Floor request failed", err)
@@ -1533,14 +1552,13 @@ func (c *inboundCall) sendScreenShareReInvite(addScreenShare bool) error {
 	req.PrependHeader(c.cc.generateViaHeader(req))
 
 	// Set source and destination for network layer
+	// CRITICAL: For TCP, in-dialog requests MUST use the same connection as the original dialog
+	// Do NOT compute destination from Contact/RecordRoute - use the actual connection destination
 	req.SetSource(c.cc.inviteOk.Source())
-	dest := c.cc.inviteOk.Destination()
-	if contact := c.cc.invite.Contact(); contact != nil {
-		dest = ConvertURI(&contact.Address).GetDest()
-	}
-	if route := c.cc.invite.RecordRoute(); route != nil {
-		dest = ConvertURI(&route.Address).GetDest()
-	}
+
+	// For TCP: Use the original INVITE's source (where Poly sent from) as our destination
+	// This ensures we reuse the same TCP connection, not create a new one
+	dest := c.cc.invite.Source() // Where Poly sent the original INVITE from
 	req.SetDestination(dest)
 
 	c.log.Infow("🖥️ [re-INVITE] Sending INVITE",
@@ -1783,6 +1801,62 @@ func (c *inboundCall) handleReInviteResponse(req *sip.Request, resp *sip.Respons
 		c.log.Warnw("🖥️ [re-INVITE] ⚠️ No screen share video m-line in SDP answer - Poly rejected slides stream", nil)
 	}
 
+	// Setup screen share pipeline (matching video initial INVITE pattern)
+	if addScreenShare && sdp.ScreenShareVideo != nil {
+		// Reverse direction for local perspective
+		// When Poly says "recvonly", it means THEY receive, so WE send
+		sdp.ScreenShareVideo.Direction = sdp.ScreenShareVideo.Direction.Reverse()
+		c.log.Infow("🖥️ [re-INVITE] Reversed screenshare direction for local perspective",
+			"direction", sdp.ScreenShareVideo.Direction)
+
+		c.mu.Lock()
+		if c.screenshare == nil {
+			c.mu.Unlock()
+			c.log.Errorw("🖥️ [re-INVITE] ❌ VideoManager should have been created in onScreenShareTrack()", nil)
+			return fmt.Errorf("screen share VideoManager not initialized")
+		}
+
+		// VideoManager already exists from onScreenShareTrack()
+		// Now call Setup() + Start() with the real SDP from Poly (like video initial INVITE)
+		c.mu.Unlock()
+
+		c.log.Infow("🖥️ [re-INVITE] Calling Setup() + Start() with SDP from Poly")
+
+		// Setup pipeline with real SDP info (ports, codec)
+		if err := c.screenshare.Setup(sdp.ScreenShareVideo); err != nil {
+			c.log.Errorw("🖥️ [re-INVITE] ❌ Failed to setup screen share pipeline", err)
+			return fmt.Errorf("failed to setup screen share: %w", err)
+		}
+
+		// Mark Setup() as complete and auto-connect track if it already arrived
+		c.mu.Lock()
+		c.screenshareSetupComplete = true
+
+		// BIDIRECTIONAL AUTO-CONNECT: If track already arrived, connect it NOW
+		if c.screenShareTrack != nil {
+			timeSinceTrack := time.Since(c.screenShareTrackTime)
+			c.log.Infow("🖥️ [re-INVITE] Track arrived before Setup - auto-connecting NOW",
+				"time_since_track_arrival", timeSinceTrack.String(),
+				"track_arrived_at", c.screenShareTrackTime.Format("15:04:05.000"))
+			c.screenshare.SetWebrtcRtpIn(c.screenShareTrack.RtpIn)
+			c.screenshare.SetWebrtcRtcpIn(c.screenShareTrack.RtcpIn)
+			c.log.Infow("🖥️ [re-INVITE] ✅ Track auto-connected (track arrived before Setup)",
+				"connection_delay", timeSinceTrack.String())
+		} else {
+			c.log.Warnw("🖥️ [re-INVITE] ⚠️ No screen share track yet - will auto-connect when track arrives", nil)
+		}
+		c.mu.Unlock()
+
+		// Start pipeline immediately after track connection
+		// Now the pipeline can reach PLAYING state because data source is connected
+		if err := c.screenshare.Start(); err != nil {
+			c.log.Errorw("🖥️ [re-INVITE] ❌ Failed to start screen share pipeline", err)
+			return fmt.Errorf("failed to start screen share: %w", err)
+		}
+
+		c.log.Infow("🖥️ [re-INVITE] ✅ Screen share Setup() + Start() complete")
+	}
+
 	// BFCP client already setup earlier in SetupScreenShare()
 	// Floor should be granted before we reach here (grant triggered re-INVITE)
 	c.log.Infow("🖥️ [re-INVITE] BFCP client already initialized, floor should be granted")
@@ -1848,12 +1922,8 @@ func (c *inboundCall) handleReInviteResponse(req *sip.Request, resp *sip.Respons
 			}
 		}())
 
-	// Update screen share connections if needed
-	if addScreenShare {
-		if err := c.updateScreenShareConnections(sdp); err != nil {
-			c.log.Errorw("🖥️ [re-INVITE] Failed to update connections", err)
-		}
-	}
+	// Screen share setup is now handled above (VideoManager creation + Setup + Start)
+	// No need for separate updateScreenShareConnections() call
 
 	// Send ACK to complete transaction
 	c.log.Infow("🖥️ [re-INVITE] Sending ACK")
@@ -1895,101 +1965,16 @@ func (c *inboundCall) handleReInviteResponse(req *sip.Request, resp *sip.Respons
 	c.log.Infow("🖥️ [re-INVITE] ✅ ACK sent - transaction complete")
 
 	// NOTE: BFCP floor request is NOT needed here for WebRTC→Poly flow
-	// The ScreenShareManager already requested the floor via BFCP client before re-INVITE
+	// The VideoManager (via onScreenShareTrack callback) already requested the floor via BFCP client before re-INVITE
 	// This inject would only be needed if Poly initiated screen share (not implemented yet)
 
 	return nil
 }
 
 // Phase 5.8: Update screen share RTP/RTCP connection destinations
-func (c *inboundCall) updateScreenShareConnections(sdp *sdpv2.SDP) error {
-	// Phase 5.3: The SDP model now supports separate ScreenShareVideo field
-	// Check if Polycom accepted screen share video (marked with content:slides)
-	var screenShareVideoPort, screenShareRTCPPort uint16
-
-	if sdp.ScreenShareVideo != nil {
-		// Polycom accepted screen share as separate video m-line
-		screenShareVideoPort = sdp.ScreenShareVideo.Port
-		screenShareRTCPPort = sdp.ScreenShareVideo.RTCPPort
-		c.log.Infow("🖥️ [re-INVITE] [Phase5.8] Found screen share video m-line",
-			"port", screenShareVideoPort,
-			"rtcpPort", screenShareRTCPPort)
-	} else if sdp.Video != nil {
-		// Polycom only returned one video m-line - it replaced camera with screen share
-		c.log.Warnw("🖥️ [re-INVITE] [Phase5.8] Only one video m-line in response - using it for screen share", nil,
-			"port", sdp.Video.Port)
-		screenShareVideoPort = sdp.Video.Port
-		screenShareRTCPPort = sdp.Video.RTCPPort
-	} else {
-		return fmt.Errorf("no video m-line in response SDP")
-	}
-
-	c.log.Infow("🖥️ [re-INVITE] [Phase5.8] Updating screen share connections",
-		"remote", sdp.Addr,
-		"cameraPort", func() uint16 {
-			if sdp.Video != nil {
-				return sdp.Video.Port
-			}
-			return 0
-		}(),
-		"screenSharePort", screenShareVideoPort,
-		"screenShareRTCPPort", screenShareRTCPPort)
-
-	// PHASE 2: Setup pipeline with real port from SDP answer
-	if c.screenshare != nil && sdp.ScreenShareVideo != nil {
-		// Check if codec is available in SDP answer
-		if sdp.ScreenShareVideo.Codec == nil {
-			c.log.Errorw("🖥️ [re-INVITE] [Phase5.8] ❌ No codec in screen share SDP answer", nil)
-			return fmt.Errorf("no codec in screen share SDP answer")
-		}
-
-		c.log.Infow("🖥️ [re-INVITE] [Phase5.8] Calling setupPipelineAfterReInvite with real ports",
-			"rtpPort", sdp.ScreenShareVideo.Port,
-			"rtcpPort", sdp.ScreenShareVideo.RTCPPort,
-			"codec", sdp.ScreenShareVideo.Codec.Name,
-			"payloadType", sdp.ScreenShareVideo.Codec.PayloadType)
-
-		c.log.Infow("is it broken here?", "sdp", sdp)
-
-		// Flip the direction from remote perspective to local perspective
-		// When Poly says "recvonly", it means THEY receive, so WE send
-		sdp.ScreenShareVideo.Direction = sdp.ScreenShareVideo.Direction.Reverse()
-		c.log.Infow("🖥️ [re-INVITE] Reversed screenshare direction for local perspective",
-			"direction", sdp.ScreenShareVideo.Direction)
-
-		// This completes Phase 2: Setup GStreamer pipeline, connect UDP with real port, start pipeline
-		if err := c.screenshare.Setup(sdp.ScreenShareVideo); err != nil {
-			c.log.Errorw("🖥️ [re-INVITE] [Phase5.8] ❌ Failed to setup pipeline after re-INVITE", err)
-			return fmt.Errorf("failed to setup screen share pipeline: %w", err)
-		}
-
-		// Connect the WebRTC track NOW (after pipeline is ready)
-		if c.screenShareTrack != nil {
-			c.log.Infow("🖥️ [re-INVITE] [Phase5.8] Connecting WebRTC track to pipeline")
-			c.screenshare.SetWebrtcRtpIn(c.screenShareTrack.RtpIn)
-			c.screenshare.SetWebrtcRtcpIn(c.screenShareTrack.RtcpIn)
-			c.log.Infow("🖥️ [re-INVITE] [Phase5.8] ✅ WebRTC track connected to pipeline")
-		} else {
-			c.log.Warnw("🖥️ [re-INVITE] [Phase5.8] ⚠️ No pending track to connect", nil)
-		}
-
-		// CRITICAL: Add delay between floor grant and pipeline start
-		// This ensures Polycom device is ready to receive RTP packets after BFCP floor grant
-		// Without this delay, early RTP packets may be dropped or cause synchronization issues
-		c.log.Infow("🖥️ [re-INVITE] [Phase5.8] ⏱️ Waiting 150ms before starting pipeline (floor grant propagation)")
-		time.Sleep(150 * time.Millisecond)
-		c.log.Infow("🖥️ [re-INVITE] [Phase5.8] ⏱️ Delay complete - starting pipeline now")
-
-		if err := c.screenshare.Start(); err != nil {
-			c.log.Errorw("🖥️ [re-INVITE] [Phase5.8] ❌ Failed to start pipeline after re-INVITE", err)
-			return fmt.Errorf("failed to start screen share pipeline: %w", err)
-		}
-
-		c.log.Infow("🖥️ [re-INVITE] [Phase5.8] ✅ Screen share pipeline fully active")
-	}
-
-	return nil
-}
+// DEPRECATED: updateScreenShareConnections() has been removed
+// Screen share setup now happens directly in handleReInviteResponse()
+// with VideoManager creation + Setup() + Start() matching the video pattern
 
 func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncryption, conf *config.Config, features []livekit.SIPFeature) (answerData []byte, _ error) {
 	c.mon.SDPSize(len(offerData), true)

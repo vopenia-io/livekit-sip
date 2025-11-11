@@ -145,14 +145,26 @@ func CopyLabeled(dst io.WriteCloser, src io.ReadCloser, label string) {
 	if label != "" {
 		prefix = fmt.Sprintf("[%s] ", label)
 	}
-	fmt.Printf("📋 %sCopy started: src=%T dst=%T\n", prefix, src, dst)
+	startTime := time.Now()
+	fmt.Printf("📋 %sCopy started at %s: src=%T dst=%T\n", prefix, startTime.Format("15:04:05.000"), src, dst)
+	fmt.Printf("📋 %sWaiting for first read from src=%T...\n", prefix, src)
+
 	buf := make([]byte, 32768) // 32KB buffer for efficiency
 	totalBytes := 0
 	totalWrites := 0
+	firstReadTime := time.Time{}
 
 	for {
 		n, readErr := src.Read(buf)
 		if n > 0 {
+			// Log first successful read with timestamp
+			if totalWrites == 0 {
+				firstReadTime = time.Now()
+				timeSinceStart := firstReadTime.Sub(startTime)
+				fmt.Printf("📋 %s✅ FIRST DATA RECEIVED at %s: %d bytes after waiting %v (src=%T, dst=%T)\n",
+					prefix, firstReadTime.Format("15:04:05.000"), n, timeSinceStart, src, dst)
+			}
+
 			totalBytes += n
 			totalWrites++
 			if totalWrites%500 == 0 {
