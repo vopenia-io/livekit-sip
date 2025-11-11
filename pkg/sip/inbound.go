@@ -608,9 +608,10 @@ type inboundCall struct {
 	call        *rpc.SIPCall
 	media       *MediaPort
 	video       *VideoManager
-	screenshare *VideoManager       // Screen share video manager (uses VideoManager like video)
-	dtmf        chan dtmf.Event     // buffered
-	lkRoom      *Room               // LiveKit room; only active after correct pin is entered
+	screenshare       *VideoManager  // Screen share video manager (uses VideoManager like video)
+	screenShareTrack  *TrackInput    // Pending screenshare track (connected after pipeline is ready)
+	dtmf              chan dtmf.Event     // buffered
+	lkRoom            *Room               // LiveKit room; only active after correct pin is entered
 	callDur     func() time.Duration
 	joinDur     func() time.Duration
 	forwardDTMF atomic.Bool
@@ -626,14 +627,12 @@ type inboundCall struct {
 	initialOffer  *sdpv2.SDP // Original SDP offer from SIP device
 	initialAnswer *sdpv2.SDP // Our SDP answer
 
-	// BFCP conference and floor management
-	bfcpClient       *bfcp.Client     // BFCP client for floor control
-	bfcpConferenceID uint32          // Unique conference ID for this call
-	bfcpUserID       uint16          // User ID for BFCP
-	bfcpFloorID      uint16          // Floor ID for screen sharing
-	bfcpFloorGranted bool            // Whether floor has been granted
-	reservedFloors   map[uint16]bool // Floors reserved by SIP device (e.g., Poly reserves Floor 1)
-	nextFloorID      uint16          // Next available floor for WebRTC→SIP screen share
+	// BFCP management
+	bfcpManager      *BFCPManager    // Manages BFCP floor control
+	bfcpClient       *bfcp.Client    // BFCP client for WebRTC participant
+	bfcpConferenceID uint32          // Conference ID for this call
+	bfcpUserID       uint16          // User ID for WebRTC BFCP client
+	bfcpFloorGranted bool            // Whether screenshare floor has been granted
 }
 
 func (s *Server) newInboundCall(
@@ -657,8 +656,6 @@ func (s *Server) newInboundCall(
 		dtmf:           make(chan dtmf.Event, 10),
 		jitterBuf:      SelectValueBool(s.conf.EnableJitterBuffer, s.conf.EnableJitterBufferProb),
 		projectID:      "", // Will be set in handleInvite when available
-		reservedFloors: make(map[uint16]bool),
-		nextFloorID:    1, // Start with Floor 1, will be incremented if reserved
 	}
 	// we need it created earlier so that the audio mixer is available for pin prompts
 	c.lkRoom = NewRoom(log, &c.stats.Room)
@@ -1003,6 +1000,9 @@ func (c *inboundCall) SetupVideo(conf *config.Config, offer *sdpv2.SDP, answerBu
 				MediaTimeout:        c.s.conf.MediaTimeout,
 				Stats:               &c.stats.Port,
 			})
+			if err == nil {
+				video.label = "camera"
+			}
 			if err != nil {
 				return fmt.Errorf("video manager creation failed: %w", err)
 			}
@@ -1040,193 +1040,113 @@ func (c *inboundCall) SetupVideo(conf *config.Config, offer *sdpv2.SDP, answerBu
 }
 
 func (c *inboundCall) SetupScreenShare(conf *config.Config, offer *sdpv2.SDP) error {
-	c.log.Infow("🖥️ [Inbound] Setting up screen share support")
-
-	// Extract BFCP from SDP offer if present
-	var conferenceID uint32 = 1
-	var userID uint16 = 1
-	const floorID uint16 = 2 // FloorID for screen sharing
-
-	if offer.BFCP != nil {
-		c.log.Infow("🖥️ [Inbound] Parsed BFCP from SDP offer",
-			"serverAddr", offer.BFCP.ConnectionIP.String()+":"+fmt.Sprintf("%d", offer.BFCP.Port),
-			"conferenceID", offer.BFCP.ConferenceID,
-			"userID", offer.BFCP.UserID,
-			"floorID", floorID,
-			"offerFloorID", offer.BFCP.FloorID,
-			"floorCtrl", offer.BFCP.FloorCtrl,
-			"mediaStream", offer.BFCP.MediaStream,
-			"setup", offer.BFCP.Setup,
-			"connection", offer.BFCP.Connection,
-		)
-
-		// Use parsed values
-		if offer.BFCP.ConferenceID > 0 {
-			conferenceID = offer.BFCP.ConferenceID
-		}
-		if offer.BFCP.UserID > 0 {
-			userID = offer.BFCP.UserID
-		}
-		// FloorID is hardcoded to 2 - ignore offer.BFCP.FloorID
-
-		// Handle SIP device pre-reserved floor
-		if offer.BFCP.FloorCtrl == "c-s" || offer.BFCP.FloorCtrl == "c-only" {
-			// Mark this floor as reserved by the SIP device
-			c.mu.Lock()
-			c.reservedFloors[floorID] = true
-			if floorID >= c.nextFloorID {
-				c.nextFloorID = floorID + 1
-			}
-			c.mu.Unlock()
-
-			c.log.Infow("🖥️ [Inbound] SIP device pre-reserved floor (SIP→WebRTC)",
-				"reservedFloorID", floorID,
-				"floorCtrl", offer.BFCP.FloorCtrl,
-				"nextAvailableFloor", c.nextFloorID,
-				"note", "Floor reserved for potential SIP→WebRTC screen share",
-			)
-		}
-	} else {
-		c.log.Infow("🖥️ [Inbound] No BFCP in SDP offer, using defaults",
-			"conferenceID", conferenceID,
-			"userID", userID,
-			"floorID", floorID,
-		)
+	// Extract BFCP parameters from SDP offer
+	var sipUserID uint16 = 1
+	if offer.BFCP != nil && offer.BFCP.UserID > 0 {
+		sipUserID = offer.BFCP.UserID
 	}
 
-	// Create unique BFCP conference for this call
-	allocatedConferenceID := c.s.allocateConferenceID()
-	confMgr := c.s.bfcpServer.GetConferenceManager()
+	// Allocate unique conference ID for this call
+	allocatedConferenceID := c.s.bfcpServerManager.AllocateConferenceID()
+	c.bfcpConferenceID = allocatedConferenceID
 
-	bfcpConf, err := confMgr.CreateConference(allocatedConferenceID, userID)
+	// Create BFCP conference with screenshare floor
+	confMgr := c.s.bfcpServerManager.GetServer().GetConferenceManager()
+	bfcpConf, err := confMgr.CreateConference(allocatedConferenceID, sipUserID)
 	if err != nil {
 		return fmt.Errorf("failed to create BFCP conference: %w", err)
 	}
 
-	// Store conference ID for this call
-	c.bfcpConferenceID = allocatedConferenceID
+	// Add screenshare floor (FloorID=2, industry standard)
+	bfcpConf.AddFloor(ScreenShareFloorID)
 
-	// Add floor 2 for WebRTC→SIP screen sharing
-	bfcpConf.AddFloor(floorID)
+	// Register SIP device with BFCP manager
+	deviceID := c.cc.From().User
+	callID := c.cc.SIPCallID()
 
-	c.log.Infow("🖥️ [BFCP] Conference created for call with floor for screen share",
-		"conferenceID", allocatedConferenceID,
-		"sipDeviceUserID", userID,
-		"floorID", floorID,
+	// Create BFCP manager for this call
+	notifyHandler := NewDefaultBFCPNotificationHandler(c.log)
+	c.bfcpManager, err = NewBFCPManager(
+		c.log.WithComponent("bfcp"),
+		c.s.bfcpServerManager.GetServer(),
+		allocatedConferenceID,
+		notifyHandler,
 	)
+	if err != nil {
+		return fmt.Errorf("failed to create BFCP manager: %w", err)
+	}
 
-	// Setup BFCP client for WebRTC→SIP screen sharing
+	// Register SIP device
+	if err := c.bfcpManager.RegisterSIPDevice(deviceID, callID, sipUserID); err != nil {
+		return fmt.Errorf("failed to register SIP device: %w", err)
+	}
+
+	// Setup BFCP client for WebRTC participant
 	bfcpServerAddr := fmt.Sprintf("%s:%d", c.s.sconf.MediaIP, conf.BFCPPort)
-	sharerUserID := userID + 1 // Separate user ID for screen sharer (WebRTC→SIP)
-
-	c.log.Infow("🖥️ [Inbound] Setting up BFCP client for screen share",
-		"serverAddr", bfcpServerAddr,
-		"conferenceID", allocatedConferenceID,
-		"sharerUserID", sharerUserID,
-		"floorID", floorID,
-	)
-
-	// Store BFCP parameters
-	c.bfcpConferenceID = allocatedConferenceID
-	c.bfcpUserID = sharerUserID
-	c.bfcpFloorID = floorID
+	webrtcUserID := sipUserID + 1 // Separate user ID for WebRTC participant
+	c.bfcpUserID = webrtcUserID
 
 	// Create BFCP client
 	clientConfig := &bfcp.ClientConfig{
 		ServerAddress:  bfcpServerAddr,
 		ConferenceID:   allocatedConferenceID,
-		UserID:         sharerUserID,
-		EnableLogging:  true,
-		ConnectTimeout: 10 * time.Second,
+		UserID:         webrtcUserID,
+		EnableLogging:  EnableBFCPDebugLogging,
+		ConnectTimeout: FloorRequestTimeout,
 	}
 	c.bfcpClient = bfcp.NewClient(clientConfig)
 
-	// Set up BFCP event callbacks
-	c.bfcpClient.OnConnected = func() {
-		c.log.Infow("🖥️ [BFCP] ✅ Connected to BFCP server")
-	}
+	// Set up BFCP callbacks with VideoManager control
+	callbacks := NewBFCPClientCallbacks(
+		c.bfcpManager,
+		"webrtc-participant",
+		webrtcUserID,
+		c.log,
+		func(floorID uint16) {
+			// Floor granted - trigger re-INVITE
+			c.bfcpFloorGranted = true
+			go func() {
+				if err := c.sendScreenShareReInvite(true); err != nil {
+					c.log.Errorw("re-INVITE failed after floor grant", err)
+				}
+			}()
+		},
+		func(floorID uint16) {
+			// Floor revoked - mark as not granted
+			c.bfcpFloorGranted = false
+		},
+	)
 
-	c.bfcpClient.OnDisconnected = func() {
-		c.log.Infow("🖥️ [BFCP] ⚠️ Disconnected from BFCP server")
-	}
-
-	c.bfcpClient.OnFloorGranted = func(floorID, requestID uint16) {
-		c.bfcpFloorGranted = true
-		c.log.Infow("🖥️ [BFCP] ✅✅✅ Floor GRANTED - triggering re-INVITE ✅✅✅", "floorID", floorID, "requestID", requestID)
-
-		// Trigger re-INVITE now that floor is granted
-		go func() {
-			if err := c.sendScreenShareReInvite(true); err != nil {
-				c.log.Errorw("🖥️ [BFCP] ❌ re-INVITE failed after floor grant", err)
-			} else {
-				c.log.Infow("🖥️ [BFCP] ✅ re-INVITE sent successfully after floor grant")
-			}
-		}()
-	}
-
-	c.bfcpClient.OnFloorDenied = func(floorID, requestID uint16, errorCode bfcp.ErrorCode) {
-		c.log.Warnw("🖥️ [BFCP] ❌ Floor DENIED", nil, "floorID", floorID, "requestID", requestID, "errorCode", errorCode)
-	}
-
-	c.bfcpClient.OnFloorRevoked = func(floorID uint16) {
-		c.bfcpFloorGranted = false
-		c.log.Infow("🖥️ [BFCP] ⚠️ Floor REVOKED", "floorID", floorID)
-	}
-
-	c.bfcpClient.OnFloorReleased = func(floorID uint16) {
-		c.bfcpFloorGranted = false
-		c.log.Infow("🖥️ [BFCP] Floor RELEASED", "floorID", floorID)
-	}
-
-	c.bfcpClient.OnError = func(err error) {
-		c.log.Errorw("🖥️ [BFCP] Error", err)
-	}
+	// Assign callbacks to client
+	c.bfcpClient.OnConnected = callbacks.OnConnected
+	c.bfcpClient.OnDisconnected = callbacks.OnDisconnected
+	c.bfcpClient.OnFloorGranted = callbacks.OnFloorGranted
+	c.bfcpClient.OnFloorDenied = callbacks.OnFloorDenied
+	c.bfcpClient.OnFloorRevoked = callbacks.OnFloorRevoked
+	c.bfcpClient.OnFloorReleased = callbacks.OnFloorReleased
+	c.bfcpClient.OnError = callbacks.OnError
 
 	// Connect to BFCP server
-	c.log.Infow("🖥️ [BFCP] Connecting to BFCP server", "addr", bfcpServerAddr)
 	if err := c.bfcpClient.Connect(); err != nil {
 		return fmt.Errorf("failed to connect to BFCP server: %w", err)
 	}
 
-	c.log.Infow("🖥️ [BFCP] ✅ BFCP TCP connection established")
-
 	// Send Hello message (optional per RFC 8855)
-	c.log.Infow("🖥️ [BFCP] Sending BFCP Hello...")
 	if err := c.bfcpClient.Hello(); err != nil {
-		c.log.Warnw("🖥️ [BFCP] ⚠️ BFCP Hello handshake failed (may not be supported)", err)
 		// Hello is optional, proceed anyway
-	} else {
-		c.log.Infow("🖥️ [BFCP] ✅ BFCP Hello handshake complete")
 	}
 
-	c.log.Infow("🖥️ [Inbound] ✅ Screen share support initialized (BFCP + VideoManager)")
+	// Register WebRTC participant with manager
+	if err := c.bfcpManager.RegisterWebRTCParticipant("webrtc-participant", webrtcUserID, c.bfcpClient); err != nil {
+		return fmt.Errorf("failed to register WebRTC participant: %w", err)
+	}
+
+	// Register callback for when WebRTC screen share track arrives
+	c.lkRoom.SetScreenShareCallback(c.onScreenShareTrack)
+
 	return nil
 }
 
-// buildBFCPAnswer constructs BFCP SDP answer as the BFCP server
-// buildBFCPAnswer builds BFCP SDP answer as server
-func (c *inboundCall) buildBFCPAnswer(offerBFCP *sdpv2.BFCPMedia, conf *config.Config) *sdpv2.BFCPMedia {
-	bfcpAnswer := &sdpv2.BFCPMedia{
-		// Port 0 means disabled initially - will be activated in re-INVITE
-		Port:         0,
-		ConnectionIP: c.s.sconf.MediaIP,
-		// We are the BFCP server (server-only mode)
-		FloorCtrl: "s-only",
-		// Use same conference/user IDs from offer
-		ConferenceID: offerBFCP.ConferenceID,
-		UserID:       offerBFCP.UserID,
-		// Acknowledge the floor from offer
-		FloorID:     offerBFCP.FloorID,
-		MediaStream: offerBFCP.MediaStream,
-		// Setup role - we are passive (server), client connects to us
-		Setup: "passive",
-		// Connection mode - new connection
-		Connection: "new",
-		Attributes: make(map[string]string),
-	}
-
-	return bfcpAnswer
-}
 
 // allocateFloor dynamically allocates the next available BFCP floor ID
 // Uses ConferenceManager to ensure proper floor allocation within the conference
@@ -1234,14 +1154,8 @@ func (c *inboundCall) allocateFloor() (uint16, error) {
 	confMgr := c.s.bfcpServer.GetConferenceManager()
 	floorID, err := confMgr.AllocateFloor(c.bfcpConferenceID)
 	if err != nil {
-		c.log.Errorw("🖥️ [BFCP] Floor allocation failed", err,
-			"conferenceID", c.bfcpConferenceID)
 		return 0, fmt.Errorf("failed to allocate floor: %w", err)
 	}
-
-	c.log.Infow("🖥️ [BFCP] Floor allocated via ConferenceManager",
-		"allocatedFloorID", floorID,
-		"conferenceID", c.bfcpConferenceID)
 
 	return floorID, nil
 }
@@ -1312,10 +1226,12 @@ func (c *inboundCall) buildReInviteSDP(includeScreenShare bool) (*sdpv2.SDP, err
 		builder.SetScreenShareVideo(func(b *sdpv2.SDPMediaBuilder) (*sdpv2.SDPMedia, error) {
 			cameraCodec := initialAnswer.Video.Codec
 
-			b.SetRTPPort(uint16(rtpPort))
+				b.SetRTPPort(uint16(rtpPort))
 			b.SetRTCPPort(uint16(rtcpPort))
-			b.SetDirection(sdpv2.DirectionSendRecv)
+			// Screenshare is sendonly - WE send H264 to SIP device (which receives)
+			b.SetDirection(sdpv2.DirectionSendOnly)
 			b.SetContent("slides")
+			b.SetLabel("3") // Label 3 correlates with BFCP mstrm:3 for Poly devices
 			b.AddCodec(func(cb *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
 				cb.SetPayloadType(cameraCodec.PayloadType)
 				cb.SetCodec(cameraCodec.Codec)
@@ -1330,7 +1246,7 @@ func (c *inboundCall) buildReInviteSDP(includeScreenShare bool) (*sdpv2.SDP, err
 
 	// Add BFCP m-line (if screen share is included and we have BFCP params)
 	if includeScreenShare && c.screenshare != nil && initialOffer != nil && initialOffer.BFCP != nil {
-		c.log.Infow("🖥️ [re-INVITE] Adding BFCP m-line as s-only server")
+		c.log.Infow("🖥️ [re-INVITE] Adding BFCP m-line - telling SIP device to connect as client")
 
 		// Dynamically allocate floor to avoid conflicts with SIP device reservations
 		allocatedFloorID, err := c.allocateFloor()
@@ -1339,18 +1255,30 @@ func (c *inboundCall) buildReInviteSDP(includeScreenShare bool) (*sdpv2.SDP, err
 			return nil, fmt.Errorf("failed to allocate BFCP floor: %w", err)
 		}
 
-		// Build BFCP media section - activating BFCP by advertising port 5070
-		bfcpMedia := &sdpv2.BFCPMedia{
-			Port:         uint16(c.s.conf.BFCPPort), // Activate: advertise port 5070 (was 0 in initial INVITE)
-			ConnectionIP: c.s.sconf.MediaIP,
-			FloorCtrl:    "s-only",  // We are ALWAYS BFCP server
-			Setup:        "passive", // We ALWAYS wait for client connection
-			Connection:   "new",
-			ConferenceID: c.bfcpConferenceID,       // Use allocated conference ID for this call
-			UserID:       initialOffer.BFCP.UserID, // Keep same user context
-			FloorID:      allocatedFloorID,         // Dynamically allocated to avoid conflicts
+		// Build BFCP SDP answer using dedicated builder
+		// This tells the SIP device: connect to our BFCP server at port 5070 as client-only
+		bfcpBuilder := NewBFCPSDPBuilder(
+			c.log,
+			c.s.sconf.MediaIP.String(),
+			c.s.conf.BFCPPort,
+			c.bfcpConferenceID,
+		)
+
+		// Create modified offer with our allocated floor ID
+		modifiedOffer := &sdpv2.BFCPMedia{
+			Port:         initialOffer.BFCP.Port,
+			ConnectionIP: initialOffer.BFCP.ConnectionIP,
+			FloorCtrl:    initialOffer.BFCP.FloorCtrl,
+			Setup:        initialOffer.BFCP.Setup,
+			Connection:   initialOffer.BFCP.Connection,
+			ConferenceID: initialOffer.BFCP.ConferenceID,
+			UserID:       initialOffer.BFCP.UserID,
+			FloorID:      allocatedFloorID,         // Use dynamically allocated floor
 			MediaStream:  3,                        // Screen share is 3rd m-line (audio, camera, screenshare)
+			Attributes:   initialOffer.BFCP.Attributes,
 		}
+
+		bfcpMedia := bfcpBuilder.BuildAnswer(modifiedOffer)
 
 		builder.SetBFCP(bfcpMedia)
 
@@ -1359,7 +1287,8 @@ func (c *inboundCall) buildReInviteSDP(includeScreenShare bool) (*sdpv2.SDP, err
 			"conferenceID", bfcpMedia.ConferenceID,
 			"userID", bfcpMedia.UserID,
 			"floorID", bfcpMedia.FloorID,
-			"mediaStream", bfcpMedia.MediaStream)
+			"mediaStream", bfcpMedia.MediaStream,
+			"floorCtrl", bfcpMedia.FloorCtrl)
 	}
 
 	sdp, err := builder.Build()
@@ -1369,6 +1298,58 @@ func (c *inboundCall) buildReInviteSDP(includeScreenShare bool) (*sdpv2.SDP, err
 
 	c.log.Infow("🖥️ [re-INVITE] SDP built successfully")
 	return sdp, nil
+}
+
+// onScreenShareTrack is called when a WebRTC screenshare track arrives
+// It creates the VideoManager, connects the track, and requests BFCP floor
+func (c *inboundCall) onScreenShareTrack(ti *TrackInput) {
+	// Check if BFCP client is ready
+	if c.bfcpClient == nil || !c.bfcpClient.IsConnected() {
+		return
+	}
+
+	// Check if floor is already granted
+	if c.bfcpFloorGranted {
+		return
+	}
+
+	// Create screenshare VideoManager if it doesn't exist
+	c.mu.Lock()
+	if c.screenshare == nil {
+		// Create a minimal SDP for VideoManager (will be configured properly during re-INVITE)
+		sdp := &sdpv2.SDP{
+			Addr: c.initialOffer.Addr,
+		}
+
+		vm, err := NewVideoManager(c.log.WithComponent("screenshare"), c.lkRoom, sdp, &MediaOptions{
+			IP:                  c.s.sconf.MediaIP,
+			Ports:               c.s.conf.RTPPort,
+			MediaTimeoutInitial: c.s.conf.MediaTimeoutInitial,
+			MediaTimeout:        c.s.conf.MediaTimeout,
+			Stats:               &c.stats.Port,
+		})
+		if err == nil {
+			vm.label = "screenshare"
+		}
+		if err != nil {
+			c.mu.Unlock()
+			c.log.Errorw("Failed to create screenshare VideoManager", err)
+			return
+		}
+		c.screenshare = vm
+	}
+
+	// Save the track for later connection (after pipeline is created)
+	c.screenShareTrack = ti
+	c.mu.Unlock()
+
+	// Request floor asynchronously (floor grant callback will trigger re-INVITE)
+	go func() {
+		_, err := c.bfcpClient.RequestFloor(ScreenShareFloorID, c.bfcpUserID, bfcp.PriorityNormal)
+		if err != nil {
+			c.log.Errorw("Floor request failed", err)
+		}
+	}()
 }
 
 func (c *inboundCall) sendScreenShareReInvite(addScreenShare bool) error {
@@ -1941,11 +1922,28 @@ func (c *inboundCall) updateScreenShareConnections(sdp *sdpv2.SDP) error {
 
 		c.log.Infow("is it broken here?", "sdp", sdp)
 
+		// Flip the direction from remote perspective to local perspective
+		// When Poly says "recvonly", it means THEY receive, so WE send
+		sdp.ScreenShareVideo.Direction = sdp.ScreenShareVideo.Direction.Reverse()
+		c.log.Infow("🖥️ [re-INVITE] Reversed screenshare direction for local perspective",
+			"direction", sdp.ScreenShareVideo.Direction)
+
 		// This completes Phase 2: Setup GStreamer pipeline, connect UDP with real port, start pipeline
 		if err := c.screenshare.Setup(sdp.ScreenShareVideo); err != nil {
 			c.log.Errorw("🖥️ [re-INVITE] [Phase5.8] ❌ Failed to setup pipeline after re-INVITE", err)
 			return fmt.Errorf("failed to setup screen share pipeline: %w", err)
 		}
+
+		// Connect the WebRTC track NOW (after pipeline is ready)
+		if c.screenShareTrack != nil {
+			c.log.Infow("🖥️ [re-INVITE] [Phase5.8] Connecting WebRTC track to pipeline")
+			c.screenshare.SetWebrtcRtpIn(c.screenShareTrack.RtpIn)
+			c.screenshare.SetWebrtcRtcpIn(c.screenShareTrack.RtcpIn)
+			c.log.Infow("🖥️ [re-INVITE] [Phase5.8] ✅ WebRTC track connected to pipeline")
+		} else {
+			c.log.Warnw("🖥️ [re-INVITE] [Phase5.8] ⚠️ No pending track to connect", nil)
+		}
+
 		if err := c.screenshare.Start(); err != nil {
 			c.log.Errorw("🖥️ [re-INVITE] [Phase5.8] ❌ Failed to start pipeline after re-INVITE", err)
 			return fmt.Errorf("failed to start screen share pipeline: %w", err)
@@ -2278,16 +2276,14 @@ func (c *inboundCall) closeMedia() {
 		}
 	}
 
-	// Clean up BFCP conference
+	// Clean up BFCP manager and conference
+	if c.bfcpManager != nil {
+		c.bfcpManager.Shutdown()
+	}
+
 	if c.bfcpConferenceID != 0 {
 		confMgr := c.s.bfcpServer.GetConferenceManager()
-		if err := confMgr.DeleteConference(c.bfcpConferenceID); err != nil {
-			c.log.Warnw("🖥️ [BFCP] Failed to delete conference", err,
-				"conferenceID", c.bfcpConferenceID)
-		} else {
-			c.log.Infow("🖥️ [BFCP] Conference deleted",
-				"conferenceID", c.bfcpConferenceID)
-		}
+		confMgr.DeleteConference(c.bfcpConferenceID)
 	}
 }
 

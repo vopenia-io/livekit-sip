@@ -137,7 +137,8 @@ type Server struct {
 	sipUnhandled RequestHandler
 
 	// BFCP floor control server for screen sharing
-	bfcpServer        *bfcp.Server
+	bfcpServer        *bfcp.Server // Legacy - kept for compatibility
+	bfcpServerManager *BFCPServerManager
 	nextConferenceID  atomic.Uint32
 
 	imu               sync.Mutex
@@ -332,93 +333,16 @@ func (s *Server) Start(agent *sipgo.UserAgent, sc *ServiceConfig, tlsConf *tls.C
 
 // startBFCP initializes and starts the BFCP floor control server for screen sharing
 func (s *Server) startBFCP() error {
-	listenIP := s.conf.ListenIP
-	if listenIP == "" {
-		listenIP = "0.0.0.0"
+	// Create BFCP server manager
+	s.bfcpServerManager = NewBFCPServerManager(s.log.WithComponent("bfcp-server"))
+
+	// Start BFCP server
+	if err := s.bfcpServerManager.StartBFCPServer(s.conf.ListenIP, s.conf.BFCPPort); err != nil {
+		return fmt.Errorf("failed to start BFCP server: %w", err)
 	}
 
-	bfcpAddr := fmt.Sprintf("%s:%d", listenIP, s.conf.BFCPPort)
-
-	// Create BFCP server configuration with auto-grant enabled
-	bfcpConfig := bfcp.DefaultServerConfig(bfcpAddr, 1)
-	bfcpConfig.AutoGrant = true
-	bfcpConfig.MaxFloors = 10
-	bfcpConfig.EnableLogging = true
-
-	// Create BFCP server
-	s.bfcpServer = bfcp.NewServer(bfcpConfig)
-
-	// Floors are created dynamically when clients request them
-
-	// Set up event callbacks
-	s.bfcpServer.OnClientConnect = func(remoteAddr string, userID uint16) {
-		s.log.Infow("[BFCP-Server] Client connected",
-			"remoteAddr", remoteAddr,
-			"userID", userID,
-		)
-	}
-
-	s.bfcpServer.OnClientDisconnect = func(remoteAddr string, userID uint16) {
-		s.log.Infow("[BFCP-Server] Client disconnected",
-			"remoteAddr", remoteAddr,
-			"userID", userID,
-		)
-	}
-
-	s.bfcpServer.OnFloorRequest = func(floorID, userID, requestID uint16) bool {
-		s.log.Infow("[BFCP-Server] Floor request received",
-			"floorID", floorID,
-			"userID", userID,
-			"requestID", requestID,
-		)
-
-		// Auto-grant floor requests for screen sharing
-		return true
-	}
-
-	s.bfcpServer.OnFloorGranted = func(floorID, userID, requestID uint16) {
-		s.log.Infow("[BFCP-Server] Floor granted",
-			"floorID", floorID,
-			"userID", userID,
-			"requestID", requestID,
-		)
-	}
-
-	s.bfcpServer.OnFloorReleased = func(floorID, userID uint16) {
-		s.log.Infow("[BFCP-Server] Floor released",
-			"floorID", floorID,
-			"userID", userID,
-		)
-	}
-
-	s.bfcpServer.OnFloorDenied = func(floorID, userID, requestID uint16) {
-		s.log.Infow("[BFCP-Server] Floor denied",
-			"floorID", floorID,
-			"userID", userID,
-			"requestID", requestID,
-		)
-	}
-
-	s.bfcpServer.OnError = func(err error) {
-		s.log.Errorw("[BFCP-Server] Server error", err)
-	}
-
-	// Start BFCP server in background
-	go func() {
-		s.log.Infow("[BFCP-Server] Starting BFCP floor control server",
-			"address", bfcpAddr,
-			"conferenceID", bfcpConfig.ConferenceID,
-			"maxFloors", bfcpConfig.MaxFloors,
-		)
-
-		if err := s.bfcpServer.ListenAndServe(); err != nil {
-			s.log.Errorw("[BFCP-Server] BFCP server error", err)
-		}
-	}()
-
-	s.log.Infow("[BFCP-Server] BFCP server initialization complete",
-		"listening", bfcpAddr,
-	)
+	// Keep legacy bfcpServer reference for compatibility
+	s.bfcpServer = s.bfcpServerManager.GetServer()
 
 	return nil
 }

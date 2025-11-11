@@ -137,8 +137,45 @@ func readerFromPipeline(pipeline *gst.Pipeline, name string) (*GstReader, error)
 }
 
 func Copy(dst io.WriteCloser, src io.ReadCloser) {
-	n, err := io.Copy(dst, src)
-	fmt.Printf("Copied %d bytes with err=%v\n", n, err)
+	CopyLabeled(dst, src, "")
+}
+
+func CopyLabeled(dst io.WriteCloser, src io.ReadCloser, label string) {
+	prefix := ""
+	if label != "" {
+		prefix = fmt.Sprintf("[%s] ", label)
+	}
+	fmt.Printf("📋 %sCopy started: src=%T dst=%T\n", prefix, src, dst)
+	buf := make([]byte, 32768) // 32KB buffer for efficiency
+	totalBytes := 0
+	totalWrites := 0
+
+	for {
+		n, readErr := src.Read(buf)
+		if n > 0 {
+			totalBytes += n
+			totalWrites++
+			if totalWrites%500 == 0 {
+				fmt.Printf("📋 %sCopy progress: %d writes, %d total bytes (src=%T, dst=%T)\n", prefix, totalWrites, totalBytes, src, dst)
+			}
+
+			_, writeErr := dst.Write(buf[:n])
+			if writeErr != nil {
+				fmt.Printf("❌ %sCopy write error after %d bytes: %v (src=%T, dst=%T)\n", prefix, totalBytes, writeErr, src, dst)
+				break
+			}
+		}
+
+		if readErr != nil {
+			if readErr != io.EOF {
+				fmt.Printf("❌ %sCopy read error after %d bytes: %v (src=%T, dst=%T)\n", prefix, totalBytes, readErr, src, dst)
+			} else {
+				fmt.Printf("✅ %sCopy completed: %d bytes in %d writes (src=%T, dst=%T)\n", prefix, totalBytes, totalWrites, src, dst)
+			}
+			break
+		}
+	}
+
 	src.Close()
 	dst.Close()
 }
@@ -161,25 +198,25 @@ func (v *VideoManager) SetupGstPipeline(media *sdpv2.SDPMedia) error {
 	if err != nil {
 		return fmt.Errorf("failed to create SIP RTP reader: %w", err)
 	}
-	go Copy(sipRtpIn, v.sipRtpIn)
+	go CopyLabeled(sipRtpIn, v.sipRtpIn, v.label)
 
 	sipRtpOut, err := readerFromPipeline(pipeline, "sip_rtp_out")
 	if err != nil {
 		return fmt.Errorf("failed to create SIP RTP writer: %w", err)
 	}
-	go Copy(v.sipRtpOut, sipRtpOut)
+	go CopyLabeled(v.sipRtpOut, sipRtpOut, v.label)
 
 	webrtcRtpIn, err := writerFromPipeline(pipeline, "webrtc_rtp_in")
 	if err != nil {
 		return fmt.Errorf("failed to create WebRTC RTP reader: %w", err)
 	}
-	go Copy(webrtcRtpIn, v.webrtcRtpIn)
+	go CopyLabeled(webrtcRtpIn, v.webrtcRtpIn, v.label)
 
 	webrtcRtpOut, err := readerFromPipeline(pipeline, "webrtc_rtp_out")
 	if err != nil {
 		return fmt.Errorf("failed to create WebRTC RTP writer: %w", err)
 	}
-	go Copy(v.webrtcRtpOut, webrtcRtpOut)
+	go CopyLabeled(v.webrtcRtpOut, webrtcRtpOut, v.label)
 
 	// RTCP monitoring with cross-direction PLI forwarding
 	// WebRTC RTCP monitor - forward PLI to SIP side

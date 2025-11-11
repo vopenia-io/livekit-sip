@@ -257,6 +257,12 @@ func (t *TrackAdapter) Read(p []byte) (n int, err error) {
 		return 0, io.EOF
 	}
 	n, _, err = (*tr).Read(p)
+	// if n > 0 {
+	// 	fmt.Printf("🎥 TrackAdapter.Read got %d bytes\n", n)
+	// }
+	if err != nil && err != io.EOF {
+		fmt.Printf("🎥 TrackAdapter.Read error: %v\n", err)
+	}
 	return n, err
 }
 

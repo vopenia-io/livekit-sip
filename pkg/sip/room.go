@@ -191,6 +191,15 @@ func (r *Room) subscribeTo(pub *lksdk.RemoteTrackPublication, rp *lksdk.RemotePa
 		return
 	}
 	log.Debugw("subscribing to a track")
+
+	// For screenshare tracks, set video quality BEFORE subscribing
+	if pub.Kind() == lksdk.TrackKindVideo && pub.Source() == livekit.TrackSource_SCREEN_SHARE {
+		log.Infow("🖥️ [Room] Setting HIGH quality for screenshare BEFORE subscription")
+		if err := pub.SetVideoQuality(livekit.VideoQuality_HIGH); err != nil {
+			log.Errorw("🖥️ [Room] Failed to set screenshare video quality", err)
+		}
+	}
+
 	if err := pub.SetSubscribed(true); err != nil {
 		log.Errorw("cannot subscribe to the track", err)
 		return
@@ -644,6 +653,14 @@ func (r *Room) participantVideoTrackSubscribed(track *webrtc.TrackRemote, pub *l
 	// Check if this is a screen share track
 	if pub.Source() == livekit.TrackSource_SCREEN_SHARE {
 		log.Infow("🖥️ [Room] handling SCREEN SHARE track")
+
+		// Request HIGH quality for screenshare to ensure RTP data flows
+		if err := pub.SetVideoQuality(livekit.VideoQuality_HIGH); err != nil {
+			log.Errorw("🖥️ [Room] Failed to set screenshare video quality", err)
+		} else {
+			log.Infow("🖥️ [Room] Requested HIGH quality for screenshare track")
+		}
+
 		r.trackMu.Lock()
 		cb := r.screenShareCallback
 		r.trackMu.Unlock()

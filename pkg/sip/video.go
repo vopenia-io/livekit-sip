@@ -58,6 +58,7 @@ func NewVideoManager(log logger.Logger, room *Room, sdp *sdpv2.SDP, opts *MediaO
 type VideoManager struct {
 	*VideoIO
 	log      logger.Logger
+	label    string // "camera" or "screenshare" for debugging
 	remote   netip.Addr
 	opts     *MediaOptions
 	room     *Room
@@ -223,7 +224,10 @@ func (v *VideoManager) Setup(media *sdpv2.SDPMedia) error {
 				"hasRtpIn", ti.RtpIn != nil,
 				"hasRtcpIn", ti.RtcpIn != nil)
 
-			if r := v.webrtcRtpIn.Swap(ti.RtpIn); r != nil {
+			// Wrap RTP input with debug logging to track data flow
+			debugRtpIn := NewDebugReadCloser(ti.RtpIn, fmt.Sprintf("[%s] WebRTC→SIP RTP", v.label), 2*time.Second)
+
+			if r := v.webrtcRtpIn.Swap(debugRtpIn); r != nil {
 				_ = r.Close()
 			}
 			if w := v.webrtcRtcpIn.Swap(ti.RtcpIn); w != nil {
@@ -281,22 +285,50 @@ func (v *VideoManager) Start() error {
 		return fmt.Errorf("cannot start: pipeline not set up")
 	}
 
+	// Send EOS to unused pipeline branches for unidirectional streams
+	// This allows the pipeline to transition to PLAYING without waiting for data that will never come
+	if !v.recv {
+		// If we're not receiving from SIP (sendonly), close the SIP→WebRTC branch
+		v.log.Infow("Sending EOS to sip_rtp_in (unused for sendonly direction)")
+		if sipRtpIn, err := v.pipeline.GetElementByName("sip_rtp_in"); err == nil {
+			sipRtpIn.SendEvent(gst.NewEOSEvent())
+		}
+	}
+	if !v.send {
+		// If we're not sending to SIP (recvonly), close the WebRTC→SIP branch
+		v.log.Infow("Sending EOS to webrtc_rtp_in (unused for recvonly direction)")
+		if webrtcRtpIn, err := v.pipeline.GetElementByName("webrtc_rtp_in"); err == nil {
+			webrtcRtpIn.SendEvent(gst.NewEOSEvent())
+		}
+	}
+
+	v.log.Infow("Setting pipeline to PLAYING state", "label", v.label, "send", v.send, "recv", v.recv)
+
 	if err := v.pipeline.SetState(gst.StatePlaying); err != nil {
 		return fmt.Errorf("failed to set GStreamer pipeline to playing: %w", err)
 	}
 
 	// CRITICAL FIX: Wait for pipeline to actually reach PLAYING state
-	// SetState() is asynchronous - it returns immediately but the state transition takes time (~100-150ms)
+	// SetState() is asynchronous - it returns immediately but the state transition takes time
+	// For bidirectional pipelines, this can take 100-5000ms depending on data flow
 	// If we send 200 OK before pipeline is ready, early RTP packets cause corruption (green artifacts)
-	v.log.Debugw("waiting for GStreamer pipeline to reach PLAYING state...")
-	changeReturn, currentState := v.pipeline.GetState(gst.StatePlaying, gst.ClockTime(100*time.Millisecond))
+	v.log.Infow("Waiting for GStreamer pipeline to reach PLAYING state...", "label", v.label)
+	changeReturn, currentState := v.pipeline.GetState(gst.StatePlaying, gst.ClockTime(5*time.Second))
+
 	if changeReturn == gst.StateChangeFailure {
 		return fmt.Errorf("GStreamer pipeline failed to reach PLAYING state")
 	}
 
-	v.log.Infow("GStreamer pipeline is PLAYING and ready for RTP packets",
-		"current_state", currentState.String(),
-		"change_result", changeReturn.String())
+	if changeReturn == gst.StateChangeAsync {
+		v.log.Warnw("Pipeline still transitioning to PLAYING asynchronously", nil,
+			"current_state", currentState.String(),
+			"change_result", changeReturn.String(),
+			"note", "Pipeline will reach PLAYING once data flows - this is normal for unidirectional streams")
+	} else {
+		v.log.Infow("GStreamer pipeline is PLAYING and ready for RTP packets",
+			"current_state", currentState.String(),
+			"change_result", changeReturn.String())
+	}
 
 	v.status = VideoStatusStarted
 	return nil
