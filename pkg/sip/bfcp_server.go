@@ -73,11 +73,21 @@ func (m *BFCPServerManager) StartBFCPServer(listenIP string, bfcpPort int) error
 
 // setupCallbacks configures BFCP server event callbacks
 func (m *BFCPServerManager) setupCallbacks() {
+	// Helper to identify client type based on userID
+	// Convention: odd userIDs = SIP device, even userIDs = WebRTC participant
+	clientType := func(userID uint16) string {
+		if userID%2 == 1 {
+			return "SIP-Device"
+		}
+		return "WebRTC-Participant"
+	}
+
 	m.server.OnClientConnect = func(remoteAddr string, userID uint16) {
 		if LogFloorStateChanges {
 			m.log.Infow("🟢 [BFCP-Server] Client connected",
 				"remoteAddr", remoteAddr,
 				"userID", userID,
+				"clientType", clientType(userID),
 			)
 		}
 	}
@@ -87,6 +97,7 @@ func (m *BFCPServerManager) setupCallbacks() {
 			m.log.Infow("🟡 [BFCP-Server] Client disconnected",
 				"remoteAddr", remoteAddr,
 				"userID", userID,
+				"clientType", clientType(userID),
 			)
 		}
 	}
@@ -97,6 +108,7 @@ func (m *BFCPServerManager) setupCallbacks() {
 				"floorID", floorID,
 				"userID", userID,
 				"requestID", requestID,
+				"clientType", clientType(userID),
 			)
 		}
 
@@ -111,6 +123,7 @@ func (m *BFCPServerManager) setupCallbacks() {
 				"floorID", floorID,
 				"userID", userID,
 				"requestID", requestID,
+				"clientType", clientType(userID),
 			)
 		}
 	}
@@ -120,6 +133,7 @@ func (m *BFCPServerManager) setupCallbacks() {
 			m.log.Infow("🔵 [BFCP-Server] Floor released",
 				"floorID", floorID,
 				"userID", userID,
+				"clientType", clientType(userID),
 			)
 		}
 	}
@@ -130,6 +144,7 @@ func (m *BFCPServerManager) setupCallbacks() {
 				"floorID", floorID,
 				"userID", userID,
 				"requestID", requestID,
+				"clientType", clientType(userID),
 			)
 		}
 	}

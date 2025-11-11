@@ -630,9 +630,10 @@ type inboundCall struct {
 	// BFCP management
 	bfcpManager      *BFCPManager    // Manages BFCP floor control
 	bfcpClient       *bfcp.Client    // BFCP client for WebRTC participant
-	bfcpConferenceID uint32          // Conference ID for this call
-	bfcpUserID       uint16          // User ID for WebRTC BFCP client
-	bfcpFloorGranted bool            // Whether screenshare floor has been granted
+	bfcpConferenceID       uint32 // Conference ID for this call
+	bfcpUserID             uint16 // User ID for WebRTC BFCP client
+	bfcpScreenShareFloorID uint16 // DEPRECATED: No longer used - we always use Floor 2 and reject Poly's Floor 1
+	bfcpFloorGranted       bool   // Whether screenshare floor has been granted
 }
 
 func (s *Server) newInboundCall(
@@ -1057,8 +1058,14 @@ func (c *inboundCall) SetupScreenShare(conf *config.Config, offer *sdpv2.SDP) er
 		return fmt.Errorf("failed to create BFCP conference: %w", err)
 	}
 
-	// Add screenshare floor (FloorID=2, industry standard)
+	// Add only Floor 2 to conference - we reject Poly's Floor 1
+	// Floor 2 = Content/screenshare (standard convention)
+	// We are the BFCP server, so we control floor numbering
 	bfcpConf.AddFloor(ScreenShareFloorID)
+	c.log.Infow("🔵 [BFCP-Server] Added screenshare floor to conference (rejecting Poly's Floor 1)",
+		"floorID", ScreenShareFloorID,
+		"conferenceID", allocatedConferenceID,
+		"note", "We are the BFCP server - only Floor 2 available")
 
 	// Register SIP device with BFCP manager
 	deviceID := c.cc.From().User
@@ -1097,10 +1104,13 @@ func (c *inboundCall) SetupScreenShare(conf *config.Config, offer *sdpv2.SDP) er
 	c.bfcpClient = bfcp.NewClient(clientConfig)
 
 	// Set up BFCP callbacks with VideoManager control
+	// Always use Floor 2 for screenshare/content (standard convention)
+	// Floor 1 from Poly's offer is for camera, Floor 2 is for content/screenshare
 	callbacks := NewBFCPClientCallbacks(
 		c.bfcpManager,
 		"webrtc-participant",
 		webrtcUserID,
+		ScreenShareFloorID, // Floor 2 for screenshare
 		c.log,
 		func(floorID uint16) {
 			// Floor granted - trigger re-INVITE
@@ -1248,12 +1258,10 @@ func (c *inboundCall) buildReInviteSDP(includeScreenShare bool) (*sdpv2.SDP, err
 	if includeScreenShare && c.screenshare != nil && initialOffer != nil && initialOffer.BFCP != nil {
 		c.log.Infow("🖥️ [re-INVITE] Adding BFCP m-line - telling SIP device to connect as client")
 
-		// Dynamically allocate floor to avoid conflicts with SIP device reservations
-		allocatedFloorID, err := c.allocateFloor()
-		if err != nil {
-			c.log.Errorw("🖥️ [re-INVITE] Failed to allocate floor ID", err)
-			return nil, fmt.Errorf("failed to allocate BFCP floor: %w", err)
-		}
+		// CRITICAL: Always use Floor 2 for screenshare/content (standard convention)
+		// Floor 1 from Poly's initial offer is for camera
+		// Floor 2 is for content/screenshare (Polycom/Cisco convention)
+		screenshareFloorID := ScreenShareFloorID // Floor 2
 
 		// Build BFCP SDP answer using dedicated builder
 		// This tells the SIP device: connect to our BFCP server at port 5070 as client-only
@@ -1264,19 +1272,27 @@ func (c *inboundCall) buildReInviteSDP(includeScreenShare bool) (*sdpv2.SDP, err
 			c.bfcpConferenceID,
 		)
 
-		// Create modified offer with our allocated floor ID
+		// Create modified offer preserving Poly's ConferenceID and UserID
+		// But use Floor 2 for screenshare (not Floor 1 from camera)
 		modifiedOffer := &sdpv2.BFCPMedia{
 			Port:         initialOffer.BFCP.Port,
 			ConnectionIP: initialOffer.BFCP.ConnectionIP,
 			FloorCtrl:    initialOffer.BFCP.FloorCtrl,
 			Setup:        initialOffer.BFCP.Setup,
 			Connection:   initialOffer.BFCP.Connection,
-			ConferenceID: initialOffer.BFCP.ConferenceID,
-			UserID:       initialOffer.BFCP.UserID,
-			FloorID:      allocatedFloorID,         // Use dynamically allocated floor
-			MediaStream:  3,                        // Screen share is 3rd m-line (audio, camera, screenshare)
+			ConferenceID: initialOffer.BFCP.ConferenceID, // Poly's ConferenceID from initial offer
+			UserID:       initialOffer.BFCP.UserID,       // Poly's UserID from initial offer
+			FloorID:      screenshareFloorID,             // Floor 2 for screenshare/content
+			MediaStream:  3,                              // Screen share is 3rd m-line (audio, camera, screenshare)
 			Attributes:   initialOffer.BFCP.Attributes,
 		}
+
+		c.log.Infow("🖥️ [re-INVITE] BFCP offer values being used",
+			"polyConferenceID", initialOffer.BFCP.ConferenceID,
+			"polyUserID", initialOffer.BFCP.UserID,
+			"screenshareFloorID", screenshareFloorID,
+			"note", "Floor 2 = screenshare/content",
+			"mediaStream", 3)
 
 		bfcpMedia := bfcpBuilder.BuildAnswer(modifiedOffer)
 
@@ -1288,7 +1304,8 @@ func (c *inboundCall) buildReInviteSDP(includeScreenShare bool) (*sdpv2.SDP, err
 			"userID", bfcpMedia.UserID,
 			"floorID", bfcpMedia.FloorID,
 			"mediaStream", bfcpMedia.MediaStream,
-			"floorCtrl", bfcpMedia.FloorCtrl)
+			"floorCtrl", bfcpMedia.FloorCtrl,
+			"setup", bfcpMedia.Setup)
 	}
 
 	sdp, err := builder.Build()
@@ -1344,8 +1361,16 @@ func (c *inboundCall) onScreenShareTrack(ti *TrackInput) {
 	c.mu.Unlock()
 
 	// Request floor asynchronously (floor grant callback will trigger re-INVITE)
+	// CRITICAL: Always use Floor 2 for screenshare/content (standard convention)
+	// Floor 1 is for camera, Floor 2 is for content/screenshare
+	floorID := ScreenShareFloorID // Floor 2
+
 	go func() {
-		_, err := c.bfcpClient.RequestFloor(ScreenShareFloorID, c.bfcpUserID, bfcp.PriorityNormal)
+		c.log.Infow("🖥️ [BFCP-Client-WebRTC] Requesting screenshare floor",
+			"floorID", floorID,
+			"userID", c.bfcpUserID,
+			"note", "Floor 2 = screenshare/content")
+		_, err := c.bfcpClient.RequestFloor(floorID, c.bfcpUserID, bfcp.PriorityNormal)
 		if err != nil {
 			c.log.Errorw("Floor request failed", err)
 		}
@@ -1524,7 +1549,10 @@ func (c *inboundCall) sendScreenShareReInvite(addScreenShare bool) error {
 		"to", req.To(),
 		"callID", req.CallID())
 
-	c.log.Debugw("🖥️ [re-INVITE] Full INVITE request",
+	c.log.Infow("🖥️ [re-INVITE] ===== SDP OFFER SENT TO POLY =====",
+		"sdp", string(sdpBytes))
+
+	c.log.Debugw("🖥️ [re-INVITE] Full INVITE request (headers + body)",
 		"request", req.String())
 
 	// Create transaction and send
@@ -1657,7 +1685,8 @@ func (c *inboundCall) handleReInviteResponse(req *sip.Request, resp *sip.Respons
 		"statusCode", resp.StatusCode,
 		"reason", resp.Reason)
 
-	c.log.Infow("🖥️ [SIP] Poly SDP answer body:\n%s", string(resp.Body()))
+	c.log.Infow("🖥️ [SIP] Poly SDP answer body",
+		"sdp", string(resp.Body()))
 
 	// Ensure transaction is terminated after ACK is sent
 	defer func() {
@@ -1944,6 +1973,13 @@ func (c *inboundCall) updateScreenShareConnections(sdp *sdpv2.SDP) error {
 			c.log.Warnw("🖥️ [re-INVITE] [Phase5.8] ⚠️ No pending track to connect", nil)
 		}
 
+		// CRITICAL: Add delay between floor grant and pipeline start
+		// This ensures Polycom device is ready to receive RTP packets after BFCP floor grant
+		// Without this delay, early RTP packets may be dropped or cause synchronization issues
+		c.log.Infow("🖥️ [re-INVITE] [Phase5.8] ⏱️ Waiting 150ms before starting pipeline (floor grant propagation)")
+		time.Sleep(150 * time.Millisecond)
+		c.log.Infow("🖥️ [re-INVITE] [Phase5.8] ⏱️ Delay complete - starting pipeline now")
+
 		if err := c.screenshare.Start(); err != nil {
 			c.log.Errorw("🖥️ [re-INVITE] [Phase5.8] ❌ Failed to start pipeline after re-INVITE", err)
 			return fmt.Errorf("failed to start screen share pipeline: %w", err)
@@ -1990,12 +2026,6 @@ func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncrypt
 		return nil, fmt.Errorf("video setup failed: %w", err)
 	}
 
-	// Setup screen share support (Phase 3)
-	if err := c.SetupScreenShare(conf, offer); err != nil {
-		c.log.Warnw("🖥️ [Inbound] Failed to setup screen share", err)
-		// Don't fail the call - camera video still works
-	}
-
 	// Phase 4.3: Don't include BFCP in initial answer - defer to re-INVITE
 	// Per RFC 8856: Port 0 means rejection. To defer BFCP, omit it from answer.
 	// BFCP will be negotiated in re-INVITE when screen share is actually started (Phase 5)
@@ -2011,6 +2041,24 @@ func (c *inboundCall) runMediaConn(offerData []byte, enc livekit.SIPMediaEncrypt
 		// Store BFCP params for later use in re-INVITE
 		// Clear BFCP from answer - the answerBuilder cloned it from the offer
 		answerBuilder.SetBFCP(nil)
+	}
+
+	// CRITICAL: DO NOT store Poly's Floor 1 - we reject it and use our own floor numbering
+	// We will always use Floor 2 for screenshare/content (standard convention)
+	// This forces Poly to accept our floor numbering scheme instead of using its Floor 1
+	if offer.BFCP != nil && offer.BFCP.FloorID > 0 {
+		c.log.Infow("🖥️ [Initial-INVITE] Rejecting Poly's floor - using Floor 2 for screenshare",
+			"polyFloorID", offer.BFCP.FloorID,
+			"ourFloorID", ScreenShareFloorID,
+			"conferenceID", offer.BFCP.ConferenceID,
+			"userID", offer.BFCP.UserID,
+			"note", "We are the BFCP server - we control floor numbering")
+	}
+
+	// Setup screen share support (Phase 3)
+	if err := c.SetupScreenShare(conf, offer); err != nil {
+		c.log.Warnw("🖥️ [Inbound] Failed to setup screen share", err)
+		// Don't fail the call - camera video still works
 	}
 
 	answer, err := answerBuilder.Build()

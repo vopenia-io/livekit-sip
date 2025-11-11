@@ -44,31 +44,41 @@ func (b *BFCPSDPBuilder) BuildAnswer(offer *sdpv2.BFCPMedia) *sdpv2.BFCPMedia {
 	}
 
 	// Build answer that instructs SIP device to connect to our BFCP server
+	// CRITICAL: We echo back Poly's ConferenceID and UserID, but NOT FloorID
+	// FloorID comes from the offer parameter (which we set to Floor 2 in re-INVITE)
+	// This forces Poly to use our floor numbering (Floor 2) instead of its Floor 1
+	// CRITICAL: We are ALWAYS the BFCP server, so we ALWAYS respond with s-only
+	// This forces the SIP device to be the client and connect to us
+	answerFloorCtrl := "s-only" // We're ALWAYS server-only
+
 	answer := &sdpv2.BFCPMedia{
 		Port:         uint16(b.bfcpServerPort), // Tell device our BFCP server port (5070)
 		ConnectionIP: serverIP,                 // Tell device our BFCP server IP
-		FloorCtrl:    "c-only",                 // Tell device: YOU must be client-only
-		ConferenceID: b.conferenceID,           // Use our allocated conference ID
+		FloorCtrl:    answerFloorCtrl,          // Dynamic: s-only if they're c-only, else c-only
+		ConferenceID: offer.ConferenceID,       // Echo back Poly's conference ID from initial offer
 		UserID:       offer.UserID,             // Echo back the device's user ID
-		FloorID:      offer.FloorID,            // Echo back the floor ID
-		MediaStream:  offer.MediaStream,        // Echo back the media stream
+		FloorID:      offer.FloorID,            // Use OUR floor ID (Floor 2) - passed in via offer parameter
+		MediaStream:  offer.MediaStream,        // Echo back the media stream (should be 3 for slides)
 		Setup:        "passive",                // We're the server (passive), device connects (active)
 		Connection:   "new",                    // New connection
 	}
 
 	if EnableBFCPDebugLogging {
-		b.log.Infow("🔵 [BFCP-SDP] Built BFCP answer",
+		b.log.Infow("🔵 [BFCP-SDP] Built BFCP answer (forcing Floor 2)",
 			"offerPort", offer.Port,
 			"offerFloorCtrl", offer.FloorCtrl,
 			"offerSetup", offer.Setup,
 			"offerConferenceID", offer.ConferenceID,
 			"offerUserID", offer.UserID,
+			"offerFloorID", offer.FloorID,
 			"answerPort", answer.Port,
 			"answerFloorCtrl", answer.FloorCtrl,
 			"answerSetup", answer.Setup,
 			"answerConferenceID", answer.ConferenceID,
 			"answerUserID", answer.UserID,
+			"answerFloorID", answer.FloorID,
 			"serverIP", b.bfcpServerIP,
+			"note", "We are BFCP server - rejecting Poly's Floor 1, using Floor 2",
 		)
 	}
 

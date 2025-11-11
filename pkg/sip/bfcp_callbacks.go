@@ -10,10 +10,11 @@ import (
 // BFCPClientCallbacks handles BFCP client callbacks for the WebRTC participant
 // This is where screenshare VideoManager lifecycle is controlled
 type BFCPClientCallbacks struct {
-	manager       *BFCPManager
-	participantID string
-	userID        uint16
-	log           logger.Logger
+	manager              *BFCPManager
+	participantID        string
+	userID               uint16
+	screenShareFloorID   uint16 // Expected floor ID for screenshare
+	log                  logger.Logger
 
 	// Callback for VideoManager control
 	onFloorGranted func(floorID uint16)
@@ -25,23 +26,25 @@ func NewBFCPClientCallbacks(
 	manager *BFCPManager,
 	participantID string,
 	userID uint16,
+	screenShareFloorID uint16,
 	log logger.Logger,
 	onFloorGranted func(floorID uint16),
 	onFloorRevoked func(floorID uint16),
 ) *BFCPClientCallbacks {
 	return &BFCPClientCallbacks{
-		manager:        manager,
-		participantID:  participantID,
-		userID:         userID,
-		log:            log,
-		onFloorGranted: onFloorGranted,
-		onFloorRevoked: onFloorRevoked,
+		manager:            manager,
+		participantID:      participantID,
+		userID:             userID,
+		screenShareFloorID: screenShareFloorID,
+		log:                log,
+		onFloorGranted:     onFloorGranted,
+		onFloorRevoked:     onFloorRevoked,
 	}
 }
 
 // OnConnected is called when BFCP client connects to server
 func (cb *BFCPClientCallbacks) OnConnected() {
-	cb.log.Infow("🟢 [BFCP-Callback] ✅ Connected to BFCP server",
+	cb.log.Infow("🟢 [BFCP-Client-WebRTC] ✅ Connected to BFCP server",
 		"participantID", cb.participantID,
 		"userID", cb.userID,
 	)
@@ -49,14 +52,14 @@ func (cb *BFCPClientCallbacks) OnConnected() {
 
 // OnDisconnected is called when BFCP client disconnects from server
 func (cb *BFCPClientCallbacks) OnDisconnected() {
-	cb.log.Infow("🟡 [BFCP-Callback] ⚠️ Disconnected from BFCP server",
+	cb.log.Infow("🟡 [BFCP-Client-WebRTC] ⚠️ Disconnected from BFCP server",
 		"participantID", cb.participantID,
 		"userID", cb.userID,
 	)
 
 	// Auto-release floors if configured
 	if AutoReleaseOnDisconnect {
-		cb.log.Infow("🟡 [BFCP-Callback] Auto-releasing floors on disconnect")
+		cb.log.Infow("🟡 [BFCP-Client-WebRTC] Auto-releasing floors on disconnect")
 		// The manager will handle cleanup through maintenance loop
 	}
 }
@@ -64,7 +67,7 @@ func (cb *BFCPClientCallbacks) OnDisconnected() {
 // OnFloorGranted is called when a floor is granted
 // For screenshare floor (FloorID=2), this starts the VideoManager
 func (cb *BFCPClientCallbacks) OnFloorGranted(floorID, requestID uint16) {
-	cb.log.Infow("🟢 [BFCP-Callback] ✅✅✅ Floor GRANTED ✅✅✅",
+	cb.log.Infow("🟢 [BFCP-Client-WebRTC] ✅✅✅ Floor GRANTED ✅✅✅",
 		"floorID", floorID,
 		"requestID", requestID,
 		"participantID", cb.participantID,
@@ -75,8 +78,8 @@ func (cb *BFCPClientCallbacks) OnFloorGranted(floorID, requestID uint16) {
 	cb.manager.GrantFloor(floorID, cb.userID, requestID)
 
 	// If this is the screenshare floor, trigger VideoManager start
-	if floorID == ScreenShareFloorID {
-		cb.log.Infow("🟢 [BFCP-Callback] ✅ Screenshare floor granted - starting VideoManager",
+	if floorID == cb.screenShareFloorID {
+		cb.log.Infow("🟢 [BFCP-Client-WebRTC] ✅ Screenshare floor granted - starting VideoManager",
 			"floorID", floorID,
 		)
 
@@ -88,7 +91,7 @@ func (cb *BFCPClientCallbacks) OnFloorGranted(floorID, requestID uint16) {
 
 // OnFloorDenied is called when a floor request is denied
 func (cb *BFCPClientCallbacks) OnFloorDenied(floorID, requestID uint16, errorCode bfcp.ErrorCode) {
-	cb.log.Warnw("🔴 [BFCP-Callback] ❌ Floor DENIED", nil,
+	cb.log.Warnw("🔴 [BFCP-Client-WebRTC] ❌ Floor DENIED", nil,
 		"floorID", floorID,
 		"requestID", requestID,
 		"errorCode", errorCode,
@@ -106,7 +109,7 @@ func (cb *BFCPClientCallbacks) OnFloorDenied(floorID, requestID uint16, errorCod
 // OnFloorRevoked is called when a floor is revoked by the server
 // For screenshare floor (FloorID=2), this stops the VideoManager
 func (cb *BFCPClientCallbacks) OnFloorRevoked(floorID uint16) {
-	cb.log.Infow("🟡 [BFCP-Callback] ⚠️ Floor REVOKED",
+	cb.log.Infow("🟡 [BFCP-Client-WebRTC] ⚠️ Floor REVOKED",
 		"floorID", floorID,
 		"participantID", cb.participantID,
 		"userID", cb.userID,
@@ -116,8 +119,8 @@ func (cb *BFCPClientCallbacks) OnFloorRevoked(floorID uint16) {
 	cb.manager.RevokeFloor(floorID, cb.userID)
 
 	// If this is the screenshare floor, trigger VideoManager stop
-	if floorID == ScreenShareFloorID {
-		cb.log.Infow("🟡 [BFCP-Callback] ⚠️ Screenshare floor revoked - stopping VideoManager",
+	if floorID == cb.screenShareFloorID {
+		cb.log.Infow("🟡 [BFCP-Client-WebRTC] ⚠️ Screenshare floor revoked - stopping VideoManager",
 			"floorID", floorID,
 		)
 
@@ -130,7 +133,7 @@ func (cb *BFCPClientCallbacks) OnFloorRevoked(floorID uint16) {
 // OnFloorReleased is called when a floor is released
 // For screenshare floor (FloorID=2), this stops the VideoManager
 func (cb *BFCPClientCallbacks) OnFloorReleased(floorID uint16) {
-	cb.log.Infow("🟢 [BFCP-Callback] Floor RELEASED",
+	cb.log.Infow("🟢 [BFCP-Client-WebRTC] Floor RELEASED",
 		"floorID", floorID,
 		"participantID", cb.participantID,
 		"userID", cb.userID,
@@ -140,8 +143,8 @@ func (cb *BFCPClientCallbacks) OnFloorReleased(floorID uint16) {
 	cb.manager.ReleaseFloor(floorID, cb.userID)
 
 	// If this is the screenshare floor, trigger VideoManager stop
-	if floorID == ScreenShareFloorID {
-		cb.log.Infow("🟢 [BFCP-Callback] Screenshare floor released - stopping VideoManager",
+	if floorID == cb.screenShareFloorID {
+		cb.log.Infow("🟢 [BFCP-Client-WebRTC] Screenshare floor released - stopping VideoManager",
 			"floorID", floorID,
 		)
 
@@ -153,7 +156,7 @@ func (cb *BFCPClientCallbacks) OnFloorReleased(floorID uint16) {
 
 // OnError is called when a BFCP protocol error occurs
 func (cb *BFCPClientCallbacks) OnError(err error) {
-	cb.log.Errorw("🔴 [BFCP-Callback] BFCP protocol error", err,
+	cb.log.Errorw("🔴 [BFCP-Client-WebRTC] BFCP protocol error", err,
 		"participantID", cb.participantID,
 		"userID", cb.userID,
 	)
