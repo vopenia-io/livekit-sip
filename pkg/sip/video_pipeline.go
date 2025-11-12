@@ -1,8 +1,6 @@
 package sip
 
 import (
-	"crypto/rand"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"time"
@@ -143,7 +141,7 @@ const pipelineStr = `
   appsrc name=webrtc_rtp_in format=3 is-live=true do-timestamp=true max-bytes=2000000 block=false
       caps="application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,payload=96" !
       rtpjitterbuffer name=webrtc_jitterbuffer latency=100 do-lost=true do-retransmission=false drop-on-latency=false !
-      rtpvp8depay request-keyframe=true !
+      rtpvp8depay name=webrtc_depay request-keyframe=true !
       vp8dec !
       videoconvert !
       video/x-raw,format=I420 !
@@ -193,16 +191,12 @@ func (v *VideoManager) SetupGstPipeline() error {
 		return fmt.Errorf("failed to create GStreamer pipeline: %w\n%s", err, pstr)
 	}
 
-	// Generate random target SSRC for RTP rewriting
-	var ssrcBytes [4]byte
-	if _, err := rand.Read(ssrcBytes[:]); err != nil {
-		return fmt.Errorf("failed to generate random SSRC: %w", err)
-	}
-	targetSSRC := binary.BigEndian.Uint32(ssrcBytes[:])
+	// Start with SSRC=0, will be set to first track's SSRC
+	targetSSRC := uint32(0)
 
 	// Create RTP rewriter for maintaining stream continuity
 	rewriter := NewRTPRewriter(targetSSRC, v.log)
-	v.log.Infow("Created RTP rewriter", "targetSSRC", targetSSRC)
+	v.log.Infow("Created RTP rewriter", "targetSSRC", "will-use-first-track")
 
 	sipRtpIn, err := writerFromPipeline(pipeline, "sip_rtp_in")
 	if err != nil {
@@ -214,15 +208,16 @@ func (v *VideoManager) SetupGstPipeline() error {
 	if err != nil {
 		return fmt.Errorf("failed to create SIP RTP writer: %w", err)
 	}
-	// Wrap the output with rewriting reader to maintain SSRC/seq/timestamp continuity
-	rewritingReader := NewRewritingReader(sipRtpOut, rewriter, v.log)
-	go io.Copy(v.sipRtpOut, rewritingReader)
+	// Direct copy - let GStreamer's native H.264 RTP packets through
+	go io.Copy(v.sipRtpOut, sipRtpOut)
 
 	webrtcRtpIn, err := writerFromPipeline(pipeline, "webrtc_rtp_in")
 	if err != nil {
 		return fmt.Errorf("failed to create WebRTC RTP reader: %w", err)
 	}
-	go io.Copy(webrtcRtpIn, v.webrtcRtpIn)
+	// Wrap with rewriter to provide continuous VP8 stream to GStreamer
+	webrtcRewritingReader := NewRewritingReader(v.webrtcRtpIn, rewriter, v.log)
+	go io.Copy(webrtcRtpIn, webrtcRewritingReader)
 
 	webrtcRtpOut, err := readerFromPipeline(pipeline, "webrtc_rtp_out")
 	if err != nil {

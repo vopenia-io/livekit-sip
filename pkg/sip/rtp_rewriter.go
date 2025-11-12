@@ -62,6 +62,12 @@ func NewRTPRewriter(targetSSRC uint32, log logger.Logger) *RTPRewriter {
 	}
 }
 
+// SetTargetSSRC updates the target SSRC (used to set it from first track)
+func (r *RTPRewriter) SetTargetSSRC(ssrc uint32) {
+	r.targetSSRC = ssrc
+	r.log.Infow("RTP rewriter target SSRC set", "targetSSRC", ssrc)
+}
+
 // RewritePacket rewrites an RTP packet's header to maintain continuity.
 // This should be called for every outgoing RTP packet to the SIP endpoint.
 func (r *RTPRewriter) RewritePacket(pkt *rtp.Packet) {

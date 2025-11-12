@@ -156,6 +156,14 @@ func (v *VideoManager) Setup() error {
 	v.room.SetTrackCallback(func(ti *TrackInput) {
 		v.log.Infow("Track switch starting", "trackSid", ti.Sid, "ssrc", ti.SSRC)
 
+		// First track: use its SSRC as the fixed target SSRC
+		if v.pipeline != nil && v.pipeline.Rewriter != nil {
+			if v.pipeline.Rewriter.GetTargetSSRC() == 0 {
+				v.pipeline.Rewriter.SetTargetSSRC(ti.SSRC)
+				v.log.Infow("Using first track's SSRC as fixed target", "ssrc", ti.SSRC)
+			}
+		}
+
 		// Burst PLI requests to new source to get keyframe ASAP
 		// Send 3 PLIs immediately to maximize chances
 		for i := 0; i < 3; i++ {
@@ -170,18 +178,19 @@ func (v *VideoManager) Setup() error {
 			v.pipeline.Rewriter.SwitchSource(ti.SSRC)
 		}
 
-		// Swap BOTH RTCP and RTP immediately
-		// No filtering, no delay - just raw RTP packets with rewritten SSRC/seq/ts
-		// Decoder will show some artifacts until keyframe arrives, then perfect
+		// Swap RTCP immediately
 		if w := v.webrtcRtcpIn.Swap(ti.RtcpIn); w != nil {
 			_ = w.Close()
 		}
 
-		if r := v.webrtcRtpIn.Swap(ti.RtpIn); r != nil {
+		// Wrap RTP stream with keyframe filter to buffer until keyframe arrives
+		// This prevents decoder artifacts by ensuring the first packet is always a keyframe
+		filteredRtpIn := NewKeyframeFilterReader(ti.RtpIn, v.log.WithValues("trackSid", ti.Sid))
+		if r := v.webrtcRtpIn.Swap(filteredRtpIn); r != nil {
 			_ = r.Close()
 		}
 
-		v.log.Infow("Track switch completed - immediate", "trackSid", ti.Sid, "ssrc", ti.SSRC)
+		v.log.Infow("Track switch completed - keyframe filtering active", "trackSid", ti.Sid, "ssrc", ti.SSRC)
 	})
 
 	v.room.UpdateActiveParticipant(nil)
