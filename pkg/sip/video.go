@@ -154,13 +154,34 @@ func (v *VideoManager) Setup() error {
 	// v.webrtcRtcpOut.Swap(webrtcRtcpOutPipeOut)
 
 	v.room.SetTrackCallback(func(ti *TrackInput) {
-		if r := v.webrtcRtpIn.Swap(ti.RtpIn); r != nil {
-			_ = r.Close()
+		v.log.Infow("Track switch starting", "trackSid", ti.Sid, "ssrc", ti.SSRC)
+
+		// Burst PLI requests to new source to get keyframe ASAP
+		// Send 3 PLIs immediately to maximize chances
+		for i := 0; i < 3; i++ {
+			if err := ti.SendPLI(); err != nil {
+				v.log.Debugw("PLI burst failed", "attempt", i+1, "error", err)
+			}
 		}
+
+		// Notify rewriter about source switch for continuity
+		// The rewriter maintains perfect SSRC + sequence + timestamp continuity
+		if v.pipeline != nil && v.pipeline.Rewriter != nil {
+			v.pipeline.Rewriter.SwitchSource(ti.SSRC)
+		}
+
+		// Swap BOTH RTCP and RTP immediately
+		// No filtering, no delay - just raw RTP packets with rewritten SSRC/seq/ts
+		// Decoder will show some artifacts until keyframe arrives, then perfect
 		if w := v.webrtcRtcpIn.Swap(ti.RtcpIn); w != nil {
 			_ = w.Close()
 		}
-		v.pipeline.Flush(ti.Sid)
+
+		if r := v.webrtcRtpIn.Swap(ti.RtpIn); r != nil {
+			_ = r.Close()
+		}
+
+		v.log.Infow("Track switch completed - immediate", "trackSid", ti.Sid, "ssrc", ti.SSRC)
 	})
 
 	v.room.UpdateActiveParticipant(nil)

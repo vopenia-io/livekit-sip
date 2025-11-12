@@ -169,14 +169,30 @@ func (r *RtcpReader) Close() error {
 func NewTrackInput(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant, conf *config.Config) *TrackInput {
 	ti := &TrackInput{
 		Sid:    pub.SID(),
+		SSRC:   uint32(track.SSRC()),
 		RtpIn:  io.NopCloser(&TrackAdapter{TrackRemote: track}),
 		RtcpIn: io.NopCloser(NewRtcpReader(pub, rp)),
+		pub:    pub,
+		rp:     rp,
 	}
 	return ti
 }
 
 type TrackInput struct {
 	Sid    string
+	SSRC   uint32
 	RtpIn  io.ReadCloser
 	RtcpIn io.ReadCloser
+	pub    *lksdk.RemoteTrackPublication
+	rp     *lksdk.RemoteParticipant
+}
+
+// SendPLI sends a PLI (Picture Loss Indication) to request a keyframe from this track
+func (ti *TrackInput) SendPLI() error {
+	if ti.rp == nil {
+		return errors.New("no participant available")
+	}
+	// Use the RemoteParticipant's WritePLI method which handles the RTCP correctly
+	ti.rp.WritePLI(webrtc.SSRC(ti.SSRC))
+	return nil
 }

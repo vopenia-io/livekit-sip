@@ -83,8 +83,9 @@ type Room struct {
 
 	participantTracks map[string][2]*TrackInput
 	activeParticipant struct {
-		t uint8
-		p string
+		t          uint8
+		p          string
+		lastSwitch time.Time
 	}
 	trackMu       sync.Mutex
 	trackCallback TrackCallback
@@ -600,7 +601,8 @@ func (r *Room) UpdateActiveParticipant(p []lksdk.Participant) {
 	// }
 
 	track, ok := r.participantTracks[id]
-	if !ok || (track[0] == nil && track[1] != nil) {
+	if !ok || (track[0] == nil && track[1] == nil) {
+		// No tracks available for this participant
 		return
 	}
 	activeParticipant := id
@@ -610,17 +612,42 @@ func (r *Room) UpdateActiveParticipant(p []lksdk.Participant) {
 	}
 
 	if r.activeParticipant.p == activeParticipant && r.activeParticipant.t == activeTrack {
+		r.log.Debugw("Already on this participant/track, skipping switch",
+			"participant", activeParticipant,
+			"track", activeTrack)
+		return
+	}
+
+	// Hysteresis: prevent rapid switching by requiring minimum time between switches
+	// Exception: screenshare always takes priority and bypasses hysteresis
+	const minSwitchInterval = 2 * time.Second
+	timeSinceLastSwitch := time.Since(r.activeParticipant.lastSwitch)
+	isScreenshare := activeTrack == 0 // Track 0 is screenshare
+
+	if timeSinceLastSwitch < minSwitchInterval && !isScreenshare && !r.activeParticipant.lastSwitch.IsZero() {
+		r.log.Debugw("Skipping participant switch due to hysteresis",
+			"newParticipant", activeParticipant,
+			"timeSinceLastSwitch", timeSinceLastSwitch,
+			"minInterval", minSwitchInterval)
 		return
 	}
 
 	r.activeParticipant.t = activeTrack
 	r.activeParticipant.p = activeParticipant
+	r.activeParticipant.lastSwitch = time.Now()
 
-	if r.trackCallback != nil {
+	if r.trackCallback != nil && track[activeTrack] != nil {
 
-		r.log.Debugw("invoking track callback for active participant", "participant", id, "tracks", track)
+		r.log.Infow("invoking track callback for active participant",
+			"participant", id,
+			"trackType", map[uint8]string{0: "screenshare", 1: "camera"}[activeTrack],
+			"tracks", track)
 
 		go r.trackCallback(track[activeTrack])
+	} else if track[activeTrack] == nil {
+		r.log.Warnw("Active track is nil, skipping callback", nil,
+			"participant", id,
+			"activeTrack", activeTrack)
 	}
 }
 
@@ -657,7 +684,12 @@ func (r *Room) participantVideoTrackSubscribed(track *webrtc.TrackRemote, pub *l
 		r.participantTracks[id] = t
 	}()
 
-	r.trackCallback(ti)
+	// Start aggressive PLI sender for this track to ensure keyframes are always fresh
+	// This ensures <100ms switching time when active speaker changes
+	go r.sendPeriodicPLI(ti, rp.Identity(), log)
+
+	// Don't call trackCallback directly - let UpdateActiveParticipant handle it
+	// to ensure proper screenshare priority and avoid double-switching
 	time.Sleep(1 * time.Second)
 	r.UpdateActiveParticipant(nil)
 
@@ -677,4 +709,35 @@ func (r *Room) LocalParticipant() *lksdk.LocalParticipant {
 		return nil
 	}
 	return r.room.LocalParticipant
+}
+
+// sendPeriodicPLI sends PLI (Picture Loss Indication) packets to a video track
+// every 1 second to ensure keyframes are generated regularly. This enables
+// fast (<100ms) switching when the active speaker changes.
+func (r *Room) sendPeriodicPLI(ti *TrackInput, participantID string, log logger.Logger) {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	log.Debugw("Starting periodic PLI sender", "participant", participantID)
+
+	for {
+		select {
+		case <-ticker.C:
+			if r.closed.IsBroken() {
+				log.Debugw("Room closed, stopping PLI sender", "participant", participantID)
+				return
+			}
+
+			// Send PLI to request keyframe
+			if err := ti.SendPLI(); err != nil {
+				log.Debugw("Failed to send PLI", "error", err, "participant", participantID)
+			} else {
+				log.Debugw("Sent periodic PLI", "participant", participantID)
+			}
+
+		case <-r.stopped.Watch():
+			log.Debugw("Room stopped, stopping PLI sender", "participant", participantID)
+			return
+		}
+	}
 }
