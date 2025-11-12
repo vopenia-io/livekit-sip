@@ -5,12 +5,15 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"sync"
+	"time"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	mrtp "github.com/livekit/media-sdk/rtp"
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
 	"github.com/livekit/protocol/logger"
+	pionrtp "github.com/pion/rtp"
 )
 
 var mainLoop *glib.MainLoop
@@ -20,6 +23,19 @@ func init() {
 
 	mainLoop = glib.NewMainLoop(glib.MainContextDefault(), false)
 	_ = mainLoop
+}
+
+// generateSSRCForParticipant generates a stable SSRC for a participant based on their ID.
+// This ensures the same participant always gets the same SSRC, which is crucial for
+// VideoSwitcher to properly route packets by SSRC.
+func generateSSRCForParticipant(participantID string) uint32 {
+	// Use a hash of the participant ID to generate a stable SSRC
+	h := uint32(0)
+	for i := 0; i < len(participantID); i++ {
+		h = h*31 + uint32(participantID[i])
+	}
+	// Ensure SSRC is non-zero and in a reasonable range (0x50000000 to 0x5FFFFFFF)
+	return 0x50000000 + (h % 0x0FFFFFFF)
 }
 
 func NewVideoManager(log logger.Logger, room *Room, sdp *sdpv2.SDP, media *sdpv2.SDPMedia, opts *MediaOptions) (*VideoManager, error) {
@@ -40,12 +56,13 @@ func NewVideoManager(log logger.Logger, room *Room, sdp *sdpv2.SDP, media *sdpv2
 			webrtcRtcpIn:  NewSwitchReader(),
 			webrtcRtcpOut: NewSwitchWriter(),
 		},
-		log:      log,
-		room:     room,
-		opts:     opts,
-		media:    media,
-		rtpConn:  newUDPConn(log.WithComponent("video-rtp"), rtpConn),
-		rtcpConn: newUDPConn(log.WithComponent("video-rtcp"), rtcpConn),
+		log:                  log,
+		room:                 room,
+		opts:                 opts,
+		media:                media,
+		rtpConn:              newUDPConn(log.WithComponent("video-rtp"), rtpConn),
+		rtcpConn:             newUDPConn(log.WithComponent("video-rtcp"), rtcpConn),
+		participantRewriters: make(map[string]*RTPRewriter),
 	}
 
 	rtpAddr := netip.AddrPortFrom(sdp.Addr, media.Port)
@@ -73,13 +90,16 @@ type VideoIO struct {
 
 type VideoManager struct {
 	VideoIO
-	log      logger.Logger
-	opts     *MediaOptions
-	media    *sdpv2.SDPMedia
-	room     *Room
-	rtpConn  *udpConn
-	rtcpConn *udpConn
-	pipeline *VideoPipeline
+	log                  logger.Logger
+	opts                 *MediaOptions
+	media                *sdpv2.SDPMedia
+	room                 *Room
+	rtpConn              *udpConn
+	rtcpConn             *udpConn
+	pipeline             *VideoPipeline
+	videoSwitcher        *VideoSwitcher            // Intelligent switcher for smooth transitions
+	participantRewriters map[string]*RTPRewriter   // Per-participant RTP rewriters
+	rewriterMu           sync.Mutex                // Protects participantRewriters map
 }
 
 func (v *VideoManager) RtpPort() int {
@@ -154,43 +174,106 @@ func (v *VideoManager) Setup() error {
 	// v.webrtcRtcpOut.Swap(webrtcRtcpOutPipeOut)
 
 	v.room.SetTrackCallback(func(ti *TrackInput) {
-		v.log.Infow("Track switch starting", "trackSid", ti.Sid, "ssrc", ti.SSRC)
+		identity := ti.GetIdentity()
+		v.log.Infow("🎬 Track switch starting",
+			"trackSid", ti.Sid,
+			"ssrc", ti.SSRC,
+			"identity", identity)
 
-		// First track: use its SSRC as the fixed target SSRC
-		if v.pipeline != nil && v.pipeline.Rewriter != nil {
-			if v.pipeline.Rewriter.GetTargetSSRC() == 0 {
-				v.pipeline.Rewriter.SetTargetSSRC(ti.SSRC)
-				v.log.Infow("Using first track's SSRC as fixed target", "ssrc", ti.SSRC)
-			}
+		// Generate stable SSRC for this participant
+		// VideoSwitcher uses this SSRC to route packets and manage transitions
+		participantSSRC := generateSSRCForParticipant(ti.Sid)
+
+		v.rewriterMu.Lock()
+		// Check if we already have a rewriter for this participant
+		rewriter, exists := v.participantRewriters[identity]
+		if !exists {
+			// Create new per-participant RTP rewriter
+			// Each rewriter maintains continuity for ONE participant's stream
+			rewriter = NewRTPRewriter(participantSSRC, v.log.WithValues("participant", identity))
+			v.participantRewriters[identity] = rewriter
+			v.log.Infow("✨ Created per-participant RTP rewriter",
+				"identity", identity,
+				"participantSSRC", participantSSRC,
+				"sourceSSRC", ti.SSRC)
 		}
+		v.rewriterMu.Unlock()
 
-		// Burst PLI requests to new source to get keyframe ASAP
-		// Send 3 PLIs immediately to maximize chances
+		// Notify rewriter about the source SSRC for this participant
+		rewriter.SwitchSource(ti.SSRC)
+
+		// Step 1: Request VP8 keyframe from new source (WebRTC participant)
+		// Burst PLI requests to maximize chances of quick keyframe
 		for i := 0; i < 3; i++ {
 			if err := ti.SendPLI(); err != nil {
 				v.log.Debugw("PLI burst failed", "attempt", i+1, "error", err)
 			}
 		}
 
-		// Notify rewriter about source switch for continuity
-		// The rewriter maintains perfect SSRC + sequence + timestamp continuity
-		if v.pipeline != nil && v.pipeline.Rewriter != nil {
-			v.pipeline.Rewriter.SwitchSource(ti.SSRC)
-		}
-
-		// Swap RTCP immediately
+		// Step 2: Swap RTCP immediately for bidirectional communication
 		if w := v.webrtcRtcpIn.Swap(ti.RtcpIn); w != nil {
 			_ = w.Close()
 		}
 
-		// Wrap RTP stream with keyframe filter to buffer until keyframe arrives
-		// This prevents decoder artifacts by ensuring the first packet is always a keyframe
-		filteredRtpIn := NewKeyframeFilterReader(ti.RtpIn, v.log.WithValues("trackSid", ti.Sid))
-		if r := v.webrtcRtpIn.Swap(filteredRtpIn); r != nil {
-			_ = r.Close()
+		// Step 3: Set up packet flow: TrackInput → RTPRewriter → VideoSwitcher → GStreamer
+		// Create reader that rewrites packets before sending to VideoSwitcher
+		rewritingReader := NewRewritingReader(ti.RtpIn, rewriter, v.log)
+
+		// Start goroutine to read from track and write through rewriter to VideoSwitcher
+		go func() {
+			defer func() {
+				v.log.Debugw("Track reader goroutine exiting", "identity", identity)
+			}()
+
+			buf := make([]byte, 1500) // MTU size buffer
+			for {
+				// Read RTP packet from track
+				n, err := rewritingReader.Read(buf)
+				if err != nil {
+					if err != io.EOF {
+						v.log.Debugw("Track read error", "identity", identity, "error", err)
+					}
+					return
+				}
+
+				// Parse packet to get header and payload
+				var pkt pionrtp.Packet
+				if unmarshalErr := pkt.Unmarshal(buf[:n]); unmarshalErr != nil {
+					v.log.Debugw("Failed to unmarshal packet", "error", unmarshalErr)
+					continue
+				}
+
+				// Write to VideoSwitcher
+				// VideoSwitcher will buffer packets until keyframe and manage smooth transitions
+				if v.videoSwitcher != nil {
+					if _, writeErr := v.videoSwitcher.WriteRTP(&pkt.Header, pkt.Payload); writeErr != nil {
+						v.log.Debugw("VideoSwitcher write error", "error", writeErr)
+					}
+				}
+			}
+		}()
+
+		// Step 4: Tell VideoSwitcher to switch to this participant
+		// VideoSwitcher will buffer packets until VP8 keyframe arrives, then switch seamlessly
+		isFirstTrack := v.videoSwitcher.GetCurrentSSRC() == 0
+		if v.videoSwitcher != nil {
+			v.videoSwitcher.SetActiveSource(participantSSRC, "active speaker switch")
+			v.log.Infow("✅ VideoSwitcher set to new source",
+				"participantSSRC", participantSSRC,
+				"identity", identity,
+				"isFirstTrack", isFirstTrack)
 		}
 
-		v.log.Infow("Track switch completed - keyframe filtering active", "trackSid", ti.Sid, "ssrc", ti.SSRC)
+		// Step 5: Request H.264 keyframe from x264 encoder after transition
+		// This ensures SIP side gets clean keyframe after speaker change
+		if !isFirstTrack {
+			go func() {
+				time.Sleep(200 * time.Millisecond)
+				if err := v.RequestKeyframe("active speaker switch"); err != nil {
+					v.log.Warnw("Failed to request H.264 keyframe after track switch", err)
+				}
+			}()
+		}
 	})
 
 	v.room.UpdateActiveParticipant(nil)
@@ -240,4 +323,24 @@ func (v *VideoManager) Start() error {
 		return fmt.Errorf("failed to set GStreamer pipeline to playing: %w", err)
 	}
 	return nil
+}
+
+// RequestKeyframe requests a keyframe from the x264 encoder
+// This should be called after switching active speakers to get a clean H.264 keyframe for SIP
+func (v *VideoManager) RequestKeyframe(reason string) error {
+	if v.pipeline == nil {
+		return fmt.Errorf("pipeline not initialized")
+	}
+	v.log.Infow("requesting keyframe from x264 encoder", "reason", reason)
+	return v.pipeline.RequestKeyframe(reason)
+}
+
+// FlushPipeline flushes the video pipeline to clear buffered frames
+// This should be called after switching active speakers to remove buffered packets from the old speaker
+func (v *VideoManager) FlushPipeline(reason string) error {
+	if v.pipeline == nil {
+		return fmt.Errorf("pipeline not initialized")
+	}
+	v.log.Infow("flushing video pipeline", "reason", reason)
+	return v.pipeline.Flush(reason)
 }

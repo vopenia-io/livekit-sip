@@ -19,7 +19,7 @@ type VideoPipeline struct {
 	WebrtcRtpOut *GstReader
 
 	Pipeline *gst.Pipeline
-	Rewriter *RTPRewriter
+	// Note: Rewriter removed - per-participant rewriters managed by VideoManager
 }
 
 func (v *VideoPipeline) Close() error {
@@ -38,11 +38,72 @@ func (v *VideoPipeline) Start() error {
 	return nil
 }
 
-func (v *VideoPipeline) Flush(sid string) error {
-	v.Pipeline.SendEvent(gst.NewFlushStartEvent())
-	v.Pipeline.SendEvent(gst.NewFlushStopEvent(true))
+// Flush sends flush events to the pipeline to clear buffered frames
+// This should be called after switching active speakers to remove buffered packets from the old speaker
+func (v *VideoPipeline) Flush(reason string) error {
+	// Get the appsrc element (webrtc_rtp_in) which is where we inject RTP packets
+	appsrc, err := v.Pipeline.GetElementByName("webrtc_rtp_in")
+	if err != nil {
+		return fmt.Errorf("failed to find webrtc_rtp_in appsrc: %w", err)
+	}
 
-	// v.SipRtpIn.Src.SendEvent(gst.NewStreamStartEvent(sid))
+	// Send a flush-start event followed by flush-stop to clear the pipeline
+	// This will clear all buffered data in the queue and decoder
+	flushStartEvent := gst.NewFlushStartEvent()
+	flushStopEvent := gst.NewFlushStopEvent(true) // reset_time = true
+
+	srcPad := appsrc.GetStaticPad("src")
+	if srcPad == nil {
+		return fmt.Errorf("src pad not found on webrtc_rtp_in")
+	}
+
+	// Send flush-start to begin flushing
+	if !srcPad.SendEvent(flushStartEvent) {
+		return fmt.Errorf("failed to send flush-start event")
+	}
+
+	// Small delay between flush-start and flush-stop
+	time.Sleep(10 * time.Millisecond)
+
+	// Send flush-stop to resume processing with cleared buffers
+	if !srcPad.SendEvent(flushStopEvent) {
+		return fmt.Errorf("failed to send flush-stop event")
+	}
+
+	return nil
+}
+
+// RequestKeyframe requests a keyframe from the WebRTC->SIP encoder (x264enc)
+// This should be called when switching active speakers or when the SIP device requests a keyframe
+func (v *VideoPipeline) RequestKeyframe(reason string) error {
+	// Get the x264enc element
+	x264enc, err := v.Pipeline.GetElementByName("x264enc")
+	if err != nil {
+		return fmt.Errorf("failed to find x264enc element: %w", err)
+	}
+
+	// Force keyframe by temporarily setting key-int-max to 1 and restoring original value
+	// This method reliably generates a keyframe on the next frame
+
+	// Get current key-int-max value
+	currentKeyIntMax, err := x264enc.GetProperty("key-int-max")
+	if err != nil {
+		return fmt.Errorf("failed to get current key-int-max property: %w", err)
+	}
+
+	// Set key-int-max to 1 to force immediate keyframe
+	if err := x264enc.SetProperty("key-int-max", uint(1)); err != nil {
+		return fmt.Errorf("failed to set key-int-max to 1: %w", err)
+	}
+
+	// Restore original value after a short delay (in a goroutine to not block)
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		if err := x264enc.SetProperty("key-int-max", currentKeyIntMax); err != nil {
+			// Log error but don't fail - encoder will continue with key-int-max=1
+		}
+	}()
+
 	return nil
 }
 
@@ -191,13 +252,6 @@ func (v *VideoManager) SetupGstPipeline() error {
 		return fmt.Errorf("failed to create GStreamer pipeline: %w\n%s", err, pstr)
 	}
 
-	// Start with SSRC=0, will be set to first track's SSRC
-	targetSSRC := uint32(0)
-
-	// Create RTP rewriter for maintaining stream continuity
-	rewriter := NewRTPRewriter(targetSSRC, v.log)
-	v.log.Infow("Created RTP rewriter", "targetSSRC", "will-use-first-track")
-
 	sipRtpIn, err := writerFromPipeline(pipeline, "sip_rtp_in")
 	if err != nil {
 		return fmt.Errorf("failed to create SIP RTP reader: %w", err)
@@ -215,9 +269,17 @@ func (v *VideoManager) SetupGstPipeline() error {
 	if err != nil {
 		return fmt.Errorf("failed to create WebRTC RTP reader: %w", err)
 	}
-	// Wrap with rewriter to provide continuous VP8 stream to GStreamer
-	webrtcRewritingReader := NewRewritingReader(v.webrtcRtpIn, rewriter, v.log)
-	go io.Copy(webrtcRtpIn, webrtcRewritingReader)
+
+	// Create VideoSwitcher for smooth transitions
+	// VideoSwitcher sits between per-participant rewriters and GStreamer pipeline
+	// It buffers packets until keyframe arrives for artifact-free switching
+	rtpAdapter := NewRTPWriteStreamAdapter(webrtcRtpIn)
+	videoSwitcher := NewVideoSwitcher(v.log, rtpAdapter)
+	v.videoSwitcher = videoSwitcher
+	v.log.Infow("✨ VideoSwitcher created for smooth transitions")
+
+	// Note: Removed shared RTPRewriter here. Each participant will have their own
+	// rewriter that writes to VideoSwitcher. This allows SSRC-based routing.
 
 	webrtcRtpOut, err := readerFromPipeline(pipeline, "webrtc_rtp_out")
 	if err != nil {
@@ -233,7 +295,7 @@ func (v *VideoManager) SetupGstPipeline() error {
 		pliForwarder: v.sipRtcpOut,
 		log:          v.log,
 		name:         "WebRTC-IN",
-		rewriter:     rewriter,
+		rewriter:     nil, // No shared rewriter - per-participant rewriters used
 	}
 	go io.Copy(io.Discard, webrtcRtcpMonitor)
 
@@ -244,7 +306,7 @@ func (v *VideoManager) SetupGstPipeline() error {
 		pliForwarder: v.webrtcRtcpOut,
 		log:          v.log,
 		name:         "SIP-IN",
-		rewriter:     rewriter,
+		rewriter:     nil, // No shared rewriter - per-participant rewriters used
 	}
 	go io.Copy(io.Discard, sipRtcpMonitor)
 
@@ -286,7 +348,7 @@ func (v *VideoManager) SetupGstPipeline() error {
 		WebrtcRtpIn:  webrtcRtpIn,
 		WebrtcRtpOut: webrtcRtpOut,
 		Pipeline:     pipeline,
-		Rewriter:     rewriter,
+		// Note: Rewriter field removed - per-participant rewriters managed by VideoManager
 	}
 
 	return nil
@@ -299,11 +361,8 @@ func (v *VideoManager) sendPLI(writer io.Writer, direction string) {
 		return
 	}
 
-	// Use actual SSRC if rewriter is available
+	// Use SSRC=0 as wildcard for PLI (compatible with all endpoints)
 	mediaSSRC := uint32(0)
-	if v.pipeline != nil && v.pipeline.Rewriter != nil {
-		mediaSSRC = v.pipeline.Rewriter.GetTargetSSRC()
-	}
 
 	pli := &rtcp.PictureLossIndication{
 		SenderSSRC: 0,

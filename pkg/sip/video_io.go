@@ -9,6 +9,7 @@ import (
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/livekit/sip/pkg/config"
 	"github.com/pion/rtcp"
+	pionrtp "github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -195,4 +196,54 @@ func (ti *TrackInput) SendPLI() error {
 	// Use the RemoteParticipant's WritePLI method which handles the RTCP correctly
 	ti.rp.WritePLI(webrtc.SSRC(ti.SSRC))
 	return nil
+}
+
+// GetIdentity returns the identity of the participant associated with this track
+func (ti *TrackInput) GetIdentity() string {
+	if ti.rp == nil {
+		return ""
+	}
+	return ti.rp.Identity()
+}
+
+// RTPWriteStreamAdapter adapts a GstWriter (io.Writer) to the rtp.WriteStream interface
+// required by VideoSwitcher. It marshals RTP packets and writes them to the underlying writer.
+type RTPWriteStreamAdapter struct {
+	writer *GstWriter
+}
+
+// NewRTPWriteStreamAdapter creates an adapter that bridges GstWriter to rtp.WriteStream
+func NewRTPWriteStreamAdapter(writer *GstWriter) *RTPWriteStreamAdapter {
+	return &RTPWriteStreamAdapter{writer: writer}
+}
+
+// WriteRTP implements rtp.WriteStream interface by marshaling the RTP packet and writing to GstWriter
+func (a *RTPWriteStreamAdapter) WriteRTP(header *pionrtp.Header, payload []byte) (int, error) {
+	// Create RTP packet from header and payload
+	pkt := &pionrtp.Packet{
+		Header:  *header,
+		Payload: payload,
+	}
+
+	// Marshal packet to bytes
+	data, err := pkt.Marshal()
+	if err != nil {
+		return 0, err
+	}
+
+	// Write to underlying GstWriter
+	return a.writer.Write(data)
+}
+
+// Close closes the underlying writer
+func (a *RTPWriteStreamAdapter) Close() error {
+	if a.writer != nil {
+		return a.writer.Close()
+	}
+	return nil
+}
+
+// String implements fmt.Stringer for logging
+func (a *RTPWriteStreamAdapter) String() string {
+	return "RTPWriteStreamAdapter"
 }

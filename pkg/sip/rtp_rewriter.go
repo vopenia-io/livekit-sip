@@ -180,6 +180,23 @@ func (r *RTPRewriter) SwitchSource(newSSRC uint32) {
 		"continueFromTS", lastTS+3000)
 }
 
+// SetContinuityPoint allows external code (like VideoSwitcher) to explicitly set
+// the sequence number and timestamp that the next packet should continue from.
+// This is useful when the switcher has buffered packets and knows the exact
+// continuity point for a smooth transition.
+func (r *RTPRewriter) SetContinuityPoint(seqNum uint16, timestamp uint32) {
+	r.switchMu.Lock()
+	defer r.switchMu.Unlock()
+
+	r.seqContinueFrom.Store(uint32(seqNum))
+	r.tsContinueFrom.Store(uint64(timestamp))
+	r.needsOffsetCalc.Store(true)
+
+	r.log.Infow("RTP rewriter: continuity point set externally",
+		"continueFromSeq", seqNum,
+		"continueFromTS", timestamp)
+}
+
 // GetTargetSSRC returns the fixed SSRC being sent to the SIP endpoint.
 func (r *RTPRewriter) GetTargetSSRC() uint32 {
 	return r.targetSSRC
