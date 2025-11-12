@@ -89,11 +89,11 @@ const pipelineStr = `
       rtpjitterbuffer name=sip_jitterbuffer latency=100 do-lost=true do-retransmission=false drop-on-latency=false !
       rtph264depay request-keyframe=true !
       h264parse config-interval=1 !
-      avdec_h264 max-threads=4 !
-      videoconvert !
-      videoscale add-borders=false !
+      avdec_h264 max-threads=8 !
+      videoconvert n-threads=4 !
+      videoscale add-borders=false n-threads=4 !
       videorate !
-      vp8enc deadline=1 target-bitrate=3000000 cpu-used=2 keyframe-max-dist=30 lag-in-frames=0 threads=4 buffer-initial-size=100 buffer-optimal-size=120 buffer-size=150 min-quantizer=4 max-quantizer=40 cq-level=13 error-resilient=1 !
+      vp8enc deadline=1 target-bitrate=3000000 cpu-used=0 keyframe-max-dist=30 lag-in-frames=0 threads=8 buffer-initial-size=100 buffer-optimal-size=120 buffer-size=150 min-quantizer=4 max-quantizer=40 cq-level=13 error-resilient=1 !
       rtpvp8pay pt=96 mtu=1200 picture-id-mode=15-bit !
       appsink name=webrtc_rtp_out emit-signals=false drop=false max-buffers=100 sync=false
 
@@ -101,10 +101,10 @@ const pipelineStr = `
       caps="application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,payload=96" !
       rtpjitterbuffer name=webrtc_jitterbuffer latency=100 do-lost=true do-retransmission=false drop-on-latency=false !
       rtpvp8depay request-keyframe=true !
-      vp8dec !
-      videoconvert !
+      vp8dec threads=8 !
+      videoconvert n-threads=4 !
       video/x-raw,format=I420 !
-      x264enc bitrate=2000 key-int-max=30 bframes=0 rc-lookahead=0 sliced-threads=true sync-lookahead=0 tune=zerolatency speed-preset=ultrafast !
+      x264enc bitrate=2000 key-int-max=30 bframes=0 rc-lookahead=0 sliced-threads=true threads=8 sync-lookahead=0 tune=zerolatency speed-preset=ultrafast !
       h264parse config-interval=1 !
       rtph264pay pt=%d mtu=1200 config-interval=1 aggregate-mode=zero-latency !
       appsink name=sip_rtp_out emit-signals=false drop=false max-buffers=100 sync=false
