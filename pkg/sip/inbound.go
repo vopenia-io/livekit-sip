@@ -948,6 +948,26 @@ func (c *inboundCall) SetupAudio(conf *config.Config, offer *sdpv2.SDP, answerBu
 }
 
 func (c *inboundCall) SetupVideo(conf *config.Config, offer *sdpv2.SDP, answerBuilder *sdpv2.SDPBuilder, features []livekit.SIPFeature) error {
+	if c.video == nil {
+		c.log.Infow("creating video manager")
+		video, err := NewVideoManager(c.log, c.lkRoom, offer, &MediaOptions{
+			IP:                  c.s.sconf.MediaIP,
+			Ports:               conf.RTPPort,
+			MediaTimeoutInitial: c.s.conf.MediaTimeoutInitial,
+			MediaTimeout:        c.s.conf.MediaTimeout,
+			Stats:               &c.stats.Port,
+		})
+		if err != nil {
+			return fmt.Errorf("video manager creation failed: %w", err)
+		}
+		ti := c.lkRoom.TrackInput()
+		video.SetWebrtcRtpIn(ti.RtpIn)
+		video.SetWebrtcRtcpIn(ti.RtcpIn)
+		c.video = video
+
+		// c.lkRoom.SetTrackCallback(c.video.OnWebrtcTrack)
+	}
+
 	if offer.Video != nil {
 		if err := offer.Video.SelectCodec(); err != nil {
 			return fmt.Errorf("video codec selection failed: %w, video: %v", err, offer.Video)
@@ -957,25 +977,12 @@ func (c *inboundCall) SetupVideo(conf *config.Config, offer *sdpv2.SDP, answerBu
 			return fmt.Errorf("no video codec in SDP offer: %w", sdp.ErrNoCommonMedia)
 		}
 
-		if c.video == nil {
-			video, err := NewVideoManager(c.log, c.lkRoom, offer, offer.Video, &MediaOptions{
-				IP:                  c.s.sconf.MediaIP,
-				Ports:               conf.RTPPort,
-				MediaTimeoutInitial: c.s.conf.MediaTimeoutInitial,
-				MediaTimeout:        c.s.conf.MediaTimeout,
-				Stats:               &c.stats.Port,
-			})
-			if err != nil {
-				return fmt.Errorf("video manager creation failed: %w", err)
-			}
-			c.video = video
+		if err := c.video.Stop(); err != nil {
+			return fmt.Errorf("video manager stop failed: %w", err)
+		}
 
-			if err := c.video.Setup(); err != nil {
-				return fmt.Errorf("video setup failed: %w", err)
-			}
-			if err := c.video.Start(); err != nil {
-				return fmt.Errorf("video start failed: %w", err)
-			}
+		if err := c.video.Setup(offer.Video); err != nil {
+			return fmt.Errorf("video setup failed: %w", err)
 		}
 
 		answerBuilder.SetVideo(func(b *sdpv2.SDPMediaBuilder) (*sdpv2.SDPMedia, error) {
@@ -985,13 +992,20 @@ func (c *inboundCall) SetupVideo(conf *config.Config, offer *sdpv2.SDP, answerBu
 				}, true).
 				SetRTPPort(uint16(c.video.RtpPort())).
 				SetRTCPPort(uint16(c.video.RtcpPort())).
+				SetDirection(offer.Video.Direction.Reverse()).
 				Build()
 		})
-	} else if c.video != nil {
-		// video was previously established, but not in this offer
-		c.video.Close()
-		c.video = nil
+
+		if err := c.video.Start(); err != nil {
+			return fmt.Errorf("failed to start video: %w", err)
+		}
+	} else {
+		c.log.Infow("closing video manager as no video in offer")
+		if err := c.video.Stop(); err != nil {
+			return fmt.Errorf("video manager stop failed: %w", err)
+		}
 	}
+
 	return nil
 }
 
@@ -1336,21 +1350,13 @@ func (c *inboundCall) publishTracks() error {
 	}
 	c.media.WriteAudioTo(local)
 
-	if c.video != nil {
-		videoTrack, err := c.lkRoom.NewParticipantVideoTrack()
-		if err != nil {
-			_ = c.lkRoom.Close()
+	if c.video == nil {
+		if err := c.lkRoom.StopVideo(); err != nil {
 			return err
 		}
-		trackWriter := &NopWriteCloser{Writer: videoTrack}
-		c.video.SetWebrtcRtpOut(trackWriter)
-		webrtcRtcpOut := &RtcpWriter{
-			pc: c.lkRoom.LocalParticipant().GetSubscriberPeerConnection(),
-		}
-
-		c.video.SetWebrtcRtcpOut(
-			&NopWriteCloser{Writer: webrtcRtcpOut},
-		)
+	}
+	if err := c.video.PublishVideoTrack(); err != nil {
+		return err
 	}
 
 	return nil

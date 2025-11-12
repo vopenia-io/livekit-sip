@@ -80,10 +80,14 @@ type Room struct {
 	closed     core.Fuse
 	stats      *RoomStats
 
-	participantTracks map[string]TrackInput
-	activeParticipant string
-	trackMu           sync.Mutex
-	trackCallback     TrackCallback
+	// participantTracks map[string]TrackInput
+	// activeParticipant string
+	trackMu sync.Mutex
+	// trackCallback     TrackCallback
+
+	trackSwitcher *TrackSwitcher
+
+	videoOut *TrackOutput
 }
 
 type ParticipantConfig struct {
@@ -108,9 +112,9 @@ func NewRoom(log logger.Logger, st *RoomStats) *Room {
 		st = &RoomStats{}
 	}
 	r := &Room{log: log,
-		stats:             st,
-		out:               msdk.NewSwitchWriter(RoomSampleRate),
-		participantTracks: make(map[string]TrackInput),
+		stats:         st,
+		out:           msdk.NewSwitchWriter(RoomSampleRate),
+		trackSwitcher: NewTrackSwitcher(),
 	}
 	out := newMediaWriterCount(r.out, &st.OutputFrames, &st.OutputSamples)
 
@@ -175,12 +179,12 @@ func (r *Room) participantJoin(rp *lksdk.RemoteParticipant) {
 	}
 }
 
-func (r *Room) participantLeft(rp *lksdk.RemoteParticipant) {
-	log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID())
-	log.Debugw("participant left")
+// func (r *Room) participantLeft(rp *lksdk.RemoteParticipant) {
+// 	log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID())
+// 	log.Debugw("participant left")
 
-	r.DeleteParticipantTrack(rp.Identity())
-}
+// 	r.DeleteParticipantTrack(rp.Identity())
+// }
 
 func (r *Room) subscribeTo(pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
 	log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID(), "trackID", pub.SID(), "trackName", pub.Name())
@@ -196,16 +200,16 @@ func (r *Room) subscribeTo(pub *lksdk.RemoteTrackPublication, rp *lksdk.RemotePa
 	r.subscribed.Break()
 }
 
-func (r *Room) updateActiveSpeaker(p []lksdk.Participant) {
-	for _, sp := range p {
-		if !sp.IsSpeaking() || !sp.IsCameraEnabled() {
-			continue
-		}
-		id := sp.Identity()
-		r.UpdateActiveParticipant(id)
-		break
-	}
-}
+// func (r *Room) updateActiveSpeaker(p []lksdk.Participant) {
+// 	for _, sp := range p {
+// 		if !sp.IsSpeaking() || !sp.IsCameraEnabled() {
+// 			continue
+// 		}
+// 		id := sp.Identity()
+// 		r.UpdateActiveParticipant(id)
+// 		break
+// 	}
+// }
 
 func (r *Room) Connect(conf *config.Config, rconf RoomConfig) error {
 	if rconf.WsUrl == "" {
@@ -227,10 +231,17 @@ func (r *Room) Connect(conf *config.Config, rconf RoomConfig) error {
 			r.participantJoin(rp)
 		},
 		OnParticipantDisconnected: func(rp *lksdk.RemoteParticipant) {
-			r.participantLeft(rp)
+			r.trackSwitcher.DeleteParticipant(rp.Identity())
 		},
 		OnActiveSpeakersChanged: func(p []lksdk.Participant) {
-			r.updateActiveSpeaker(p)
+			// r.updateActiveSpeaker(p)
+			if len(p) == 0 {
+				return
+			}
+			id := p[0].Identity()
+			if err := r.trackSwitcher.SetActive(id); err != nil {
+				r.log.Errorw("could not set active track", err)
+			}
 		},
 		ParticipantCallback: lksdk.ParticipantCallback{
 			OnTrackPublished: func(pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
@@ -259,7 +270,8 @@ func (r *Room) Connect(conf *config.Config, rconf RoomConfig) error {
 				case lksdk.TrackKindAudio:
 					// no-op
 				case lksdk.TrackKindVideo:
-					r.DeleteParticipantTrack(rp.Identity())
+					r.trackSwitcher.DeleteTrack(rp.Identity(), pub.Source())
+					// r.DeleteParticipantTrack(rp.Identity())
 				default:
 					log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID(), "trackID", pub.SID(), "trackName", pub.Name())
 					log.Warnw("unsupported track kind for unsubscription", fmt.Errorf("kind=%s", pub.Kind()))
@@ -448,7 +460,15 @@ func (r *Room) NewParticipantTrack(sampleRate int) (msdk.WriteCloser[msdk.PCM16S
 	return pw, nil
 }
 
-func (r *Room) NewParticipantVideoTrack() (*webrtc.TrackLocalStaticRTP, error) {
+func (r *Room) StartVideo() (*TrackOutput, error) {
+	r.trackMu.Lock()
+	defer r.trackMu.Unlock()
+	if r.videoOut != nil {
+		return r.videoOut, nil
+	}
+
+	to := &TrackOutput{}
+
 	track, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{
 		MimeType: webrtc.MimeTypeVP8,
 	}, "video", "pion")
@@ -456,12 +476,43 @@ func (r *Room) NewParticipantVideoTrack() (*webrtc.TrackLocalStaticRTP, error) {
 		return nil, err
 	}
 	p := r.room.LocalParticipant
-	if _, err = p.PublishTrack(track, &lksdk.TrackPublicationOptions{
+	pt, err := p.PublishTrack(track, &lksdk.TrackPublicationOptions{
 		Name: p.Identity(),
-	}); err != nil {
+	})
+	if err != nil {
 		return nil, err
 	}
-	return track, nil
+	r.log.Infow("published video track", "SID", pt.SID())
+	trackRtcp := &RtcpWriter{
+		pc: p.GetSubscriberPeerConnection(),
+	}
+	to.RtpOut = &CallbackWriteCloser{
+		Writer: track,
+		Callback: func() error {
+			r.log.Infow("unpublishing video track", "SID", pt.SID())
+			return p.UnpublishTrack(pt.SID())
+		},
+	}
+	to.RtcpOut = &NopWriteCloser{Writer: trackRtcp}
+
+	r.videoOut = to
+
+	r.trackSwitcher.OnSwitch(func() {
+		r.log.Infow("active video track switched", "participant", r.trackSwitcher.active)
+		sendPLI(r.videoOut.RtcpOut, "")
+	})
+
+	return to, nil
+}
+
+func (r *Room) StopVideo() error {
+	r.log.Infow("stopping video")
+	r.trackMu.Lock()
+	defer r.trackMu.Unlock()
+	if r.videoOut == nil {
+		return nil
+	}
+	return errors.Join(r.videoOut.RtpOut.Close(), r.videoOut.RtcpOut.Close())
 }
 
 func (r *Room) SendData(data lksdk.DataPacket, opts ...lksdk.DataPublishOption) error {
@@ -514,43 +565,51 @@ func (r *Room) participantAudioTrackSubscribed(track *webrtc.TrackRemote, pub *l
 	}()
 }
 
-func (r *Room) DeleteParticipantTrack(participantID string) {
-	r.trackMu.Lock()
-	delete(r.participantTracks, participantID)
-	if r.activeParticipant == participantID {
-		r.updateActiveSpeaker(r.room.ActiveSpeakers())
-	} else {
-		r.trackMu.Unlock()
+func (r *Room) TrackInput() *TrackInput {
+	return &TrackInput{
+		RtpIn:  r.trackSwitcher.RTP(),
+		RtcpIn: r.trackSwitcher.RTCP(),
 	}
 }
 
-func (r *Room) SetTrackCallback(cb TrackCallback) {
-	r.trackMu.Lock()
-	defer r.trackMu.Unlock()
-	r.trackCallback = cb
-}
+// func (r *Room) DeleteParticipantTrack(participantID string) {
+// TODO: implement
+// r.trackMu.Lock()
+// delete(r.participantTracks, participantID)
+// if r.activeParticipant == participantID {
+// 	r.updateActiveSpeaker(r.room.ActiveSpeakers())
+// } else {
+// 	r.trackMu.Unlock()
+// }
+// }
 
-func (r *Room) UpdateActiveParticipant(participantID string) {
-	if participantID == "" && r.activeParticipant == "" {
-		return
-	}
-	if participantID == r.activeParticipant {
-		return
-	}
-	if participantID == "" {
-		participantID = r.activeParticipant
-	}
-	r.trackMu.Lock()
-	defer r.trackMu.Unlock()
-	r.activeParticipant = participantID
-	track, ok := r.participantTracks[participantID]
-	if !ok {
-		return
-	}
-	if r.trackCallback != nil {
-		r.trackCallback(&track)
-	}
-}
+// func (r *Room) SetTrackCallback(cb TrackCallback) {
+// 	r.trackMu.Lock()
+// 	defer r.trackMu.Unlock()
+// 	r.trackCallback = cb
+// }
+
+// func (r *Room) UpdateActiveParticipant(participantID string) {
+// 	if participantID == "" && r.activeParticipant == "" {
+// 		return
+// 	}
+// 	if participantID == r.activeParticipant {
+// 		return
+// 	}
+// 	if participantID == "" {
+// 		participantID = r.activeParticipant
+// 	}
+// 	r.trackMu.Lock()
+// 	defer r.trackMu.Unlock()
+// 	r.activeParticipant = participantID
+// 	track, ok := r.participantTracks[participantID]
+// 	if !ok {
+// 		return
+// 	}
+// 	if r.trackCallback != nil {
+// 		r.trackCallback(&track)
+// 	}
+// }
 
 func (r *Room) participantVideoTrackSubscribed(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant, conf *config.Config) {
 	log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID(), "trackID", track.ID(), "trackName", pub.Name())
@@ -560,17 +619,32 @@ func (r *Room) participantVideoTrackSubscribed(track *webrtc.TrackRemote, pub *l
 	}
 	log.Infow("handling new video track")
 
-	id := rp.Identity()
+	r.trackSwitcher.OnWebrtcTrack(track, pub, rp, conf)
 
-	ti := NewTrackInput(track, pub, rp, conf)
+	// id := rp.Identity()
 
-	func() {
-		r.trackMu.Lock()
-		defer r.trackMu.Unlock()
-		r.participantTracks[id] = *ti
-	}()
+	// ti := NewTrackInput(track, pub, rp, conf)
 
-	r.UpdateActiveParticipant(id)
+	// ssrc := uint32(0)
+	// {
+	// 	var b [4]byte
+	// 	_, err := rand.Read(b[:])
+	// 	if err != nil {
+	// 		log.Errorw("cannot generate random ssrc", err)
+	// 		return
+	// 	}
+	// 	ssrc = binary.BigEndian.Uint32(b[:])
+	// }
+
+	// ti.RtpIn = NewRtpRewriter(ti.RtpIn, ssrc, 0)
+
+	// func() {
+	// 	r.trackMu.Lock()
+	// 	defer r.trackMu.Unlock()
+	// 	r.participantTracks[id] = *ti
+	// }()
+
+	// r.UpdateActiveParticipant(id)
 
 	// if cb, ok := r.videoTrackCallback[pub.Name()]; ok {
 	// 	go cb(track, pub, rp, conf)
