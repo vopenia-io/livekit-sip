@@ -48,6 +48,9 @@ import (
 	"github.com/livekit/sipgo/sip"
 
 	"github.com/livekit/sip/pkg/config"
+	"github.com/livekit/sip/pkg/sip/media"
+	"github.com/livekit/sip/pkg/sip/reinvite"
+	sipsdp "github.com/livekit/sip/pkg/sip/sdp"
 	"github.com/livekit/sip/pkg/stats"
 	"github.com/livekit/sip/res"
 )
@@ -481,6 +484,10 @@ func (s *Server) onAck(log *slog.Logger, req *sip.Request, tx sip.ServerTransact
 	}
 	c.log().Infow("ACK from remote")
 	c.cc.AcceptAck(req, tx)
+	// POC: Notify answer sender of ACK receipt
+	if c.answerSender != nil {
+		c.answerSender.OnACKReceived(c.cc.SIPCallID())
+	}
 }
 
 func (s *Server) onBye(log *slog.Logger, req *sip.Request, tx sip.ServerTransaction) {
@@ -601,6 +608,11 @@ type inboundCall struct {
 	stats       Stats
 	jitterBuf   bool
 	projectID   string
+
+	// POC: Video support components (optional, nil-safe)
+	mediaRouter     *media.MediaRouter
+	reInviteHandler *reinvite.Handler
+	answerSender    *sipsdp.AnswerSender
 }
 
 func (s *Server) newInboundCall(
@@ -632,6 +644,14 @@ func (s *Server) newInboundCall(
 	// we need it created earlier so that the audio mixer is available for pin prompts
 	c.lkRoom = NewRoom(c.log(), &c.stats.Room)
 	c.ctx, c.cancel = context.WithCancel(context.Background())
+
+	// POC: Initialize video components
+	c.mediaRouter = media.NewMediaRouter()
+	c.reInviteHandler = reinvite.NewHandler()
+	c.answerSender = sipsdp.NewAnswerSender(sipsdp.NewAnswerBuilder(""))
+	c.reInviteHandler.SetAnswerSender(c.answerSender)
+	log.Infow("[POC] Video-enabled SIP call components initialized")
+
 	s.cmu.Lock()
 	s.byRemoteTag[cc.Tag()] = c
 	s.byLocalTag[cc.ID()] = c
@@ -768,6 +788,10 @@ func (c *inboundCall) handleInvite(ctx context.Context, tid traceid.ID, req *sip
 			c.close(true, callAcceptFailed, "accept-failed")
 			return false, err
 		}
+		// POC: Mark answer as sent
+		if c.answerSender != nil {
+			c.answerSender.MarkAnswerSent(c.cc.SIPCallID())
+		}
 		if !c.s.conf.Experimental.InboundWaitACK {
 			ackReceived = c.cc.InviteACK()
 			// Start this timer right after the Accept.
@@ -900,6 +924,7 @@ func (c *inboundCall) handleInvite(ctx context.Context, tid traceid.ID, req *sip
 func (c *inboundCall) runMediaConn(tid traceid.ID, offerData []byte, enc livekit.SIPMediaEncryption, conf *config.Config, features []livekit.SIPFeature) (answerData []byte, _ error) {
 	c.mon.SDPSize(len(offerData), true)
 	c.log().Debugw("SDP offer", "sdp", string(offerData))
+
 	e, err := sdpEncryption(enc)
 	if err != nil {
 		c.log().Errorw("Cannot parse encryption", err)

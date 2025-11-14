@@ -36,6 +36,7 @@ import (
 
 	"github.com/livekit/sip/pkg/config"
 	"github.com/livekit/sip/pkg/media/opus"
+	siproom "github.com/livekit/sip/pkg/sip/room"
 )
 
 type RoomStats struct {
@@ -75,6 +76,11 @@ type Room struct {
 	stopped    core.Fuse
 	closed     core.Fuse
 	stats      *RoomStats
+
+	// POC: Video support components (optional, nil-safe)
+	trackManager *siproom.TrackManager
+	ssrcBridge   *siproom.SSRCBridge
+	eventLogger  *siproom.MediaEventLogger
 }
 
 type ParticipantConfig struct {
@@ -106,6 +112,17 @@ func NewRoom(log logger.Logger, st *RoomStats) *Room {
 	if err != nil {
 		panic(err)
 	}
+
+	// POC: Initialize video support components
+	r.trackManager = siproom.NewTrackManager()
+	r.ssrcBridge = siproom.NewSSRCBridge()
+	r.eventLogger = siproom.NewMediaEventLogger()
+
+	// Wire them together
+	r.trackManager.SetSSRCBridge(r.ssrcBridge)
+	r.trackManager.SetEventLogger(r.eventLogger)
+
+	log.Infow("[room.go] Room integration components initialized")
 
 	roomLog, resolve := log.WithDeferredValues()
 	r.roomLog = roomLog
@@ -206,6 +223,13 @@ func (r *Room) Connect(conf *config.Config, rconf RoomConfig) error {
 		ParticipantCallback: lksdk.ParticipantCallback{
 			OnTrackPublished: func(pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
 				log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID(), "trackID", pub.SID(), "trackName", pub.Name())
+
+				// POC: Track published hook
+				if r.trackManager != nil {
+					log.Infow("[room.go] Track published - notifying TrackManager", "trackSID", pub.SID(), "participant", rp.Identity())
+					r.trackManager.HandleTrackPublished(pub.TrackInfo(), rp.Identity(), rp.SID())
+				}
+
 				if !r.subscribe.Load() {
 					log.Debugw("skipping track publish event - subscribed flag not set")
 					return // will subscribe later
