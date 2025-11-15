@@ -103,6 +103,9 @@ const pipelineStr = `
       rtpvp8depay request-keyframe=true !
       vp8dec threads=8 !
       videoconvert n-threads=4 !
+      videoscale add-borders=true n-threads=4 !
+      video/x-raw,width=1280,height=720,pixel-aspect-ratio=1/1 !
+      videoconvert !
       video/x-raw,format=I420 !
       x264enc bitrate=2000 key-int-max=30 bframes=0 rc-lookahead=0 sliced-threads=true threads=8 sync-lookahead=0 tune=zerolatency speed-preset=ultrafast !
       h264parse config-interval=1 !
