@@ -17,7 +17,9 @@ package sip
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"sync"
 	"sync/atomic"
 
 	"github.com/frostbyte73/core"
@@ -100,6 +102,10 @@ type Room struct {
 	stopped    core.Fuse
 	closed     core.Fuse
 	stats      *RoomStats
+
+	onCameraTrack func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant)
+	trackMu       sync.Mutex
+	cameraOut     *TrackOutput
 }
 
 type ParticipantConfig struct {
@@ -194,8 +200,8 @@ func (r *Room) participantLeft(rp *lksdk.RemoteParticipant) {
 
 func (r *Room) subscribeTo(pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
 	log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID(), "trackID", pub.SID(), "trackName", pub.Name())
-	if pub.Kind() != lksdk.TrackKindAudio {
-		log.Debugw("skipping non-audio track")
+	if k := pub.Kind(); k != lksdk.TrackKindAudio && k != lksdk.TrackKindVideo {
+		log.Debugw("skipping subscription to unsupported track", "kind", k)
 		return
 	}
 	log.Debugw("subscribing to a track")
@@ -238,39 +244,16 @@ func (r *Room) Connect(conf *config.Config, rconf RoomConfig) error {
 				r.subscribeTo(pub, rp)
 			},
 			OnTrackSubscribed: func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
-				log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID(), "trackID", track.ID(), "trackName", pub.Name())
-				if !r.ready.IsBroken() {
-					log.Warnw("ignoring track, room not ready", nil)
-					return
+				r.log.Debugw("track subscribed", "kind", pub.Kind(), "participant", rp.Identity(), "pID", rp.SID(), "trackID", pub.SID(), "trackName", pub.Name())
+				switch pub.Kind() {
+				case lksdk.TrackKindAudio:
+					r.participantAudioTrackSubscribed(track, pub, rp, conf)
+				case lksdk.TrackKindVideo:
+					r.participantVideoTrackSubscribed(track, pub, rp, conf)
+				default:
+					log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID(), "trackID", pub.SID(), "trackName", pub.Name())
+					log.Warnw("unsupported track kind for subscription", fmt.Errorf("kind=%s", pub.Kind()))
 				}
-				log.Infow("mixing track")
-
-				go func() {
-					mTrack := r.NewTrack()
-					if mTrack == nil {
-						return // closed
-					}
-					defer mTrack.Close()
-
-					in := newRTPReaderCount(track, &r.stats.InputPackets, &r.stats.InputBytes)
-					out := newMediaWriterCount(mTrack, &r.stats.MixerFrames, &r.stats.MixerSamples)
-
-					odec, err := opus.Decode(out, channels, log)
-					if err != nil {
-						log.Errorw("cannot create opus decoder", err)
-						return
-					}
-					defer odec.Close()
-
-					var h rtp.HandlerCloser = rtp.NewNopCloser(rtp.NewMediaStreamIn[opus.Sample](odec))
-					if conf.EnableJitterBuffer {
-						h = rtp.HandleJitter(h)
-					}
-					err = rtp.HandleLoop(in, h)
-					if err != nil && !errors.Is(err, io.EOF) {
-						log.Infow("room track rtp handler returned with failure", "error", err)
-					}
-				}()
 			},
 			OnDataPacket: func(data lksdk.DataPacket, params lksdk.DataReceiveParams) {
 				switch data := data.(type) {
@@ -453,6 +436,123 @@ func (r *Room) NewParticipantTrack(sampleRate int) (msdk.WriteCloser[msdk.PCM16S
 		return nil, err
 	}
 	return pw, nil
+}
+
+func (r *Room) StartCamera() (*TrackOutput, error) {
+	r.trackMu.Lock()
+	defer r.trackMu.Unlock()
+	if r.cameraOut != nil {
+		return r.cameraOut, nil
+	}
+
+	to := &TrackOutput{}
+
+	track, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{
+		MimeType: webrtc.MimeTypeVP8,
+	}, "video", "pion")
+	if err != nil {
+		return nil, err
+	}
+	p := r.room.LocalParticipant
+	pt, err := p.PublishTrack(track, &lksdk.TrackPublicationOptions{
+		Name: p.Identity(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	r.log.Infow("published video track", "SID", pt.SID())
+	trackRtcp := &RtcpWriter{
+		pc: p.GetSubscriberPeerConnection(),
+	}
+	to.RtpOut = &CallbackWriteCloser{
+		Writer: track,
+		Callback: func() error {
+			r.log.Infow("unpublishing video track", "SID", pt.SID())
+			return p.UnpublishTrack(pt.SID())
+		},
+	}
+	to.RtcpOut = &NopWriteCloser{Writer: trackRtcp}
+
+	r.cameraOut = to
+
+	return to, nil
+}
+
+func (r *Room) StopCamera() error {
+	r.log.Infow("stopping camera")
+	r.trackMu.Lock()
+	defer r.trackMu.Unlock()
+	if r.cameraOut == nil {
+		return nil
+	}
+
+	cameraOut := r.cameraOut
+	r.cameraOut = nil
+
+	return errors.Join(cameraOut.RtpOut.Close(), cameraOut.RtcpOut.Close())
+}
+
+func (r *Room) participantAudioTrackSubscribed(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant, conf *config.Config) {
+	log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID(), "trackID", track.ID(), "trackName", pub.Name())
+	if !r.ready.IsBroken() {
+		log.Warnw("ignoring track, room not ready", nil)
+		return
+	}
+	log.Infow("mixing track")
+
+	go func() {
+		mTrack := r.NewTrack()
+		if mTrack == nil {
+			return // closed
+		}
+		defer mTrack.Close()
+
+		in := newRTPReaderCount(track, &r.stats.InputPackets, &r.stats.InputBytes)
+		out := newMediaWriterCount(mTrack, &r.stats.MixerFrames, &r.stats.MixerSamples)
+
+		odec, err := opus.Decode(out, channels, log)
+		if err != nil {
+			log.Errorw("cannot create opus decoder", err)
+			return
+		}
+		defer odec.Close()
+
+		var h rtp.HandlerCloser = rtp.NewNopCloser(rtp.NewMediaStreamIn[opus.Sample](odec))
+		if conf.EnableJitterBuffer {
+			h = rtp.HandleJitter(h)
+		}
+		err = rtp.HandleLoop(in, h)
+		if err != nil && !errors.Is(err, io.EOF) {
+			log.Infow("room track rtp handler returned with failure", "error", err)
+		}
+	}()
+}
+
+func (r *Room) participantVideoTrackSubscribed(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant, conf *config.Config) {
+	log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID(), "trackID", track.ID(), "trackName", pub.Name())
+	if !r.ready.IsBroken() {
+		log.Warnw("ignoring track, room not ready", nil)
+		return
+	}
+
+	switch pub.Source() {
+	case livekit.TrackSource_CAMERA:
+		log.Infow("connecting camera track")
+		if r.onCameraTrack == nil {
+			log.Warnw("no camera track handler set, ignoring track", nil)
+			return
+		}
+		r.onCameraTrack(track, pub, rp)
+	default:
+		log.Infow("ignoring non-camera video track", "source", pub.Source())
+	}
+}
+
+func (r *Room) OnCameraTrack(f func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant)) {
+	if r.onCameraTrack != nil {
+		r.log.Warnw("overriding existing camera track handler", nil)
+	}
+	r.onCameraTrack = f
 }
 
 func (r *Room) SendData(data lksdk.DataPacket, opts ...lksdk.DataPublishOption) error {
