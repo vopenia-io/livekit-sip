@@ -16,6 +16,7 @@ import (
 	sdpv1 "github.com/livekit/media-sdk/sdp"
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
 	"github.com/livekit/protocol/logger"
+	"github.com/livekit/sip/pkg/sip/pipeline"
 )
 
 var mainLoop *glib.MainLoop
@@ -66,7 +67,7 @@ type VideoManager struct {
 	room     *Room
 	rtpConn  *udpConn
 	rtcpConn *udpConn
-	pipeline *gst.Pipeline
+	pipeline *pipeline.GstPipeline
 	codec    *sdpv2.Codec
 	recv     bool
 	send     bool
@@ -357,7 +358,7 @@ func (v *VideoManager) Start() error {
 	// SetState() is asynchronous - it returns immediately but the state transition takes time (~100-150ms)
 	// If we send 200 OK before pipeline is ready, early RTP packets cause corruption (green artifacts)
 	v.log.Debugw("waiting for GStreamer pipeline to reach PLAYING state...")
-	changeReturn, currentState := v.pipeline.GetState(gst.StatePlaying, gst.ClockTime(5*time.Second))
+	changeReturn, currentState := v.pipeline.Pipeline.GetState(gst.StatePlaying, gst.ClockTime(10*time.Second))
 	if changeReturn == gst.StateChangeFailure {
 		return fmt.Errorf("GStreamer pipeline failed to reach PLAYING state")
 	}
@@ -394,7 +395,7 @@ func (v *VideoManager) Stop() error {
 	// SetState() is asynchronous - it returns immediately but the state transition takes time (~100-150ms)
 	// If we send 200 OK before pipeline is ready, early RTP packets cause corruption (green artifacts)
 	v.log.Debugw("waiting for GStreamer pipeline to reach NULL state...")
-	changeReturn, currentState := v.pipeline.GetState(gst.StateNull, gst.ClockTime(5*time.Second))
+	changeReturn, currentState := v.pipeline.Pipeline.GetState(gst.StateNull, gst.ClockTime(5*time.Second))
 	if changeReturn == gst.StateChangeFailure {
 		return fmt.Errorf("GStreamer pipeline failed to reach NULL state")
 	}

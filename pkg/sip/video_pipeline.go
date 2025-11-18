@@ -7,6 +7,7 @@ import (
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/app"
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
+	"github.com/livekit/sip/pkg/sip/pipeline"
 )
 
 const pipelineStr = `
@@ -70,34 +71,40 @@ func Copy(dst io.WriteCloser, src io.ReadCloser) {
 }
 
 func (v *VideoManager) SetupGstPipeline(media *sdpv2.SDPMedia) error {
-	pstr := fmt.Sprintf(pipelineStr, media.Codec.PayloadType, media.Codec.PayloadType)
+	// pstr := fmt.Sprintf(pipelineStr, media.Codec.PayloadType, media.Codec.PayloadType)
 
-	v.log.Infow("Creating GStreamer pipeline", "payloadType", media.Codec.PayloadType, "codecName", media.Codec.Name)
+	// v.log.Infow("Creating GStreamer pipeline", "payloadType", media.Codec.PayloadType, "codecName", media.Codec.Name)
 
-	pipeline, err := gst.NewPipelineFromString(pstr)
+	// pipeline, err := gst.NewPipelineFromString(pstr)
+	// if err != nil {
+	// 	return fmt.Errorf("failed to create GStreamer pipeline: %w\n%s", err, pstr)
+	// }
+
+	pipeline, err := pipeline.NewSipWebRTCPipeline(int(media.Codec.PayloadType), int(media.Codec.PayloadType))
 	if err != nil {
-		return fmt.Errorf("failed to create GStreamer pipeline: %w\n%s", err, pstr)
+		return fmt.Errorf("failed to create SIP WebRTC pipeline: %w", err)
 	}
+	pipeline.Monitor()
 
-	sipRtpIn, err := writerFromPipeline(pipeline, "sip_rtp_in")
+	sipRtpIn, err := writerFromPipeline(pipeline.Pipeline, "sip_rtp_in")
 	if err != nil {
 		return fmt.Errorf("failed to create SIP RTP reader: %w", err)
 	}
 	go Copy(sipRtpIn, v.sipRtpIn)
 
-	sipRtpOut, err := readerFromPipeline(pipeline, "sip_rtp_out")
+	sipRtpOut, err := readerFromPipeline(pipeline.Pipeline, "sip_rtp_out")
 	if err != nil {
 		return fmt.Errorf("failed to create SIP RTP writer: %w", err)
 	}
 	go Copy(v.sipRtpOut, sipRtpOut)
 
-	webrtcRtpIn, err := writerFromPipeline(pipeline, "webrtc_rtp_in")
+	webrtcRtpIn, err := writerFromPipeline(pipeline.Pipeline, "webrtc_rtp_in")
 	if err != nil {
 		return fmt.Errorf("failed to create WebRTC RTP reader: %w", err)
 	}
 	go Copy(webrtcRtpIn, v.webrtcRtpIn)
 
-	webrtcRtpOut, err := readerFromPipeline(pipeline, "webrtc_rtp_out")
+	webrtcRtpOut, err := readerFromPipeline(pipeline.Pipeline, "webrtc_rtp_out")
 	if err != nil {
 		return fmt.Errorf("failed to create WebRTC RTP writer: %w", err)
 	}
