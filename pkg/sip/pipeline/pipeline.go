@@ -18,6 +18,8 @@ type GstPipeline struct {
 	WebRTCToSelectors map[string]*WebRTCToSelector
 }
 
+type GstPipelineChain = []*gst.Element
+
 func (gp *GstPipeline) Close() error {
 	gp.mu.Lock()
 	defer gp.mu.Unlock()
@@ -35,6 +37,40 @@ func (gp *GstPipeline) SetState(state gst.State) error {
 	defer gp.mu.Unlock()
 
 	return gp.Pipeline.SetState(state)
+}
+
+func (gp *GstPipeline) AddWebRTCSourceToSelector(srcID string) (*WebRTCToSelector, error) {
+	gp.mu.Lock()
+	defer gp.mu.Unlock()
+
+	if gp.closed.IsBroken() {
+		return nil, fmt.Errorf("pipeline is closed")
+	}
+
+	if _, exists := gp.WebRTCToSelectors[srcID]; exists {
+		return nil, fmt.Errorf("webrtc source with id %s already exists", srcID)
+	}
+
+	webRTCToSelector, elems, err := buildWebRTCToSelectorChain(srcID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := gp.Pipeline.AddMany(elems...); err != nil {
+		return nil, err
+	}
+
+	if err := gst.ElementLinkMany(elems...); err != nil {
+		return nil, err
+	}
+
+	if err := webRTCToSelector.link(gp.SelectorToSip.InputSelector); err != nil {
+		return nil, err
+	}
+
+	gp.WebRTCToSelectors[srcID] = webRTCToSelector
+
+	return webRTCToSelector, nil
 }
 
 func (gp *GstPipeline) SwitchWebRTCSelectorSource(srcID string) error {
@@ -83,42 +119,56 @@ func (gp *GstPipeline) RemoveWebRTCSourceFromSelector(srcID string) error {
 	return nil
 }
 
+func (gp *GstPipeline) addlinkChain(chain ...*gst.Element) error {
+	if err := gp.Pipeline.AddMany(chain...); err != nil {
+		return fmt.Errorf("failed to add elements to pipeline: %w", err)
+	}
+	if err := gst.ElementLinkMany(chain...); err != nil {
+		return fmt.Errorf("failed to link elements: %w", err)
+	}
+
+	return nil
+}
+
+func linkPad(src, dst *gst.Pad) error {
+	if src == nil {
+		return fmt.Errorf("source pad is nil")
+	}
+	if dst == nil {
+		return fmt.Errorf("destination pad is nil")
+	}
+	if r := src.Link(dst); r != gst.PadLinkOK {
+		return fmt.Errorf("failed to link pads: %s", r.String())
+	}
+	return nil
+}
+
 func NewSipWebRTCPipeline(sipInPayload, sipOutPayload int) (*GstPipeline, error) {
-	// gst.Init(nil) must be called once in your process before this.
-
-	pipeline, err := gst.NewPipeline("")
-	if err != nil {
-		return nil, err
-	}
-
-	sipToWebRTC, sipElems, err := buildSipToWebRTCChain(sipInPayload)
-	if err != nil {
-		return nil, err
-	}
-
-	webrtcToSip, webrtcElems, err := buildWebRTCToSipChain(sipOutPayload)
-	if err != nil {
-		return nil, err
-	}
-
-	allElems := append([]*gst.Element{}, sipElems...)
-	allElems = append(allElems, webrtcElems...)
-
-	if err := pipeline.AddMany(allElems...); err != nil {
-		return nil, err
-	}
-
-	if err := gst.ElementLinkMany(sipElems...); err != nil {
-		return nil, err
-	}
-	if err := gst.ElementLinkMany(webrtcElems...); err != nil {
-		return nil, err
-	}
-
-	return &GstPipeline{
-		Pipeline:          pipeline,
-		SipToWebRTC:       sipToWebRTC,
-		SelectorToSip:     webrtcToSip,
+	var err error
+	gp := &GstPipeline{
 		WebRTCToSelectors: make(map[string]*WebRTCToSelector),
-	}, nil
+	}
+
+	gp.Pipeline, err = gst.NewPipeline("")
+	if err != nil {
+		return nil, err
+	}
+
+	gp.SipToWebRTC, err = buildSipToWebRTCChain(sipInPayload)
+	if err != nil {
+		return nil, err
+	}
+	if err := gp.SipToWebRTC.Link(gp); err != nil {
+		return nil, err
+	}
+
+	gp.SelectorToSip, err = buildWebRTCToSipChain(sipOutPayload)
+	if err != nil {
+		return nil, err
+	}
+	if err := gp.SelectorToSip.Link(gp); err != nil {
+		return nil, err
+	}
+
+	return gp, nil
 }
