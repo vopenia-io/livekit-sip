@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/frostbyte73/core"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/app"
 )
@@ -49,6 +50,19 @@ type GstPipeline struct {
 	Pipeline    *gst.Pipeline
 	SipToWebRTC *SipToWebRTC
 	WebRTCToSip *WebRTCToSip
+	closed      core.Fuse
+}
+
+func (gp *GstPipeline) Close() error {
+	gp.mu.Lock()
+	defer gp.mu.Unlock()
+
+	if gp.closed.IsBroken() {
+		return nil
+	}
+	gp.closed.Break()
+
+	return gp.Pipeline.SetState(gst.StateNull)
 }
 
 func (gp *GstPipeline) SetState(state gst.State) error {

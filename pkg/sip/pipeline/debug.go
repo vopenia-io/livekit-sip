@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"crypto/rand"
 	"fmt"
 	"os"
 	"strings"
@@ -29,14 +30,18 @@ func (gp *GstPipeline) debug() (string, gst.State, error) {
 }
 
 func (gp *GstPipeline) Monitor() {
+	id := rand.Text()[0:6]
+
+	_ = id
+
 	name := gp.Pipeline.GetName()
 
-	logFile, err := os.Create(fmt.Sprintf("%s_pipeline_debug.log", name))
+	logFile, err := os.Create(fmt.Sprintf("%s_%s_pipeline_debug.log", name, id))
 	if err != nil {
 		fmt.Printf("failed to create pipeline log file: %v\n", err)
 		return
 	}
-	liveFile, err := os.Create(fmt.Sprintf("%s_pipeline_live.log", name))
+	liveFile, err := os.Create(fmt.Sprintf("%s_%s_pipeline_live.log", name, id))
 	if err != nil {
 		fmt.Printf("failed to create pipeline live log file: %v\n", err)
 		return
@@ -49,7 +54,7 @@ func (gp *GstPipeline) Monitor() {
 		prevStr := ""
 		prevState := gst.StateNull
 
-		for {
+		for !gp.closed.IsBroken() {
 			pipelineStr, state, err := gp.debug()
 			if err != nil {
 				if err == ErrPipielineNotRunning {
@@ -75,7 +80,9 @@ func (gp *GstPipeline) Monitor() {
 
 			time.Sleep(500 * time.Millisecond)
 		}
-		panic("unreachable")
+
+		logFile.WriteString("----- Pipeline monitor exiting -----\n")
+		liveFile.WriteString("----- Pipeline monitor exiting -----\n")
 	}()
 }
 
