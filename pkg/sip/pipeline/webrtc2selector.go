@@ -66,7 +66,7 @@ func buildWebRTCToSelectorChain(srcID string) (*WebRTCToSelector, []*gst.Element
 	}, chainElems, nil
 }
 
-func (wts *WebRTCToSelector) linkToSelector(selector *gst.Element) error {
+func (wts *WebRTCToSelector) link(selector *gst.Element) error {
 	queuePad := wts.Queue.GetStaticPad("src")
 	if queuePad == nil {
 		return fmt.Errorf("failed to get queue src pad")
@@ -96,38 +96,4 @@ func (wts *WebRTCToSelector) Close(pipeline *gst.Pipeline) error {
 	}
 
 	return nil
-}
-
-func (gp *GstPipeline) AddWebRTCSourceToSelector(srcID string) (*WebRTCToSelector, error) {
-	gp.mu.Lock()
-	defer gp.mu.Unlock()
-
-	if gp.closed.IsBroken() {
-		return nil, fmt.Errorf("pipeline is closed")
-	}
-
-	if _, exists := gp.WebRTCToSelectors[srcID]; exists {
-		return nil, fmt.Errorf("webrtc source with id %s already exists", srcID)
-	}
-
-	webRTCToSelector, elems, err := buildWebRTCToSelectorChain(srcID)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := gp.Pipeline.AddMany(elems...); err != nil {
-		return nil, err
-	}
-
-	if err := gst.ElementLinkMany(elems...); err != nil {
-		return nil, err
-	}
-
-	if err := webRTCToSelector.linkToSelector(gp.SelectorToSip.InputSelector); err != nil {
-		return nil, err
-	}
-
-	gp.WebRTCToSelectors[srcID] = webRTCToSelector
-
-	return webRTCToSelector, nil
 }
