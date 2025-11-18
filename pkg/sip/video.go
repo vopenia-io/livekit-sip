@@ -3,11 +3,9 @@ package sip
 import (
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/netip"
 	"sync"
-	"time"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
@@ -80,9 +78,7 @@ type VideoIO struct {
 	sipRtcpIn  *SwitchReader
 	sipRtcpOut *SwitchWriter
 
-	webrtcRtpIn   *SwitchReader
 	webrtcRtpOut  *SwitchWriter
-	webrtcRtcpIn  *SwitchReader
 	webrtcRtcpOut *SwitchWriter
 }
 
@@ -92,9 +88,7 @@ func NewVideoIO() *VideoIO {
 		sipRtpOut:     NewSwitchWriter(),
 		sipRtcpIn:     NewSwitchReader(),
 		sipRtcpOut:    NewSwitchWriter(),
-		webrtcRtpIn:   NewSwitchReader(),
 		webrtcRtpOut:  NewSwitchWriter(),
-		webrtcRtcpIn:  NewSwitchReader(),
 		webrtcRtcpOut: NewSwitchWriter(),
 	}
 }
@@ -105,9 +99,7 @@ func (v *VideoIO) Close() error {
 		v.sipRtpOut.Close(),
 		v.sipRtcpIn.Close(),
 		v.sipRtcpOut.Close(),
-		v.webrtcRtpIn.Close(),
 		v.webrtcRtpOut.Close(),
-		v.webrtcRtcpIn.Close(),
 		v.webrtcRtcpOut.Close(),
 	)
 }
@@ -120,17 +112,35 @@ func (v *VideoManager) RtcpPort() int {
 	return v.rtcpConn.LocalAddr().(*net.UDPAddr).Port
 }
 
-func (v *VideoManager) WebrtcTrackInput(ti *TrackInput) {
+func (v *VideoManager) WebrtcTrackInput(ti *TrackInput, sid string) {
 	v.log.Infow("WebRTC video track subscribed - connecting WebRTC→SIP pipeline",
 		"hasRtpIn", ti.RtpIn != nil,
 		"hasRtcpIn", ti.RtcpIn != nil)
 
-	if r := v.webrtcRtpIn.Swap(ti.RtpIn); r != nil {
-		_ = r.Close()
+	s, err := v.pipeline.AddWebRTCSourceToSelector(sid)
+	if err != nil {
+		v.log.Errorw("failed to add WebRTC source to selector", err)
+		return
 	}
-	if w := v.webrtcRtcpIn.Swap(ti.RtcpIn); w != nil {
-		_ = w.Close()
+
+	webrtcRtpIn, err := NewGstWriter(s.AppSrc)
+	if err != nil {
+		v.log.Errorw("failed to create WebRTC RTP reader", err)
+		return
 	}
+	go func() {
+		Copy(webrtcRtpIn, ti.RtpIn)
+		if err := v.pipeline.RemoveWebRTCSourceFromSelector(sid); err != nil {
+			v.log.Errorw("failed to remove WebRTC source from selector", err)
+		}
+	}()
+}
+
+func (v *VideoManager) SwitchActiveWebrtcTrack(sid string) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
+	return v.pipeline.SwitchWebRTCSelectorSource(sid)
 }
 
 func (v *VideoManager) WebrtcTrackOutput(to *TrackOutput) {
@@ -166,30 +176,6 @@ func (v *VideoManager) Close() error {
 		return fmt.Errorf("failed to close RTCP connection: %w", err)
 	}
 	return nil
-}
-
-// func (v *VideoManager) SetSipRtpIn(r io.ReadCloser) {
-// 	v.sipRtpIn.Swap(r)
-// }
-
-// func (v *VideoManager) SetSipRtpOut(w io.WriteCloser) {
-// 	v.sipRtpOut.Swap(w)
-// }
-
-// func (v *VideoIO) SetWebrtcRtpIn(r io.ReadCloser) {
-// 	v.webrtcRtpIn.Swap(r)
-// }
-
-func (v *VideoIO) SetWebrtcRtpOut(w io.WriteCloser) {
-	v.webrtcRtpOut.Swap(w)
-}
-
-// func (v *VideoIO) SetWebrtcRtcpIn(r io.ReadCloser) {
-// 	v.webrtcRtcpIn.Swap(r)
-// }
-
-func (v *VideoIO) SetWebrtcRtcpOut(w io.WriteCloser) {
-	v.webrtcRtcpOut.Swap(w)
 }
 
 func (v *VideoManager) Status() VideoStatus {
@@ -232,25 +218,6 @@ func (v *VideoManager) SupportedCodecs() []*sdpv2.Codec {
 	return []*sdpv2.Codec{
 		codec,
 	}
-}
-
-func (v *VideoManager) PublishVideoTrack() error {
-	panic("not implemented")
-	// // Only start video output if we're receiving from SIP
-	// if !v.recv {
-	// 	return v.room.StopVideo()
-	// }
-
-	// // Start the video track for SIP→WebRTC
-	// to, err := v.room.StartVideo()
-	// if err != nil {
-	// 	return err
-	// }
-	// v.SetWebrtcRtpOut(to.RtpOut)
-	// v.SetWebrtcRtcpOut(to.RtcpOut)
-
-	// v.log.Infow("video track published for SIP→WebRTC", "recv", v.recv, "send", v.send)
-	// return nil
 }
 
 func (v *VideoManager) setupOutput(remote netip.Addr, media *sdpv2.SDPMedia, send bool) error {
@@ -354,19 +321,6 @@ func (v *VideoManager) Start() error {
 		return fmt.Errorf("failed to set GStreamer pipeline to playing: %w", err)
 	}
 
-	// CRITICAL FIX: Wait for pipeline to actually reach PLAYING state
-	// SetState() is asynchronous - it returns immediately but the state transition takes time (~100-150ms)
-	// If we send 200 OK before pipeline is ready, early RTP packets cause corruption (green artifacts)
-	v.log.Debugw("waiting for GStreamer pipeline to reach PLAYING state...")
-	changeReturn, currentState := v.pipeline.Pipeline.GetState(gst.StatePlaying, gst.ClockTime(10*time.Second))
-	if changeReturn == gst.StateChangeFailure {
-		return fmt.Errorf("GStreamer pipeline failed to reach PLAYING state")
-	}
-
-	v.log.Infow("GStreamer pipeline is PLAYING and ready for RTP packets",
-		"current_state", currentState.String(),
-		"change_result", changeReturn.String())
-
 	v.status = VideoStatusStarted
 	return nil
 }
@@ -390,18 +344,6 @@ func (v *VideoManager) Stop() error {
 	if err := v.pipeline.Close(); err != nil {
 		return fmt.Errorf("failed to set GStreamer pipeline to null: %w", err)
 	}
-
-	// CRITICAL FIX: Wait for pipeline to actually reach NULL state
-	// SetState() is asynchronous - it returns immediately but the state transition takes time (~100-150ms)
-	// If we send 200 OK before pipeline is ready, early RTP packets cause corruption (green artifacts)
-	v.log.Debugw("waiting for GStreamer pipeline to reach NULL state...")
-	changeReturn, currentState := v.pipeline.Pipeline.GetState(gst.StateNull, gst.ClockTime(5*time.Second))
-	if changeReturn == gst.StateChangeFailure {
-		return fmt.Errorf("GStreamer pipeline failed to reach NULL state")
-	}
-	v.log.Infow("GStreamer pipeline is NULL",
-		"current_state", currentState.String(),
-		"change_result", changeReturn.String())
 
 	v.recv = false
 	v.send = false

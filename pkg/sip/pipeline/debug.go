@@ -1,7 +1,6 @@
 package pipeline
 
 import (
-	"crypto/rand"
 	"fmt"
 	"os"
 	"strings"
@@ -30,18 +29,14 @@ func (gp *GstPipeline) debug() (string, gst.State, error) {
 }
 
 func (gp *GstPipeline) Monitor() {
-	id := rand.Text()[0:6]
-
-	_ = id
-
 	name := gp.Pipeline.GetName()
 
-	logFile, err := os.Create(fmt.Sprintf("%s_%s_pipeline_debug.log", name, id))
+	logFile, err := os.Create(fmt.Sprintf("%s_pipeline_debug.log", name))
 	if err != nil {
 		fmt.Printf("failed to create pipeline log file: %v\n", err)
 		return
 	}
-	liveFile, err := os.Create(fmt.Sprintf("%s_%s_pipeline_live.log", name, id))
+	liveFile, err := os.Create(fmt.Sprintf("%s_pipeline_live.log", name))
 	if err != nil {
 		fmt.Printf("failed to create pipeline live log file: %v\n", err)
 		return
