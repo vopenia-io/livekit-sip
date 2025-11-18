@@ -34,7 +34,15 @@ func NewMediaOrchestrator(log logger.Logger, inbound *sipInbound, room *Room, op
 	o.camera = camera
 	o.room.OnCameraTrack(func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
 		ti := NewTrackInput(track, pub, rp)
-		o.camera.WebrtcTrackInput(ti)
+		o.camera.WebrtcTrackInput(ti, rp.SID())
+	})
+	o.room.OnActiveSpeakersChanged(func(p []lksdk.Participant) {
+		if len(p) == 0 {
+			o.log.Warnw("no active speakers found", nil)
+			return
+		}
+		sid := p[0].SID()
+		o.camera.SwitchActiveWebrtcTrack(sid)
 	})
 
 	return o, nil

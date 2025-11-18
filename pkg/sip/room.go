@@ -174,6 +174,8 @@ type Room struct {
 	onCameraTrack func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant)
 	trackMu       sync.Mutex
 	cameraOut     *TrackOutput
+
+	onActiveSpeakerChanged func(p []lksdk.Participant)
 }
 
 type ParticipantConfig struct {
@@ -301,6 +303,13 @@ func (r *Room) Connect(conf *config.Config, rconf RoomConfig) error {
 		},
 		OnParticipantDisconnected: func(rp *lksdk.RemoteParticipant) {
 			r.participantLeft(rp)
+		},
+		OnActiveSpeakersChanged: func(p []lksdk.Participant) {
+			if r.onActiveSpeakerChanged != nil {
+				r.onActiveSpeakerChanged(p)
+			} else {
+				r.log.Debugw("active speakers changed, but no handler set", "count", len(p))
+			}
 		},
 		ParticipantCallback: lksdk.ParticipantCallback{
 			OnTrackPublished: func(pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
@@ -621,6 +630,13 @@ func (r *Room) OnCameraTrack(f func(track *webrtc.TrackRemote, pub *lksdk.Remote
 		r.log.Warnw("overriding existing camera track handler", nil)
 	}
 	r.onCameraTrack = f
+}
+
+func (r *Room) OnActiveSpeakersChanged(f func(p []lksdk.Participant)) {
+	if r.onActiveSpeakerChanged != nil {
+		r.log.Warnw("overriding existing active speaker changed handler", nil)
+	}
+	r.onActiveSpeakerChanged = f
 }
 
 func (r *Room) SendData(data lksdk.DataPacket, opts ...lksdk.DataPublishOption) error {
