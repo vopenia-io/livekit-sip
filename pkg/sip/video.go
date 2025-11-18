@@ -152,7 +152,7 @@ func (v *VideoManager) Close() error {
 	v.status = VideoStatusClosed
 	v.log.Debugw("closing video manager")
 	if v.pipeline != nil {
-		if err := v.pipeline.SetState(gst.StateNull); err != nil {
+		if err := v.pipeline.Close(); err != nil {
 			return fmt.Errorf("failed to set GStreamer pipeline to null: %w", err)
 		}
 	}
@@ -387,7 +387,7 @@ func (v *VideoManager) Stop() error {
 
 	v.codec = nil
 
-	if err := v.pipeline.SetState(gst.StateNull); err != nil {
+	if err := v.pipeline.Close(); err != nil {
 		return fmt.Errorf("failed to set GStreamer pipeline to null: %w", err)
 	}
 
