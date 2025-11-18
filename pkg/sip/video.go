@@ -221,7 +221,7 @@ func (v *VideoManager) SupportedCodecs() []*sdpv2.Codec {
 }
 
 func (v *VideoManager) setupOutput(remote netip.Addr, media *sdpv2.SDPMedia, send bool) error {
-	if !v.send {
+	if !send {
 		if w := v.sipRtpOut.Swap(nil); w != nil {
 			_ = w.Close()
 		}
