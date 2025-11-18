@@ -412,22 +412,28 @@ func (r *Room) Participant() ParticipantInfo {
 }
 
 func (r *Room) NewParticipantTrack(sampleRate int) (msdk.WriteCloser[msdk.PCM16Sample], error) {
-	track, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus}, "audio", "pion")
+	track, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus}, "audio", "pion")
 	if err != nil {
 		return nil, err
 	}
 	p := r.room.LocalParticipant
 	if _, err = p.PublishTrack(track, &lksdk.TrackPublicationOptions{
-		Name: p.Identity(),
+		Name:   p.Identity(),
+		Source: livekit.TrackSource_MICROPHONE,
 	}); err != nil {
 		return nil, err
 	}
-	ow := msdk.FromSampleWriter[opus.Sample](track, sampleRate, rtp.DefFrameDur)
-	pw, err := opus.Encode(ow, channels, r.log)
+
+	rtpWriter := newRTPSampleWriter(track, nil, sampleRate, rtp.DefFrameDur, r.log)
+	opusWriter, err := opus.Encode(rtpWriter, channels, r.log)
 	if err != nil {
 		return nil, err
 	}
-	return pw, nil
+
+	levelWriter := newAudioLevelWriter(opusWriter, r.log)
+	rtpWriter.SetAudioLevelSource(levelWriter)
+
+	return levelWriter, nil
 }
 
 func (r *Room) SendData(data lksdk.DataPacket, opts ...lksdk.DataPublishOption) error {
