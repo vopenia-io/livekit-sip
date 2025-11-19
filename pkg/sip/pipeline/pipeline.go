@@ -9,13 +9,13 @@ import (
 )
 
 type GstPipeline struct {
-	mu     sync.Mutex
-	closed core.Fuse
+	mu       sync.Mutex
+	closed   core.Fuse
+	Pipeline *gst.Pipeline
 
-	Pipeline          *gst.Pipeline
-	SipToWebRTC       *SipToWebRTC
+	SipToWebRTC       *SipToWebrtc
 	SelectorToSip     *SelectorToSip
-	WebRTCToSelectors map[string]*WebRTCToSelector
+	WebRTCToSelectors map[string]*WebrtcToSelector
 }
 
 type GstPipelineChain = []*gst.Element
@@ -39,7 +39,7 @@ func (gp *GstPipeline) SetState(state gst.State) error {
 	return gp.Pipeline.SetState(state)
 }
 
-func (gp *GstPipeline) AddWebRTCSourceToSelector(srcID string) (*WebRTCToSelector, error) {
+func (gp *GstPipeline) AddWebRTCSourceToSelector(srcID string) (*WebrtcToSelector, error) {
 	gp.mu.Lock()
 	defer gp.mu.Unlock()
 
@@ -146,7 +146,7 @@ func linkPad(src, dst *gst.Pad) error {
 func NewSipWebRTCPipeline(sipInPayload, sipOutPayload int) (*GstPipeline, error) {
 	var err error
 	gp := &GstPipeline{
-		WebRTCToSelectors: make(map[string]*WebRTCToSelector),
+		WebRTCToSelectors: make(map[string]*WebrtcToSelector),
 	}
 
 	gp.Pipeline, err = gst.NewPipeline("")
@@ -162,7 +162,7 @@ func NewSipWebRTCPipeline(sipInPayload, sipOutPayload int) (*GstPipeline, error)
 		return nil, err
 	}
 
-	gp.SelectorToSip, err = buildWebRTCToSipChain(sipOutPayload)
+	gp.SelectorToSip, err = buildSelectorToSipChain(sipOutPayload)
 	if err != nil {
 		return nil, err
 	}

@@ -25,7 +25,7 @@ type SelectorToSip struct {
 	AppSink *app.Sink
 }
 
-func buildWebRTCToSipChain(sipOutPayloadType int) (*SelectorToSip, error) {
+func buildSelectorToSipChain(sipOutPayloadType int) (*SelectorToSip, error) {
 
 	inputSelector, err := gst.NewElementWithProperties("input-selector", map[string]interface{}{
 		"name":         "webrtc_rtp_sel",

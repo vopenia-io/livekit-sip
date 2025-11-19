@@ -7,7 +7,7 @@ import (
 	"github.com/go-gst/go-gst/gst/app"
 )
 
-type WebRTCToSelector struct {
+type WebrtcToSelector struct {
 	Src          *gst.Element
 	JitterBuffer *gst.Element
 	Depay        *gst.Element
@@ -17,7 +17,7 @@ type WebRTCToSelector struct {
 	SelPad *gst.Pad
 }
 
-func buildWebRTCToSelectorChain(srcID string) (*WebRTCToSelector, []*gst.Element, error) {
+func buildWebRTCToSelectorChain(srcID string) (*WebrtcToSelector, []*gst.Element, error) {
 	src, err := gst.NewElementWithProperties("appsrc", map[string]interface{}{
 		"name":         fmt.Sprintf("webrtc_rtp_in_%s", srcID),
 		"is-live":      true,
@@ -57,7 +57,7 @@ func buildWebRTCToSelectorChain(srcID string) (*WebRTCToSelector, []*gst.Element
 
 	chainElems := []*gst.Element{src, jb, depay, queue}
 
-	return &WebRTCToSelector{
+	return &WebrtcToSelector{
 		Src:          src,
 		JitterBuffer: jb,
 		Depay:        depay,
@@ -66,7 +66,7 @@ func buildWebRTCToSelectorChain(srcID string) (*WebRTCToSelector, []*gst.Element
 	}, chainElems, nil
 }
 
-func (wts *WebRTCToSelector) link(selector *gst.Element) error {
+func (wts *WebrtcToSelector) link(selector *gst.Element) error {
 	queuePad := wts.Queue.GetStaticPad("src")
 	if queuePad == nil {
 		return fmt.Errorf("failed to get queue src pad")
@@ -85,7 +85,7 @@ func (wts *WebRTCToSelector) link(selector *gst.Element) error {
 	return nil
 }
 
-func (wts *WebRTCToSelector) Close(pipeline *gst.Pipeline) error {
+func (wts *WebrtcToSelector) Close(pipeline *gst.Pipeline) error {
 	if wts.SelPad != nil {
 		wts.SelPad.GetParentElement().ReleaseRequestPad(wts.SelPad)
 		wts.SelPad = nil
