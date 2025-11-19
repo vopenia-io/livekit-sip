@@ -56,7 +56,7 @@ func (o *MediaOrchestrator) AnswerSDP(offer *sdpv2.SDP) (*sdpv2.SDP, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	if offer.Video != nil && !offer.Video.Disabled {
+	if offer.Video != nil {
 		if err := offer.Video.SelectCodec(); err != nil {
 			return nil, fmt.Errorf("could not select video codec: %w", err)
 		}
@@ -66,7 +66,7 @@ func (o *MediaOrchestrator) AnswerSDP(offer *sdpv2.SDP) (*sdpv2.SDP, error) {
 		return nil, fmt.Errorf("could not setup sdp: %w", err)
 	}
 
-	answer, err := o.offerSDP()
+	answer, err := o.offerSDP(offer.Video != nil)
 	if err != nil {
 		return nil, fmt.Errorf("could not create answer sdp: %w", err)
 	}
@@ -74,30 +74,32 @@ func (o *MediaOrchestrator) AnswerSDP(offer *sdpv2.SDP) (*sdpv2.SDP, error) {
 	return answer, nil
 }
 
-func (o *MediaOrchestrator) offerSDP() (*sdpv2.SDP, error) {
+func (o *MediaOrchestrator) offerSDP(camera bool) (*sdpv2.SDP, error) {
 	builder := (&sdpv2.SDP{}).Builder()
 
 	builder.SetAddress(o.opts.IP)
 
-	builder.SetVideo(func(b *sdpv2.SDPMediaBuilder) (*sdpv2.SDPMedia, error) {
-		codec := o.camera.Codec()
-		if codec == nil {
-			for _, c := range o.camera.SupportedCodecs() {
+	if camera {
+		builder.SetVideo(func(b *sdpv2.SDPMediaBuilder) (*sdpv2.SDPMedia, error) {
+			codec := o.camera.Codec()
+			if codec == nil {
+				for _, c := range o.camera.SupportedCodecs() {
+					b.AddCodec(func(_ *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
+						return c, nil
+					}, false)
+				}
+			} else {
 				b.AddCodec(func(_ *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
-					return c, nil
-				}, false)
+					return codec, nil
+				}, true)
 			}
-		} else {
-			b.AddCodec(func(_ *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
-				return codec, nil
-			}, true)
-		}
-		b.SetDisabled(o.camera.Status() != VideoStatusStarted)
-		b.SetRTPPort(uint16(o.camera.RtpPort()))
-		b.SetRTCPPort(uint16(o.camera.RtcpPort()))
-		b.SetDirection(o.camera.Direction())
-		return b.Build()
-	})
+			b.SetDisabled(o.camera.Status() != VideoStatusStarted)
+			b.SetRTPPort(uint16(o.camera.RtpPort()))
+			b.SetRTCPPort(uint16(o.camera.RtcpPort()))
+			b.SetDirection(o.camera.Direction())
+			return b.Build()
+		})
+	}
 
 	offer, err := builder.Build()
 	if err != nil {
@@ -110,7 +112,7 @@ func (o *MediaOrchestrator) offerSDP() (*sdpv2.SDP, error) {
 func (o *MediaOrchestrator) OfferSDP() (*sdpv2.SDP, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	return o.offerSDP()
+	return o.offerSDP(true)
 }
 
 func (o *MediaOrchestrator) setupSDP(sdp *sdpv2.SDP) error {

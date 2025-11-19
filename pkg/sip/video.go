@@ -113,6 +113,14 @@ func (v *VideoManager) RtcpPort() int {
 }
 
 func (v *VideoManager) WebrtcTrackInput(ti *TrackInput, sid string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
+	if v.status != VideoStatusStarted {
+		v.log.Warnw("video manager not started, cannot add WebRTC track input", nil, "status", v.status)
+		return
+	}
+
 	v.log.Infow("WebRTC video track subscribed - connecting WebRTC→SIP pipeline",
 		"hasRtpIn", ti.RtpIn != nil,
 		"hasRtcpIn", ti.RtcpIn != nil)
