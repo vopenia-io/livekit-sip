@@ -333,11 +333,16 @@ func (v *VideoManager) Start() error {
 
 	v.log.Debugw("starting video manager")
 
+	// Set status to Started BEFORE setting pipeline state to allow WebRTC tracks to be added
+	// The pipeline state change to PLAYING may be ASYNC and wait for data (preroll)
+	// But we need to accept WebRTC tracks for data to flow
+	v.status = VideoStatusStarted
+
 	if err := v.pipeline.SetState(gst.StatePlaying); err != nil {
+		v.status = VideoStatusReady // Rollback on error
 		return fmt.Errorf("failed to set GStreamer pipeline to playing: %w", err)
 	}
 
-	v.status = VideoStatusStarted
 	return nil
 }
 
