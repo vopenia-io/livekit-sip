@@ -136,6 +136,9 @@ func (v *VideoManager) WebrtcTrackInput(ti *TrackInput, sid string) {
 		v.log.Errorw("failed to create WebRTC RTP reader", err)
 		return
 	}
+
+	// TODO: add webRTC RTCP input here
+
 	go func() {
 		Copy(webrtcRtpIn, ti.RtpIn)
 		if err := v.pipeline.RemoveWebRTCSourceFromSelector(sid); err != nil {
