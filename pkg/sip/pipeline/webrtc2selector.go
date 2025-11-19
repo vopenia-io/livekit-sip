@@ -10,7 +10,6 @@ import (
 type WebrtcToSelector struct {
 	WebrtcRtpSrc  *gst.Element
 	WebrtcRtcpSrc *gst.Element
-	Depay         *gst.Element
 	RtpQueue      *gst.Element
 	RtcpQueue     *gst.Element
 
@@ -59,12 +58,12 @@ func buildWebRTCToSelectorChain(srcID string) (*WebrtcToSelector, error) {
 	// 	return nil, nil, err
 	// }
 
-	depay, err := gst.NewElementWithProperties("rtpvp8depay", map[string]interface{}{
-		"request-keyframe": true,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create WebRTC RTP depayloader: %w", err)
-	}
+	// depay, err := gst.NewElementWithProperties("rtpvp8depay", map[string]interface{}{
+	// 	"request-keyframe": true,
+	// })
+	// if err != nil {
+	// 	return nil, fmt.Errorf("failed to create WebRTC RTP depayloader: %w", err)
+	// }
 
 	RtpQueue, err := gst.NewElement("queue")
 	if err != nil {
@@ -80,7 +79,7 @@ func buildWebRTCToSelectorChain(srcID string) (*WebrtcToSelector, error) {
 		WebrtcRtpSrc:  webrtcRtpSrc,
 		WebrtcRtcpSrc: webrtcRtcpSrc,
 		// JitterBuffer:    jb,
-		Depay:            depay,
+		// Depay:            depay,
 		RtpQueue:         RtpQueue,
 		RtcpQueue:        RtcpQueue,
 		WebrtcRtpAppSrc:  app.SrcFromElement(webrtcRtpSrc),
@@ -91,7 +90,6 @@ func buildWebRTCToSelectorChain(srcID string) (*WebrtcToSelector, error) {
 func (wts *WebrtcToSelector) link(pipeline *gst.Pipeline, rtpSelector *gst.Element, rtcpFunnel *gst.Element) error {
 	if err := addlinkChain(pipeline,
 		wts.WebrtcRtpSrc,
-		wts.Depay,
 		wts.RtpQueue,
 	); err != nil {
 		return fmt.Errorf("failed to link webrtc to selector chain: %w", err)
@@ -128,7 +126,7 @@ func (wts *WebrtcToSelector) Close(pipeline *gst.Pipeline) error {
 		wts.WebrtcRtpSelPad = nil
 	}
 
-	if err := pipeline.RemoveMany(wts.WebrtcRtpSrc, wts.Depay, wts.RtpQueue); err != nil {
+	if err := pipeline.RemoveMany(wts.WebrtcRtpSrc, wts.RtpQueue); err != nil {
 		return fmt.Errorf("failed to remove elements from pipeline: %w", err)
 	}
 

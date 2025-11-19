@@ -14,6 +14,7 @@ type SelectorToSip struct {
 
 	RtpInputSelector *gst.Element
 	RtcpFunnel       *gst.Element
+	Vp8Depay         *gst.Element
 	Vp8Dec           *gst.Element
 	VideoConvert     *gst.Element
 	VideoScale       *gst.Element
@@ -48,11 +49,23 @@ func buildSelectorToSipChain(sipOutPayloadType int) (*SelectorToSip, error) {
 		return nil, fmt.Errorf("failed to create webrtc input selector: %w", err)
 	}
 
-	rtcpFunnel, err := gst.NewElementWithProperties("funnel", map[string]interface{}{
-		"forward-unknown-ssrc": true,
-	})
+	rtcpFunnel, err := gst.NewElementWithProperties("funnel", map[string]interface{}{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create webrtc rtcp funnel: %w", err)
+	}
+
+	rtpBin, err := gst.NewElementWithProperties("rtpbin", map[string]interface{}{
+		"name": "webrtc_rtp_bin",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create webrtc rtpbin: %w", err)
+	}
+
+	vp8depay, err := gst.NewElementWithProperties("rtpvp8depay", map[string]interface{}{
+		"request-keyframe": true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create webrtc vp8 depayloader: %w", err)
 	}
 
 	vp8dec, err := gst.NewElement("vp8dec")
@@ -142,11 +155,6 @@ func buildSelectorToSipChain(sipOutPayloadType int) (*SelectorToSip, error) {
 		return nil, fmt.Errorf("failed to create webrtc rtp h264 payloader: %w", err)
 	}
 
-	rtpBin, err := gst.NewElement("rtpbin")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create webrtc rtpbin: %w", err)
-	}
-
 	sipRtpSink, err := gst.NewElementWithProperties("appsink", map[string]interface{}{
 		"name":         "sip_rtp_out",
 		"emit-signals": false,
@@ -174,6 +182,8 @@ func buildSelectorToSipChain(sipOutPayloadType int) (*SelectorToSip, error) {
 		WebrtcToSelectors: make(map[string]*WebrtcToSelector),
 		RtpInputSelector:  rtpInputSelector,
 		RtcpFunnel:        rtcpFunnel,
+		RtpBin:            rtpBin,
+		Vp8Depay:          vp8depay,
 		Vp8Dec:            vp8dec,
 		VideoConvert:      vconv,
 		VideoScale:        vscale,
@@ -185,7 +195,6 @@ func buildSelectorToSipChain(sipOutPayloadType int) (*SelectorToSip, error) {
 		X264Enc:           x264enc,
 		Parse:             parse,
 		RtpH264Pay:        rtpPay,
-		RtpBin:            rtpBin,
 		SipRtpSink:        sipRtpSink,
 		WebrtcRtcpSink:    webrtcRtcpSink,
 		SipRtpAppSink:     app.SinkFromElement(sipRtpSink),
@@ -194,12 +203,26 @@ func buildSelectorToSipChain(sipOutPayloadType int) (*SelectorToSip, error) {
 }
 
 func (sts *SelectorToSip) Link() error {
-	if err := addlinkChain(sts.Pipeline, sts.RtcpFunnel); err != nil {
+	sts.mu.Lock()
+	defer sts.mu.Unlock()
+
+	if sts.Closed() {
+		return fmt.Errorf("pipeline is closed")
+	}
+	if err := addlinkChain(sts.Pipeline, sts.RtpInputSelector); err != nil {
 		return fmt.Errorf("failed to link selector to sip chain: %w", err)
 	}
 
+	if err := addlinkChain(sts.Pipeline, sts.RtcpFunnel); err != nil {
+		return fmt.Errorf("failed to link funnel to sip chain: %w", err)
+	}
+
+	if err := addlinkChain(sts.Pipeline, sts.RtpBin); err != nil {
+		return fmt.Errorf("failed to link rtpbin to sip chain: %w", err)
+	}
+
 	if err := addlinkChain(sts.Pipeline,
-		sts.RtpInputSelector,
+		sts.Vp8Depay,
 		sts.Vp8Dec,
 		sts.VideoConvert,
 		sts.VideoScale,
@@ -211,15 +234,8 @@ func (sts *SelectorToSip) Link() error {
 		sts.X264Enc,
 		sts.Parse,
 		sts.RtpH264Pay,
+		sts.SipRtpSink,
 	); err != nil {
-		return fmt.Errorf("failed to link selector to sip chain: %w", err)
-	}
-
-	if err := addlinkChain(sts.Pipeline, sts.RtpBin); err != nil {
-		return fmt.Errorf("failed to link selector to sip chain: %w", err)
-	}
-
-	if err := addlinkChain(sts.Pipeline, sts.SipRtpSink); err != nil {
 		return fmt.Errorf("failed to link selector to sip chain: %w", err)
 	}
 
@@ -228,12 +244,13 @@ func (sts *SelectorToSip) Link() error {
 	}
 
 	if _, err := sts.RtpBin.Connect("pad-added", func(rtpBin *gst.Element, pad *gst.Pad) {
-		if !strings.HasPrefix(pad.GetName(), "send_rtp_src_0") {
+		fmt.Printf("WEBRTC RTPBIN PAD ADDED: %s\n", pad.GetName())
+		if !strings.HasPrefix(pad.GetName(), "recv_rtp_src_0_") {
 			return
 		}
 		if err := linkPad(
 			pad,
-			sts.SipRtpSink.GetStaticPad("sink"),
+			sts.Vp8Depay.GetStaticPad("sink"),
 		); err != nil {
 			fmt.Printf("failed to link webrtc rtp src to appsink: %v\n", err)
 		}
@@ -242,24 +259,24 @@ func (sts *SelectorToSip) Link() error {
 	}
 
 	if err := linkPad(
-		sts.RtpH264Pay.GetStaticPad("src"),
-		sts.RtpBin.GetRequestPad("send_rtp_sink_0"),
+		sts.RtpInputSelector.GetStaticPad("src"),
+		sts.RtpBin.GetRequestPad("recv_rtp_sink_0"),
 	); err != nil {
-		return fmt.Errorf("failed to link selector to sip chain: %w", err)
+		return fmt.Errorf("failed to link webrtc input-selector to rtpbin recv pad: %w", err)
 	}
 
 	if err := linkPad(
 		sts.RtcpFunnel.GetStaticPad("src"),
 		sts.RtpBin.GetRequestPad("recv_rtcp_sink_0"),
 	); err != nil {
-		return fmt.Errorf("failed to link selector to sip chain: %w", err)
+		return fmt.Errorf("failed to link webrtc rtcp src to rtpbin recv pad: %w", err)
 	}
 
 	if err := linkPad(
 		sts.RtpBin.GetRequestPad("send_rtcp_src_0"),
 		sts.WebrtcRtcpSink.GetStaticPad("sink"),
 	); err != nil {
-		return fmt.Errorf("failed to link selector to sip chain: %w", err)
+		return fmt.Errorf("failed to link rtpbin rtcp src to sip sink: %w", err)
 	}
 
 	return nil
@@ -271,6 +288,18 @@ func (sts *SelectorToSip) AddWebRTCSourceToSelector(srcID string) (*WebrtcToSele
 
 	if sts.Closed() {
 		return nil, fmt.Errorf("pipeline is closed")
+	}
+
+	state := sts.Pipeline.GetCurrentState()
+
+	switch state {
+	case gst.StatePlaying:
+	case gst.StateReady:
+		defer func() {
+			sts.switchWebRTCSelectorSource(srcID)
+		}()
+	default:
+		return nil, fmt.Errorf("pipeline must be in playing, ready, or paused state to add source, current state: %s", state.String())
 	}
 
 	if _, exists := sts.WebrtcToSelectors[srcID]; exists {
@@ -294,9 +323,19 @@ func (sts *SelectorToSip) AddWebRTCSourceToSelector(srcID string) (*WebrtcToSele
 func (sts *SelectorToSip) SwitchWebRTCSelectorSource(srcID string) error {
 	sts.mu.Lock()
 	defer sts.mu.Unlock()
+	return sts.switchWebRTCSelectorSource(srcID)
+}
 
+func (sts *SelectorToSip) switchWebRTCSelectorSource(srcID string) error {
 	if sts.Closed() {
 		return fmt.Errorf("pipeline is closed")
+	}
+
+	state := sts.Pipeline.GetCurrentState()
+	switch state {
+	case gst.StatePlaying, gst.StatePaused, gst.StateReady:
+	default:
+		return fmt.Errorf("pipeline must be in playing, paused, or ready state to switch source, current state: %s", state.String())
 	}
 
 	webrtcToSelector, exists := sts.WebrtcToSelectors[srcID]

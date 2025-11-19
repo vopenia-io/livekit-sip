@@ -253,6 +253,7 @@ func (stw *SipToWebrtc) Link() error {
 	}
 
 	if _, err := stw.RtpBin.Connect("pad-added", func(rtpBin *gst.Element, pad *gst.Pad) {
+		fmt.Printf("SIP RTPBIN PAD ADDED: %s\n", pad.GetName())
 		if !strings.HasPrefix(pad.GetName(), "recv_rtp_src_0_") {
 			return
 		}

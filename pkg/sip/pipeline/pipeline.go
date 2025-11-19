@@ -14,23 +14,47 @@ type GstPipeline struct {
 	*SelectorToSip
 }
 
-func (gp *GstPipeline) closed() bool {
+func (gp *GstPipeline) Closed() bool {
 	return gp.SipToWebrtc.Closed() || gp.SelectorToSip.Closed()
 }
 
 func (gp *GstPipeline) Close() error {
-	return errors.Join(
+	err := errors.Join(
 		gp.SipToWebrtc.Close(),
 		gp.SelectorToSip.Close(),
 	)
+	if err != nil {
+		return fmt.Errorf("failed to close gst pipeline: %w", err)
+	}
+	return nil
 }
 
 func (gp *GstPipeline) SetState(state gst.State) error {
-	return errors.Join(
-		gp.SipToWebrtc.SetState(state),
-		gp.SelectorToSip.SetState(state),
-	)
+	var errs []error
+	if err := gp.SipToWebrtc.SetState(state); err != nil {
+		errs = append(errs, fmt.Errorf("failed to set sip to webrtc pipeline state: %w", err))
+	}
+	if err := gp.SelectorToSip.SetState(state); err != nil {
+		errs = append(errs, fmt.Errorf("failed to set selector to sip pipeline state: %w", err))
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("failed to set gst pipeline state: %w", errors.Join(errs...))
+	}
+	return nil
 }
+
+// func (gp *GstPipeline) SetStateWait(state gst.State) error {
+// 	var errs []error
+// 	if err := gp.SipToWebrtc.SetState(state); err != nil {
+// 		errs = append(errs, err)
+// 	}
+// 	if err := gp.SelectorToSip.SetState(state); err != nil {
+// 		errs = append(errs, err)
+// 	}
+// 	if len(errs) > 0 {
+// 		return fmt.Errorf("failed to set gst pipeline state: %w", errors.Join(errs...))
+// 	}
+// }
 
 func addlinkChain(pipeline *gst.Pipeline, chain ...*gst.Element) error {
 	if err := pipeline.AddMany(chain...); err != nil {

@@ -35,7 +35,7 @@ func (v *VideoManager) SetupGstPipeline(media *sdpv2.SDPMedia) error {
 	}
 	go Copy(sipRtcpIn, v.sipRtcpIn)
 
-	sipRtpOut, err := NewGstReader(pipeline.SelectorToSip.SipRtpAppSink)
+	sipRtpOut, err := NewGstReader(pipeline.SipRtpAppSink)
 	if err != nil {
 		return fmt.Errorf("failed to create SIP RTP writer: %w", err)
 	}
