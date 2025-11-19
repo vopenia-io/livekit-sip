@@ -293,11 +293,7 @@ func (sts *SelectorToSip) AddWebRTCSourceToSelector(srcID string) (*WebrtcToSele
 	state := sts.Pipeline.GetCurrentState()
 
 	switch state {
-	case gst.StatePlaying:
-	case gst.StateReady:
-		defer func() {
-			sts.switchWebRTCSelectorSource(srcID)
-		}()
+	case gst.StatePlaying, gst.StateReady, gst.StatePaused:
 	default:
 		return nil, fmt.Errorf("pipeline must be in playing, ready, or paused state to add source, current state: %s", state.String())
 	}
@@ -316,6 +312,10 @@ func (sts *SelectorToSip) AddWebRTCSourceToSelector(srcID string) (*WebrtcToSele
 	}
 
 	sts.WebrtcToSelectors[srcID] = webRTCToSelector
+
+	if err := sts.ensureActiveSource(); err != nil {
+		return nil, fmt.Errorf("failed to ensure active source after adding new source: %w", err)
+	}
 
 	return webRTCToSelector, nil
 }
@@ -344,7 +344,7 @@ func (sts *SelectorToSip) switchWebRTCSelectorSource(srcID string) error {
 	}
 
 	sel := sts.RtpInputSelector
-	selPad := webrtcToSelector.WebrtcRtpSelPad
+	selPad := webrtcToSelector.WebrtcRtpSelectorPad
 
 	if err := sel.SetProperty("active-pad", selPad); err != nil {
 		return fmt.Errorf("failed to set active pad on selector: %w", err)
@@ -371,5 +371,40 @@ func (sts *SelectorToSip) RemoveWebRTCSourceFromSelector(srcID string) error {
 	}
 
 	delete(sts.WebrtcToSelectors, srcID)
+
+	if err := sts.ensureActiveSource(); err != nil {
+		return fmt.Errorf("failed to ensure active source after removing source: %w", err)
+	}
+
+	return nil
+}
+
+func (sts *SelectorToSip) ensureActiveSource() error {
+	if sts.Closed() {
+		return nil
+	}
+
+	sel := sts.RtpInputSelector
+	activePad, err := sel.GetProperty("active-pad")
+	if err != nil {
+		return fmt.Errorf("failed to get active pad from selector: %w", err)
+	}
+	if activePad != nil {
+		pad, ok := activePad.(*gst.Pad)
+		if ok && pad.GetParentElement() != nil {
+			return nil
+		}
+	}
+
+	for _, webrtcToSelector := range sts.WebrtcToSelectors {
+		selPad := webrtcToSelector.WebrtcRtpSelectorPad
+		if selPad != nil {
+			if err := sel.SetProperty("active-pad", selPad); err != nil {
+				return fmt.Errorf("failed to set active pad on selector: %w", err)
+			}
+			return nil
+		}
+	}
+
 	return nil
 }
