@@ -11,19 +11,18 @@ import (
 
 var ErrPipielineNotRunning = fmt.Errorf("pipeline not running")
 
-func (gp *GstPipeline) debug() (string, string, gst.State, error) {
-	gp.mu.Lock()
-	defer gp.mu.Unlock()
+func (b *basePipeline) debug() (string, string, gst.State, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 
-	state := gp.Pipeline.GetCurrentState()
-
+	state := b.Pipeline.GetCurrentState()
 	if state == gst.StateNull {
 		return "", "", state, ErrPipielineNotRunning
 	}
 
-	dotData := gp.Pipeline.DebugBinToDotData(gst.DebugGraphShowMediaType)
+	dotData := b.Pipeline.DebugBinToDotData(gst.DebugGraphShowMediaType)
 
-	data, err := PipelineBranchesAsStrings(gp.Pipeline)
+	data, err := PipelineBranchesAsStrings(b.Pipeline)
 	if err != nil {
 		return "", "", state, fmt.Errorf("failed to get pipeline branches: %w", err)
 	}
@@ -32,8 +31,8 @@ func (gp *GstPipeline) debug() (string, string, gst.State, error) {
 	return dotData, debugOutput, state, nil
 }
 
-func (gp *GstPipeline) Monitor() {
-	name := gp.Pipeline.GetName()
+func (b *basePipeline) Monitor() {
+	name := b.Pipeline.GetName()
 
 	logFile, err := os.Create(fmt.Sprintf("%s_pipeline_debug.log", name))
 	if err != nil {
@@ -51,10 +50,11 @@ func (gp *GstPipeline) Monitor() {
 		defer liveFile.Close()
 
 		prevStr := ""
+		prevDot := ""
 		prevState := gst.StateNull
 
-		for !gp.closed.IsBroken() {
-			dotData, pipelineStr, state, err := gp.debug()
+		for !b.closed.IsBroken() {
+			dotData, pipelineStr, state, err := b.debug()
 			if err != nil {
 				if err == ErrPipielineNotRunning {
 					pipelineStr = "Pipeline not running"
@@ -62,18 +62,17 @@ func (gp *GstPipeline) Monitor() {
 				pipelineStr = fmt.Sprintf("failed to get pipeline string: %v", err)
 			}
 
-			stateStr := state.String()
-
-			liveFile.Truncate(0)
-			liveFile.Seek(0, 0)
-			liveFile.WriteString(dotData)
-
-			if pipelineStr != prevStr || prevState != state {
+			if pipelineStr != prevStr || dotData != prevDot || prevState != state {
 				prevStr = pipelineStr
+				prevDot = dotData
 				prevState = state
 
+				liveFile.Truncate(0)
+				liveFile.Seek(0, 0)
+				liveFile.WriteString(dotData)
+
 				logFile.WriteString(
-					fmt.Sprintf("----- %s: %s -----\n%s\n\n", time.Now().Format(time.RFC3339), stateStr, pipelineStr),
+					fmt.Sprintf("----- %s: %s -----\n%s\n\n", time.Now().Format(time.RFC3339), state.String(), pipelineStr),
 				)
 			}
 
