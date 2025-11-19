@@ -16,14 +16,6 @@ import (
 	"github.com/livekit/protocol/logger"
 )
 
-// VideoStatus represents the current state of the VideoManager
-type VideoStatus int
-
-const (
-	VideoStatusStopped VideoStatus = iota
-	VideoStatusStarted
-)
-
 var mainLoop *glib.MainLoop
 
 func init() {
@@ -32,6 +24,15 @@ func init() {
 	mainLoop = glib.NewMainLoop(glib.MainContextDefault(), false)
 	_ = mainLoop
 }
+
+type VideoStatus int
+
+const (
+	VideoStatusClosed VideoStatus = iota
+	VideoStatusStopped
+	VideoStatusReady
+	VideoStatusStarted
+)
 
 func NewVideoManager(log logger.Logger, room *Room, sdp *sdpv2.SDP, opts *MediaOptions) (*VideoManager, error) {
 	// Allocate RTP/RTCP port pair according to RFC 3550 (RTCP on RTP+1)
@@ -48,6 +49,7 @@ func NewVideoManager(log logger.Logger, room *Room, sdp *sdpv2.SDP, opts *MediaO
 		remote:   sdp.Addr,
 		rtpConn:  newUDPConn(log.WithComponent("video-rtp"), rtpConn),
 		rtcpConn: newUDPConn(log.WithComponent("video-rtcp"), rtcpConn),
+		status:   VideoStatusStopped,
 	}
 
 	v.log.Infow("video manager created")
@@ -57,6 +59,7 @@ func NewVideoManager(log logger.Logger, room *Room, sdp *sdpv2.SDP, opts *MediaO
 
 type VideoManager struct {
 	*VideoIO
+	mu       sync.Mutex
 	log      logger.Logger
 	label    string // "camera" or "screenshare" for debugging
 	remote   netip.Addr
@@ -67,8 +70,6 @@ type VideoManager struct {
 	pipeline *gst.Pipeline
 	recv     bool
 	send     bool
-
-	mu       sync.Mutex
 	status   VideoStatus
 }
 
@@ -118,7 +119,23 @@ func (v *VideoManager) RtcpPort() int {
 	return v.rtcpConn.LocalAddr().(*net.UDPAddr).Port
 }
 
+func (v *VideoManager) OnWebrtcTrack(ti *TrackInput) {
+	v.log.Infow("WebRTC video track subscribed - connecting WebRTC→SIP pipeline",
+		"hasRtpIn", ti.RtpIn != nil,
+		"hasRtcpIn", ti.RtcpIn != nil)
+
+	if r := v.webrtcRtpIn.Swap(ti.RtpIn); r != nil {
+		_ = r.Close()
+	}
+	if w := v.webrtcRtcpIn.Swap(ti.RtcpIn); w != nil {
+		_ = w.Close()
+	}
+}
+
 func (v *VideoManager) Close() error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.status = VideoStatusClosed
 	v.log.Debugw("closing video manager")
 	if v.pipeline != nil {
 		if err := v.pipeline.SetState(gst.StateNull); err != nil {
@@ -145,20 +162,26 @@ func (v *VideoManager) Close() error {
 // 	v.sipRtpOut.Swap(w)
 // }
 
-func (v *VideoIO) SetWebrtcRtpIn(r io.ReadCloser) {
-	v.webrtcRtpIn.Swap(r)
-}
+// func (v *VideoIO) SetWebrtcRtpIn(r io.ReadCloser) {
+// 	v.webrtcRtpIn.Swap(r)
+// }
 
 func (v *VideoIO) SetWebrtcRtpOut(w io.WriteCloser) {
 	v.webrtcRtpOut.Swap(w)
 }
 
-func (v *VideoIO) SetWebrtcRtcpIn(r io.ReadCloser) {
-	v.webrtcRtcpIn.Swap(r)
-}
+// func (v *VideoIO) SetWebrtcRtcpIn(r io.ReadCloser) {
+// 	v.webrtcRtcpIn.Swap(r)
+// }
 
 func (v *VideoIO) SetWebrtcRtcpOut(w io.WriteCloser) {
 	v.webrtcRtcpOut.Swap(w)
+}
+
+func (v *VideoManager) Status() VideoStatus {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.status
 }
 
 func (v *VideoManager) PublishVideoTrack() error {
@@ -179,18 +202,65 @@ func (v *VideoManager) PublishVideoTrack() error {
 	return nil
 }
 
-func (v *VideoManager) Setup(media *sdpv2.SDPMedia) error {
-	v.log.Debugw("starting video manager")
-
-	if v.pipeline != nil {
-		v.log.Infow("stopping existing pipeline for re-setup (re-INVITE)")
-		if err := v.pipeline.SetState(gst.StateNull); err != nil {
-			v.log.Errorw("failed to stop pipeline", err)
+func (v *VideoManager) setupOutput(media *sdpv2.SDPMedia, send bool) error {
+	if !v.send {
+		if w := v.sipRtpOut.Swap(nil); w != nil {
+			_ = w.Close()
 		}
-		v.pipeline = nil
-		// DON'T close/recreate VideoIO - the Copy() goroutines need the switches
-		// to gracefully terminate. New pipeline will reuse existing switches.
+		if w := v.sipRtcpOut.Swap(nil); w != nil {
+			_ = w.Close()
+		}
+
+		v.rtpConn.SetDst(netip.AddrPort{})
+		v.rtcpConn.SetDst(netip.AddrPort{})
+		return nil
 	}
+	rtpAddr := netip.AddrPortFrom(v.remote, media.Port)
+	v.rtpConn.SetDst(rtpAddr)
+
+	rtcpAddr := netip.AddrPortFrom(v.remote, media.RTCPPort)
+	v.rtcpConn.SetDst(rtcpAddr)
+
+	v.log.Infow("setting up video send to SIP", "remote", v.remote.String(), "port", media.Port, "rtcp_port", media.RTCPPort)
+	if w := v.sipRtpOut.Swap(v.rtpConn); w != nil {
+		_ = w.Close()
+	}
+	if w := v.sipRtcpOut.Swap(v.rtcpConn); w != nil {
+		_ = w.Close()
+	}
+	return nil
+}
+
+func (v *VideoManager) setupInput(media *sdpv2.SDPMedia, recv bool) error {
+	if !recv {
+		if r := v.sipRtpIn.Swap(nil); r != nil {
+			_ = r.Close()
+		}
+		if r := v.sipRtcpIn.Swap(nil); r != nil {
+			_ = r.Close()
+		}
+		return nil
+	}
+
+	v.log.Infow("setting up video receive from SIP", "remote", v.remote.String(), "port", media.Port, "rtcp_port", media.RTCPPort)
+	if r := v.sipRtpIn.Swap(v.rtpConn); r != nil {
+		_ = r.Close()
+	}
+	if r := v.sipRtcpIn.Swap(v.rtcpConn); r != nil {
+		_ = r.Close()
+	}
+	return nil
+}
+
+func (v *VideoManager) Setup(media *sdpv2.SDPMedia) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
+	if v.status != VideoStatusStopped {
+		return fmt.Errorf("video manager must be stopped to setup, current status: %d", v.status)
+	}
+
+	v.log.Debugw("setting up video manager", "media", media)
 
 	if err := v.SetupGstPipeline(media); err != nil {
 		return fmt.Errorf("failed to setup GStreamer pipeline: %w", err)
@@ -201,71 +271,15 @@ func (v *VideoManager) Setup(media *sdpv2.SDPMedia) error {
 
 	v.log.Infow("video setup", "send", v.send, "recv", v.recv, "remote", v.remote.String(), "rtp_port", v.RtpPort(), "rtcp_port", v.RtcpPort())
 
-	if v.send {
-		// Set up SIP RTP/RTCP output (our pipeline → SIP device)
-		rtpAddr := netip.AddrPortFrom(v.remote, media.Port)
-		v.rtpConn.SetDst(rtpAddr)
-
-		rtcpAddr := netip.AddrPortFrom(v.remote, media.RTCPPort)
-		v.rtcpConn.SetDst(rtcpAddr)
-		if w := v.sipRtpOut.Swap(v.rtpConn); w != nil {
-			_ = w.Close()
-		}
-		if w := v.sipRtcpOut.Swap(v.rtcpConn); w != nil {
-			_ = w.Close()
-		}
-
-		v.log.Infow("setting up video send to SIP", "remote", v.remote.String(), "port", media.Port)
-
-		// Set up callback for when WebRTC tracks are subscribed (WebRTC → SIP direction)
-		// This is needed to get video from WebRTC participants and send to SIP device
-		v.room.SetTrackCallback(func(ti *TrackInput) {
-			v.log.Infow("WebRTC video track subscribed - connecting WebRTC→SIP pipeline",
-				"hasRtpIn", ti.RtpIn != nil,
-				"hasRtcpIn", ti.RtcpIn != nil)
-
-			// Wrap RTP input with debug logging to track data flow
-			debugRtpIn := NewDebugReadCloser(ti.RtpIn, fmt.Sprintf("[%s] WebRTC→SIP RTP", v.label), 2*time.Second)
-
-			if r := v.webrtcRtpIn.Swap(debugRtpIn); r != nil {
-				_ = r.Close()
-			}
-			if w := v.webrtcRtcpIn.Swap(ti.RtcpIn); w != nil {
-				_ = w.Close()
-			}
-		})
-
-		// Trigger active participant update to invoke callback if tracks already exist
-		v.room.UpdateActiveParticipant("")
-	} else {
-		// If not sending to SIP, disable SIP output
-		if w := v.sipRtpOut.Swap(nil); w != nil {
-			_ = w.Close()
-		}
-		if w := v.sipRtcpOut.Swap(nil); w != nil {
-			_ = w.Close()
-		}
+	if err := v.setupOutput(media, v.recv); err != nil {
+		return fmt.Errorf("failed to setup video input: %w", err)
 	}
 
-	if v.recv {
-		// Set up SIP RTP/RTCP input (SIP device → our pipeline)
-		if r := v.sipRtpIn.Swap(v.rtpConn); r != nil {
-			_ = r.Close()
-		}
-		if w := v.sipRtcpIn.Swap(v.rtcpConn); w != nil {
-			_ = w.Close()
-		}
-
-		v.log.Infow("setting up video receive from SIP", "remote", v.remote.String(), "port", media.Port)
-	} else {
-		// If not receiving from SIP, disable SIP input
-		if r := v.sipRtpIn.Swap(nil); r != nil {
-			_ = r.Close()
-		}
-		if w := v.sipRtcpIn.Swap(nil); w != nil {
-			_ = w.Close()
-		}
+	if err := v.setupInput(media, v.send); err != nil {
+		return fmt.Errorf("failed to setup video output: %w", err)
 	}
+
+	v.status = VideoStatusReady
 
 	return nil
 }
@@ -274,9 +288,8 @@ func (v *VideoManager) Start() error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
-	if v.status == VideoStatusStarted {
-		v.log.Debugw("video manager already started, skipping")
-		return nil
+	if v.status != VideoStatusReady {
+		return fmt.Errorf("video manager must be ready to start, current status: %d", v.status)
 	}
 
 	v.log.Debugw("starting video manager")
@@ -312,57 +325,52 @@ func (v *VideoManager) Start() error {
 	// SetState() is asynchronous - it returns immediately but the state transition takes time
 	// For bidirectional pipelines, this can take 100-5000ms depending on data flow
 	// If we send 200 OK before pipeline is ready, early RTP packets cause corruption (green artifacts)
-	v.log.Infow("Waiting for GStreamer pipeline to reach PLAYING state...", "label", v.label)
+	v.log.Debugw("waiting for GStreamer pipeline to reach PLAYING state...")
 	changeReturn, currentState := v.pipeline.GetState(gst.StatePlaying, gst.ClockTime(5*time.Second))
-
 	if changeReturn == gst.StateChangeFailure {
 		return fmt.Errorf("GStreamer pipeline failed to reach PLAYING state")
 	}
 
-	if changeReturn == gst.StateChangeAsync {
-		v.log.Warnw("Pipeline still transitioning to PLAYING asynchronously", nil,
-			"current_state", currentState.String(),
-			"change_result", changeReturn.String(),
-			"note", "Pipeline will reach PLAYING once data flows - this is normal for unidirectional streams")
-	} else {
-		v.log.Infow("GStreamer pipeline is PLAYING and ready for RTP packets",
-			"current_state", currentState.String(),
-			"change_result", changeReturn.String())
-	}
+	v.log.Infow("GStreamer pipeline is PLAYING and ready for RTP packets",
+		"current_state", currentState.String(),
+		"change_result", changeReturn.String())
 
 	v.status = VideoStatusStarted
 	return nil
 }
 
-// Stop sets the pipeline to NULL state without closing resources
-// This allows the pipeline to be restarted later with Start()
 func (v *VideoManager) Stop() error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
 	if v.status == VideoStatusStopped {
-		v.log.Debugw("video manager already stopped, skipping")
 		return nil
+	}
+
+	if v.status != VideoStatusStarted {
+		return fmt.Errorf("video manager must be started to stop, current status: %d", v.status)
 	}
 
 	v.log.Debugw("stopping video manager")
 
-	if v.pipeline != nil {
-		if err := v.pipeline.SetState(gst.StateNull); err != nil {
-			return fmt.Errorf("failed to set GStreamer pipeline to null: %w", err)
-		}
-
-		// Wait for pipeline to reach NULL state
-		v.log.Debugw("waiting for GStreamer pipeline to reach NULL state...")
-		changeReturn, currentState := v.pipeline.GetState(gst.StateNull, gst.ClockTime(100*time.Millisecond))
-		if changeReturn == gst.StateChangeFailure {
-			return fmt.Errorf("GStreamer pipeline failed to reach NULL state")
-		}
-
-		v.log.Infow("GStreamer pipeline is NULL",
-			"current_state", currentState.String(),
-			"change_result", changeReturn.String())
+	if err := v.pipeline.SetState(gst.StateNull); err != nil {
+		return fmt.Errorf("failed to set GStreamer pipeline to null: %w", err)
 	}
+
+	// CRITICAL FIX: Wait for pipeline to actually reach NULL state
+	// SetState() is asynchronous - it returns immediately but the state transition takes time (~100-150ms)
+	// If we send 200 OK before pipeline is ready, early RTP packets cause corruption (green artifacts)
+	v.log.Debugw("waiting for GStreamer pipeline to reach NULL state...")
+	changeReturn, currentState := v.pipeline.GetState(gst.StateNull, gst.ClockTime(5*time.Second))
+	if changeReturn == gst.StateChangeFailure {
+		return fmt.Errorf("GStreamer pipeline failed to reach NULL state")
+	}
+	v.log.Infow("GStreamer pipeline is NULL",
+		"current_state", currentState.String(),
+		"change_result", changeReturn.String())
+
+	v.recv = false
+	v.send = false
 
 	v.status = VideoStatusStopped
 	return nil
