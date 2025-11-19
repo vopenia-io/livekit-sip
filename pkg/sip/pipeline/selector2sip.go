@@ -161,6 +161,7 @@ func buildSelectorToSipChain(sipOutPayloadType int) (*SelectorToSip, error) {
 		"drop":         false,
 		"max-buffers":  uint(100),
 		"sync":         false,
+		"async":        false, // Don't wait for preroll - live pipeline
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create webrtc appsink: %w", err)
@@ -172,6 +173,7 @@ func buildSelectorToSipChain(sipOutPayloadType int) (*SelectorToSip, error) {
 		"drop":         false,
 		"max-buffers":  uint(100),
 		"sync":         false,
+		"async":        false, // Don't wait for preroll - live pipeline
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create webrtc rtcp appsink: %w", err)
