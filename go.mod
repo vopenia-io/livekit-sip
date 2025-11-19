@@ -147,4 +147,4 @@ require (
 
 replace github.com/vopenia/bfcp => ../bfcp
 
-replace github.com/livekit/media-sdk => ../media-sdk
+replace github.com/livekit/media-sdk => /home/vopenia/dev/media-sdk
