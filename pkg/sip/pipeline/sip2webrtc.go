@@ -10,19 +10,22 @@ import (
 
 type SipToWebRTC struct {
 	// raw elements
-	RtpSrc       *gst.Element
-	RtcpSrc      *gst.Element
-	RtpBin       *gst.Element
-	Depay        *gst.Element
-	Parse        *gst.Element
-	Decoder      *gst.Element
-	VideoConvert *gst.Element
-	VideoScale   *gst.Element
-	VideoRate    *gst.Element
-	Vp8Enc       *gst.Element
-	RtpVp8Pay    *gst.Element
-	RtcpSink     *gst.Element
-	RtpSink      *gst.Element
+	RtpSrc        *gst.Element
+	RtcpSrc       *gst.Element
+	RtpBin        *gst.Element
+	Depay         *gst.Element
+	Parse         *gst.Element
+	Decoder       *gst.Element
+	VideoConvert  *gst.Element
+	VideoScale    *gst.Element
+	ResFilter     *gst.Element
+	VideoConvert2 *gst.Element
+	VideoRate     *gst.Element
+	FpsFilter     *gst.Element
+	Vp8Enc        *gst.Element
+	RtpVp8Pay     *gst.Element
+	RtcpSink      *gst.Element
+	RtpSink       *gst.Element
 
 	RtpAppSrc   *app.Source
 	RtpAppSink  *app.Sink
@@ -108,21 +111,46 @@ func buildSipToWebRTCChain(sipPayloadType int) (*SipToWebRTC, error) {
 	}
 
 	vscale, err := gst.NewElementWithProperties("videoscale", map[string]interface{}{
-		"add-borders": false,
+		"add-borders": true, // Add black bars for aspect ratio preservation
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create SIP videoscale: %w", err)
 	}
 
-	vrate, err := gst.NewElement("videorate")
+	// Force 1280x720 resolution with PAR 1:1 - this forces letterboxing for non-16:9 content
+	resFilter, err := gst.NewElementWithProperties("capsfilter", map[string]interface{}{
+		"caps": gst.NewCapsFromString("video/x-raw,width=1280,height=720,pixel-aspect-ratio=1/1"),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create SIP resolution capsfilter: %w", err)
+	}
+
+	// videoconvert after scaling to ensure proper format
+	vconv2, err := gst.NewElement("videoconvert")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create SIP videoconvert2: %w", err)
+	}
+
+	// Force 24fps output
+	vrate, err := gst.NewElementWithProperties("videorate", map[string]interface{}{
+		"drop-only": true, // Only drop frames, don't duplicate
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create SIP videorate: %w", err)
 	}
 
+	// Force 24fps in caps
+	fpsFilter, err := gst.NewElementWithProperties("capsfilter", map[string]interface{}{
+		"caps": gst.NewCapsFromString("video/x-raw,framerate=24/1"),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create SIP fps capsfilter: %w", err)
+	}
+
 	vp8enc, err := gst.NewElementWithProperties("vp8enc", map[string]interface{}{
 		"deadline":            int(1),
-		"target-bitrate":      int(3_000_000),
-		"cpu-used":            int(2),
+		"target-bitrate":      int(1_500_000),
+		"cpu-used":            int(4),
 		"keyframe-max-dist":   int(30),
 		"lag-in-frames":       int(0),
 		"threads":             int(4),
@@ -170,23 +198,26 @@ func buildSipToWebRTCChain(sipPayloadType int) (*SipToWebRTC, error) {
 	}
 
 	return &SipToWebRTC{
-		RtpSrc:       rtpSrc,
-		RtcpSrc:      rtcpSrc,
-		RtpBin:       rtpBin,
-		Depay:        depay,
-		Parse:        parse,
-		Decoder:      dec,
-		VideoConvert: vconv,
-		VideoScale:   vscale,
-		VideoRate:    vrate,
-		Vp8Enc:       vp8enc,
-		RtpVp8Pay:    rtpVp8Pay,
-		RtcpSink:     rtcpSink,
-		RtpSink:      rtpSink,
-		RtpAppSrc:    app.SrcFromElement(rtpSrc),
-		RtpAppSink:   app.SinkFromElement(rtpSink),
-		RtcpAppSrc:   app.SrcFromElement(rtcpSrc),
-		RtcpAppSink:  app.SinkFromElement(rtcpSink),
+		RtpSrc:        rtpSrc,
+		RtcpSrc:       rtcpSrc,
+		RtpBin:        rtpBin,
+		Depay:         depay,
+		Parse:         parse,
+		Decoder:       dec,
+		VideoConvert:  vconv,
+		VideoScale:    vscale,
+		ResFilter:     resFilter,
+		VideoConvert2: vconv2,
+		VideoRate:     vrate,
+		FpsFilter:     fpsFilter,
+		Vp8Enc:        vp8enc,
+		RtpVp8Pay:     rtpVp8Pay,
+		RtcpSink:      rtcpSink,
+		RtpSink:       rtpSink,
+		RtpAppSrc:     app.SrcFromElement(rtpSrc),
+		RtpAppSink:    app.SinkFromElement(rtpSink),
+		RtcpAppSrc:    app.SrcFromElement(rtcpSrc),
+		RtcpAppSink:   app.SinkFromElement(rtcpSink),
 	}, nil
 }
 
@@ -209,7 +240,10 @@ func (stw *SipToWebRTC) Link(gp *GstPipeline) error {
 		stw.Decoder,
 		stw.VideoConvert,
 		stw.VideoScale,
+		stw.ResFilter,
+		stw.VideoConvert2,
 		stw.VideoRate,
+		stw.FpsFilter,
 		stw.Vp8Enc,
 		stw.RtpVp8Pay,
 		stw.RtpSink,

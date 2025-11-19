@@ -11,6 +11,11 @@ type SelectorToSip struct {
 	InputSelector *gst.Element
 	Vp8Dec        *gst.Element
 	VideoConvert  *gst.Element
+	VideoScale    *gst.Element
+	ResFilter     *gst.Element
+	VideoConvert2 *gst.Element
+	VideoRate     *gst.Element
+	FpsFilter     *gst.Element
 	I420Filter    *gst.Element
 	X264Enc       *gst.Element
 	Parse         *gst.Element
@@ -40,6 +45,44 @@ func buildWebRTCToSipChain(sipOutPayloadType int) (*SelectorToSip, error) {
 		return nil, fmt.Errorf("failed to create webrtc videoconvert: %w", err)
 	}
 
+	// Scale to 720p - videoscale will letterbox automatically when add-borders=true
+	vscale, err := gst.NewElementWithProperties("videoscale", map[string]interface{}{
+		"add-borders": true, // Add black bars for aspect ratio preservation
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create webrtc videoscale: %w", err)
+	}
+
+	// Force 1280x720 resolution with PAR 1:1 - this forces letterboxing for non-16:9 content
+	resFilter, err := gst.NewElementWithProperties("capsfilter", map[string]interface{}{
+		"caps": gst.NewCapsFromString("video/x-raw,width=1280,height=720,pixel-aspect-ratio=1/1"),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create webrtc resolution capsfilter: %w", err)
+	}
+
+	// videoconvert after scaling to ensure proper format
+	vconv2, err := gst.NewElement("videoconvert")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create webrtc videoconvert2: %w", err)
+	}
+
+	// Force 24fps output
+	vrate, err := gst.NewElementWithProperties("videorate", map[string]interface{}{
+		"drop-only": true, // Only drop frames, don't duplicate
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create webrtc videorate: %w", err)
+	}
+
+	// Force 24fps in caps
+	fpsFilter, err := gst.NewElementWithProperties("capsfilter", map[string]interface{}{
+		"caps": gst.NewCapsFromString("video/x-raw,framerate=24/1"),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create webrtc fps capsfilter: %w", err)
+	}
+
 	// caps filter: video/x-raw,format=I420
 	i420Filter, err := gst.NewElementWithProperties("capsfilter", map[string]interface{}{
 		"caps": gst.NewCapsFromString("video/x-raw,format=I420"),
@@ -49,14 +92,14 @@ func buildWebRTCToSipChain(sipOutPayloadType int) (*SelectorToSip, error) {
 	}
 
 	x264enc, err := gst.NewElementWithProperties("x264enc", map[string]interface{}{
-		"bitrate":        int(2000),
+		"bitrate":        int(1500),
 		"key-int-max":    int(30),
 		"bframes":        int(0),
 		"rc-lookahead":   int(0),
 		"sliced-threads": true,
 		"sync-lookahead": int(0),
-		"tune":           "zerolatency",
-		"speed-preset":   "ultrafast",
+		"tune":           0x00000004, // GST_X264_ENC_TUNE_ZERO_LATENCY
+		"speed-preset":   7,           // GST_X264_ENC_PRESET_SUPERFAST
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create webrtc x264 encoder: %w", err)
@@ -94,6 +137,11 @@ func buildWebRTCToSipChain(sipOutPayloadType int) (*SelectorToSip, error) {
 		InputSelector: inputSelector,
 		Vp8Dec:        vp8dec,
 		VideoConvert:  vconv,
+		VideoScale:    vscale,
+		ResFilter:     resFilter,
+		VideoConvert2: vconv2,
+		VideoRate:     vrate,
+		FpsFilter:     fpsFilter,
 		I420Filter:    i420Filter,
 		X264Enc:       x264enc,
 		Parse:         parse,
@@ -108,6 +156,11 @@ func (sts *SelectorToSip) Link(gp *GstPipeline) error {
 		sts.InputSelector,
 		sts.Vp8Dec,
 		sts.VideoConvert,
+		sts.VideoScale,
+		sts.ResFilter,
+		sts.VideoConvert2,
+		sts.VideoRate,
+		sts.FpsFilter,
 		sts.I420Filter,
 		sts.X264Enc,
 		sts.Parse,
