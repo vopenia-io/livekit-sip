@@ -16,7 +16,8 @@ type WebrtcToSelector struct {
 	WebrtcRtpAppSrc  *app.Source
 	WebrtcRtcpAppSrc *app.Source
 
-	WebrtcRtpSelPad *gst.Pad
+	WebrtcRtpSelectorPad *gst.Pad
+	WebrtcRtcpFunnelPad  *gst.Pad
 }
 
 func buildWebRTCToSelectorChain(srcID string) (*WebrtcToSelector, error) {
@@ -102,17 +103,29 @@ func (wts *WebrtcToSelector) link(pipeline *gst.Pipeline, rtpSelector *gst.Eleme
 		return fmt.Errorf("failed to link webrtc rtcp src: %w", err)
 	}
 
+	for _, elem := range []*gst.Element{
+		wts.WebrtcRtpSrc,
+		wts.RtpQueue,
+		wts.WebrtcRtcpSrc,
+		wts.RtcpQueue,
+	} {
+		if ok := elem.SyncStateWithParent(); !ok {
+			return fmt.Errorf("failed to sync state for %s", elem.GetName())
+		}
+	}
+
+	wts.WebrtcRtcpFunnelPad = rtcpFunnel.GetRequestPad("sink_%u")
 	if err := linkPad(
 		wts.RtcpQueue.GetStaticPad("src"),
-		rtcpFunnel.GetRequestPad("sink_%u"),
+		wts.WebrtcRtcpFunnelPad,
 	); err != nil {
 		return fmt.Errorf("failed to link webrtc rtcp to funnel: %w", err)
 	}
 
-	wts.WebrtcRtpSelPad = rtpSelector.GetRequestPad("sink_%u")
+	wts.WebrtcRtpSelectorPad = rtpSelector.GetRequestPad("sink_%u")
 	if err := linkPad(
 		wts.RtpQueue.GetStaticPad("src"),
-		wts.WebrtcRtpSelPad,
+		wts.WebrtcRtpSelectorPad,
 	); err != nil {
 		return fmt.Errorf("failed to link webrtc rtp to selector: %w", err)
 	}
@@ -121,12 +134,21 @@ func (wts *WebrtcToSelector) link(pipeline *gst.Pipeline, rtpSelector *gst.Eleme
 }
 
 func (wts *WebrtcToSelector) Close(pipeline *gst.Pipeline) error {
-	if wts.WebrtcRtpSelPad != nil {
-		wts.WebrtcRtpSelPad.GetParentElement().ReleaseRequestPad(wts.WebrtcRtpSelPad)
-		wts.WebrtcRtpSelPad = nil
+	if wts.WebrtcRtpSelectorPad != nil {
+		wts.WebrtcRtpSelectorPad.GetParentElement().ReleaseRequestPad(wts.WebrtcRtpSelectorPad)
+		wts.WebrtcRtpSelectorPad = nil
+	}
+	if wts.WebrtcRtcpFunnelPad != nil {
+		wts.WebrtcRtcpFunnelPad.GetParentElement().ReleaseRequestPad(wts.WebrtcRtcpFunnelPad)
+		wts.WebrtcRtcpFunnelPad = nil
 	}
 
-	if err := pipeline.RemoveMany(wts.WebrtcRtpSrc, wts.RtpQueue); err != nil {
+	if err := pipeline.RemoveMany(
+		wts.WebrtcRtpSrc,
+		wts.RtpQueue,
+		wts.WebrtcRtcpSrc,
+		wts.RtcpQueue,
+	); err != nil {
 		return fmt.Errorf("failed to remove elements from pipeline: %w", err)
 	}
 
