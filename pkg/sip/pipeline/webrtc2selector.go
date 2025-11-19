@@ -34,7 +34,7 @@ func buildWebRTCToSelectorChain(srcID string) (*WebRTCToSelector, []*gst.Element
 	}
 
 	jb, err := gst.NewElementWithProperties("rtpjitterbuffer", map[string]interface{}{
-		"latency":           uint(100),
+		"latency":           uint(200),
 		"do-lost":           true,
 		"do-retransmission": false,
 		"drop-on-latency":   false,
