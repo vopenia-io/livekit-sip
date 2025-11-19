@@ -11,21 +11,25 @@ import (
 
 var ErrPipielineNotRunning = fmt.Errorf("pipeline not running")
 
-func (gp *GstPipeline) debug() (string, gst.State, error) {
+func (gp *GstPipeline) debug() (string, string, gst.State, error) {
 	gp.mu.Lock()
 	defer gp.mu.Unlock()
 
 	state := gp.Pipeline.GetCurrentState()
 
 	if state == gst.StateNull {
-		return "", state, ErrPipielineNotRunning
+		return "", "", state, ErrPipielineNotRunning
 	}
+
+	dotData := gp.Pipeline.DebugBinToDotData(gst.DebugGraphShowMediaType)
 
 	data, err := PipelineBranchesAsStrings(gp.Pipeline)
 	if err != nil {
-		return "", state, fmt.Errorf("failed to get pipeline branches: %w", err)
+		return "", "", state, fmt.Errorf("failed to get pipeline branches: %w", err)
 	}
-	return strings.Join(data, "\n"), state, nil
+	debugOutput := strings.Join(data, "\n")
+
+	return dotData, debugOutput, state, nil
 }
 
 func (gp *GstPipeline) Monitor() {
@@ -36,7 +40,7 @@ func (gp *GstPipeline) Monitor() {
 		fmt.Printf("failed to create pipeline log file: %v\n", err)
 		return
 	}
-	liveFile, err := os.Create(fmt.Sprintf("%s_pipeline_live.log", name))
+	liveFile, err := os.Create(fmt.Sprintf("%s_pipeline_live.dot", name))
 	if err != nil {
 		fmt.Printf("failed to create pipeline live log file: %v\n", err)
 		return
@@ -50,7 +54,7 @@ func (gp *GstPipeline) Monitor() {
 		prevState := gst.StateNull
 
 		for !gp.closed.IsBroken() {
-			pipelineStr, state, err := gp.debug()
+			dotData, pipelineStr, state, err := gp.debug()
 			if err != nil {
 				if err == ErrPipielineNotRunning {
 					pipelineStr = "Pipeline not running"
@@ -60,17 +64,17 @@ func (gp *GstPipeline) Monitor() {
 
 			stateStr := state.String()
 
-			data := fmt.Sprintf("----- %s: %s -----\n%s\n\n", time.Now().Format(time.RFC3339), stateStr, pipelineStr)
-
 			liveFile.Truncate(0)
 			liveFile.Seek(0, 0)
-			liveFile.WriteString(data)
+			liveFile.WriteString(dotData)
 
 			if pipelineStr != prevStr || prevState != state {
 				prevStr = pipelineStr
 				prevState = state
 
-				logFile.WriteString(data)
+				logFile.WriteString(
+					fmt.Sprintf("----- %s: %s -----\n%s\n\n", time.Now().Format(time.RFC3339), stateStr, pipelineStr),
+				)
 			}
 
 			time.Sleep(500 * time.Millisecond)
