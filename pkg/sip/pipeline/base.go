@@ -15,13 +15,13 @@ func newBasePipeline() (*basePipeline, error) {
 		return nil, fmt.Errorf("failed to create gst pipeline: %w", err)
 	}
 
-	go func() {
-		for {
-			state := pipeline.GetCurrentState()
-			fmt.Printf("Pipeline %s state: %s\n", pipeline.GetName(), state.String())
-			time.Sleep(5 * time.Second)
-		}
-	}()
+	// go func() {
+	// 	for {
+	// 		state := pipeline.GetCurrentState()
+	// 		fmt.Printf("Pipeline %s state: %s\n", pipeline.GetName(), state.String())
+	// 		time.Sleep(5 * time.Second)
+	// 	}
+	// }()
 
 	return &basePipeline{
 		Pipeline: pipeline,
