@@ -2,7 +2,6 @@ package pipeline
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/app"
@@ -254,7 +253,7 @@ func (stw *SipToWebrtc) Link() error {
 
 	if _, err := stw.RtpBin.Connect("pad-added", func(rtpBin *gst.Element, pad *gst.Pad) {
 		fmt.Printf("SIP RTPBIN PAD ADDED: %s\n", pad.GetName())
-		if !strings.HasPrefix(pad.GetName(), "recv_rtp_src_0_") {
+		if pad.GetName() == "send_rtp_src_0" {
 			return
 		}
 		if err := linkPad(
@@ -280,6 +279,13 @@ func (stw *SipToWebrtc) Link() error {
 	); err != nil {
 		return fmt.Errorf("failed to link sip rtcp src to rtpbin recv pad: %w", err)
 	}
+
+	// if err := linkPad(
+	// 	stw.RtpBin.GetRequestPad("send_rtp_src_0"),
+	// 	stw.RtpVp8Pay.GetStaticPad("sink"),
+	// ); err != nil {
+	// 	return fmt.Errorf("failed to link rtpbin rtp src to rtp vp8 pay sink: %w", err)
+	// }
 
 	if err := linkPad(
 		stw.RtpBin.GetRequestPad("send_rtcp_src_0"),
