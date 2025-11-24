@@ -1,8 +1,10 @@
 package pipeline
 
 import (
+	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/app"
@@ -10,11 +12,13 @@ import (
 
 type SelectorToSip struct {
 	*basePipeline
-	WebrtcToSelectors map[string]*WebrtcToSelector
+	WebrtcToSelectors map[uint64]*WebrtcToSelector
+	SrcIDToSessionID  map[string]uint64
+	idCounter         atomic.Uint64
 
+	RecvRtpBin       *gst.Element
 	RtpInputSelector *gst.Element
 	RtcpFunnel       *gst.Element
-	Vp8Depay         *gst.Element
 	Vp8Dec           *gst.Element
 	VideoConvert     *gst.Element
 	VideoScale       *gst.Element
@@ -26,7 +30,6 @@ type SelectorToSip struct {
 	X264Enc          *gst.Element
 	Parse            *gst.Element
 	RtpH264Pay       *gst.Element
-	RtpBin           *gst.Element
 	SipRtpSink       *gst.Element
 	WebrtcRtcpSink   *gst.Element
 
@@ -54,19 +57,22 @@ func buildSelectorToSipChain(sipOutPayloadType int) (*SelectorToSip, error) {
 		return nil, fmt.Errorf("failed to create webrtc rtcp funnel: %w", err)
 	}
 
-	rtpBin, err := gst.NewElementWithProperties("rtpbin", map[string]interface{}{
-		"name": "webrtc_rtp_bin",
-	})
+	recvRtpBin, err := gst.NewElementWithProperties("rtpbin", map[string]interface{}{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create webrtc rtpbin: %w", err)
 	}
 
-	vp8depay, err := gst.NewElementWithProperties("rtpvp8depay", map[string]interface{}{
-		"request-keyframe": true,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create webrtc vp8 depayloader: %w", err)
-	}
+	// rtpFunnel, err := gst.NewElementWithProperties("funnel", map[string]interface{}{})
+	// if err != nil {
+	// 	return nil, fmt.Errorf("failed to create webrtc rtp funnel: %w", err)
+	// }
+
+	// vp8depay, err := gst.NewElementWithProperties("rtpvp8depay", map[string]interface{}{
+	// 	"request-keyframe": true,
+	// })
+	// if err != nil {
+	// 	return nil, fmt.Errorf("failed to create webrtc vp8 depayloader: %w", err)
+	// }
 
 	vp8dec, err := gst.NewElement("vp8dec")
 	if err != nil {
@@ -181,11 +187,11 @@ func buildSelectorToSipChain(sipOutPayloadType int) (*SelectorToSip, error) {
 
 	return &SelectorToSip{
 		basePipeline:      pipeline,
-		WebrtcToSelectors: make(map[string]*WebrtcToSelector),
+		WebrtcToSelectors: make(map[uint64]*WebrtcToSelector),
+		SrcIDToSessionID:  make(map[string]uint64),
 		RtpInputSelector:  rtpInputSelector,
 		RtcpFunnel:        rtcpFunnel,
-		RtpBin:            rtpBin,
-		Vp8Depay:          vp8depay,
+		RecvRtpBin:        recvRtpBin,
 		Vp8Dec:            vp8dec,
 		VideoConvert:      vconv,
 		VideoScale:        vscale,
@@ -211,20 +217,13 @@ func (sts *SelectorToSip) Link() error {
 	if sts.Closed() {
 		return fmt.Errorf("pipeline is closed")
 	}
-	if err := addlinkChain(sts.Pipeline, sts.RtpInputSelector); err != nil {
-		return fmt.Errorf("failed to link selector to sip chain: %w", err)
-	}
 
-	if err := addlinkChain(sts.Pipeline, sts.RtcpFunnel); err != nil {
-		return fmt.Errorf("failed to link funnel to sip chain: %w", err)
-	}
-
-	if err := addlinkChain(sts.Pipeline, sts.RtpBin); err != nil {
+	if err := addlinkChain(sts.Pipeline, sts.RecvRtpBin); err != nil {
 		return fmt.Errorf("failed to link rtpbin to sip chain: %w", err)
 	}
 
 	if err := addlinkChain(sts.Pipeline,
-		sts.Vp8Depay,
+		sts.RtpInputSelector,
 		sts.Vp8Dec,
 		sts.VideoConvert,
 		sts.VideoScale,
@@ -241,45 +240,109 @@ func (sts *SelectorToSip) Link() error {
 		return fmt.Errorf("failed to link selector to sip chain: %w", err)
 	}
 
-	if err := addlinkChain(sts.Pipeline, sts.WebrtcRtcpSink); err != nil {
+	if err := addlinkChain(sts.Pipeline,
+		sts.RtcpFunnel,
+		sts.WebrtcRtcpSink,
+	); err != nil {
 		return fmt.Errorf("failed to link selector to sip chain: %w", err)
 	}
 
-	if _, err := sts.RtpBin.Connect("pad-added", func(rtpBin *gst.Element, pad *gst.Pad) {
+	if _, err := sts.RecvRtpBin.Connect("pad-added", func(rtpBin *gst.Element, pad *gst.Pad) {
 		fmt.Printf("WEBRTC RTPBIN PAD ADDED: %s\n", pad.GetName())
-		if !strings.HasPrefix(pad.GetName(), "recv_rtp_src_0_") {
+		padName := pad.GetName()
+		if !strings.HasPrefix(padName, "recv_rtp_src_") {
 			return
 		}
+
+		var sessionID, ssrc, pt uint64
+		if _, err := fmt.Sscanf(padName, "recv_rtp_src_%d_%d_%d", &sessionID, &ssrc, &pt); err != nil {
+			fmt.Printf("failed to parse session id from rtpbin pad name %s: %v\n", padName, err)
+			return
+		}
+		fmt.Printf("Parsed sessionID=%d, ssrc=%d, pt=%d from pad %s\n", sessionID, ssrc, pt, padName)
+		webrtcToSelector, exists := sts.WebrtcToSelectors[sessionID]
+		if !exists {
+			fmt.Printf("no webrtc to selector found for session id %d\n", sessionID)
+			return
+		}
+
 		if err := linkPad(
 			pad,
-			sts.Vp8Depay.GetStaticPad("sink"),
+			webrtcToSelector.RtpVp8Depay.GetStaticPad("sink"),
 		); err != nil {
-			fmt.Printf("failed to link webrtc rtp src to appsink: %v\n", err)
+			fmt.Printf("failed to link webrtc rtp src to vp8 depay: %v\n", err)
+			return
 		}
+		// if err := linkPad(
+		// 	webrtcToSelector.RtpQueue.GetStaticPad("src"),
+		// 	sts.RtpInputSelector.GetRequestPad(fmt.Sprintf("sink_%d", sessionID)),
+		// ); err != nil {
+		// 	fmt.Printf("failed to link webrtc rtp src to appsink: %v\n", err)
+		// 	return
+		// }
+		// if err := linkPad(
+		// 	sts.RtpBin.GetRequestPad(fmt.Sprintf("send_rtcp_src_%d", sessionID)),
+		// 	sts.RtcpFunnel.GetRequestPad(fmt.Sprintf("sink_%d", sessionID)),
+		// ); err != nil {
+		// 	fmt.Printf("failed to link rtpbin rtcp src to sip sink: %v\n", err)
+		// 	return
+		// }
 	}); err != nil {
 		return fmt.Errorf("failed to link selector to sip chain: %w", err)
 	}
 
-	if err := linkPad(
-		sts.RtpInputSelector.GetStaticPad("src"),
-		sts.RtpBin.GetRequestPad("recv_rtp_sink_0"),
-	); err != nil {
-		return fmt.Errorf("failed to link webrtc input-selector to rtpbin recv pad: %w", err)
-	}
+	// if _, err := sts.RtpInputSelector.Connect("notify::active-pad", func(sel *gst.Element, pspec *glib.ParamSpec) {
+	// 	activePadP, err := sel.GetProperty("active-pad")
+	// 	if err != nil {
+	// 		fmt.Printf("failed to get active pad from input-selector: %v\n", err)
+	// 		return
+	// 	}
+	// 	activePad, ok := activePadP.(*gst.Pad)
+	// 	if !ok {
+	// 		fmt.Println("input-selector active-pad is not a pad")
+	// 		return
+	// 	}
+	// 	fmt.Println("Input-selector switched to pad:", activePad.GetName())
+	// }); err != nil {
+	// 	return fmt.Errorf("failed to connect to input-selector notify::active-pad: %w", err)
+	// }
 
-	if err := linkPad(
-		sts.RtcpFunnel.GetStaticPad("src"),
-		sts.RtpBin.GetRequestPad("recv_rtcp_sink_0"),
-	); err != nil {
-		return fmt.Errorf("failed to link webrtc rtcp src to rtpbin recv pad: %w", err)
-	}
+	// if _, err := sts.RtpBin.Connect("pad-added", func(rtpBin *gst.Element, pad *gst.Pad) {
+	// 	fmt.Printf("WEBRTC RTPBIN PAD ADDED: %s\n", pad.GetName())
+	// 	if pad.GetName() == "send_rtp_src_0" {
+	// 		return
+	// 	}
+	// 	if err := linkPad(
+	// 		pad,
+	// 		sts.RtpFunnel.GetRequestPad("sink_%u"),
+	// 	); err != nil {
+	// 		fmt.Printf("failed to link webrtc rtp src to appsink: %v\n", err)
+	// 		return
+	// 	}
+	// }); err != nil {
+	// 	return fmt.Errorf("failed to link selector to sip chain: %w", err)
+	// }
 
-	if err := linkPad(
-		sts.RtpBin.GetRequestPad("send_rtcp_src_0"),
-		sts.WebrtcRtcpSink.GetStaticPad("sink"),
-	); err != nil {
-		return fmt.Errorf("failed to link rtpbin rtcp src to sip sink: %w", err)
-	}
+	// if err := linkPad(
+	// 	sts.RtpInputSelector.GetStaticPad("src"),
+	// 	sts.RtpBin.GetRequestPad("recv_rtp_sink_0"),
+	// ); err != nil {
+	// 	return fmt.Errorf("failed to link webrtc input-selector to rtpbin recv pad: %w", err)
+	// }
+
+	// if err := linkPad(
+	// 	sts.RtcpFunnel.GetStaticPad("src"),
+	// 	sts.RtpBin.GetRequestPad("recv_rtcp_sink_0"),
+	// ); err != nil {
+	// 	return fmt.Errorf("failed to link webrtc rtcp src to rtpbin recv pad: %w", err)
+	// }
+
+	// if err := linkPad(
+	// 	sts.RtpBin.GetRequestPad("send_rtcp_src_0"),
+	// 	sts.WebrtcRtcpSink.GetStaticPad("sink"),
+	// ); err != nil {
+	// 	return fmt.Errorf("failed to link rtpbin rtcp src to sip sink: %w", err)
+	// }
 
 	return nil
 }
@@ -300,20 +363,23 @@ func (sts *SelectorToSip) AddWebRTCSourceToSelector(srcID string) (*WebrtcToSele
 		return nil, fmt.Errorf("pipeline must be in playing, ready, or paused state to add source, current state: %s", state.String())
 	}
 
-	if _, exists := sts.WebrtcToSelectors[srcID]; exists {
-		return nil, fmt.Errorf("webrtc source with id %s already exists", srcID)
+	sessionID := sts.idCounter.Add(1)
+	sts.SrcIDToSessionID[srcID] = sessionID
+
+	if _, exists := sts.WebrtcToSelectors[sessionID]; exists {
+		return nil, fmt.Errorf("webrtc source with id %d already exists", sessionID)
 	}
 
-	webRTCToSelector, err := buildWebRTCToSelectorChain(srcID)
+	webRTCToSelector, err := buildWebRTCToSelectorChain(sessionID)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := webRTCToSelector.link(sts.Pipeline, sts.RtpInputSelector, sts.RtcpFunnel); err != nil {
+	if err := webRTCToSelector.link(sts); err != nil {
 		return nil, err
 	}
 
-	sts.WebrtcToSelectors[srcID] = webRTCToSelector
+	sts.WebrtcToSelectors[sessionID] = webRTCToSelector
 
 	if err := sts.ensureActiveSource(); err != nil {
 		return nil, fmt.Errorf("failed to ensure active source after adding new source: %w", err)
@@ -340,7 +406,12 @@ func (sts *SelectorToSip) switchWebRTCSelectorSource(srcID string) error {
 		return fmt.Errorf("pipeline must be in playing, paused, or ready state to switch source, current state: %s", state.String())
 	}
 
-	webrtcToSelector, exists := sts.WebrtcToSelectors[srcID]
+	sessionID, ok := sts.SrcIDToSessionID[srcID]
+	if !ok {
+		return fmt.Errorf("no session id found for source id %s", srcID)
+	}
+
+	webrtcToSelector, exists := sts.WebrtcToSelectors[sessionID]
 	if !exists {
 		return fmt.Errorf("webrtc source with id %s does not exist", srcID)
 	}
@@ -348,9 +419,41 @@ func (sts *SelectorToSip) switchWebRTCSelectorSource(srcID string) error {
 	sel := sts.RtpInputSelector
 	selPad := webrtcToSelector.WebrtcRtpSelectorPad
 
-	if err := sel.SetProperty("active-pad", selPad); err != nil {
-		return fmt.Errorf("failed to set active pad on selector: %w", err)
+	done := make(chan struct{})
+	go selPad.AddProbe(gst.PadProbeTypeBuffer|gst.PadProbeTypeBlock, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+		buf := info.GetBuffer()
+		if buf == nil {
+			fmt.Println("Buffer is nil, continuing to wait for keyframe")
+			return gst.PadProbeOK
+		}
+
+		if !buf.HasFlags(gst.BufferFlagDeltaUnit) {
+			fmt.Println("Got a keyframe!")
+			sel.SetProperty("active-pad", selPad)
+			close(done)
+			return gst.PadProbeRemove
+		}
+		fmt.Println("Not a keyframe, waiting...")
+		return gst.PadProbeOK
+	})
+
+	sinkPad := webrtcToSelector.RtpVp8Depay.GetStaticPad("sink")
+	structure := gst.NewStructure("GstForceKeyUnit")
+	structure.SetValue("all-headers", true)
+	event := gst.NewCustomEvent(gst.EventTypeCustomUpstream, structure)
+	fmt.Println("Sending force key unit event to webrtc source")
+	if !sinkPad.SendEvent(event) {
+		fmt.Println("Failed to send force key unit event to webrtc source")
+		return errors.New("failed to send force key unit event to webrtc source")
+	} else {
+		fmt.Println("Sent force key unit event to webrtc source")
 	}
+
+	<-done
+
+	// if err := sel.SetProperty("active-pad", selPad); err != nil {
+	// 	return fmt.Errorf("failed to set active pad on selector: %w", err)
+	// }
 
 	return nil
 }
@@ -363,7 +466,12 @@ func (sts *SelectorToSip) RemoveWebRTCSourceFromSelector(srcID string) error {
 		return nil
 	}
 
-	webrtcToSelector, exists := sts.WebrtcToSelectors[srcID]
+	sessionID, ok := sts.SrcIDToSessionID[srcID]
+	if !ok {
+		return fmt.Errorf("no session id found for source id %s", srcID)
+	}
+
+	webrtcToSelector, exists := sts.WebrtcToSelectors[sessionID]
 	if !exists {
 		return fmt.Errorf("webrtc source with id %s does not exist", srcID)
 	}
@@ -372,7 +480,8 @@ func (sts *SelectorToSip) RemoveWebRTCSourceFromSelector(srcID string) error {
 		return fmt.Errorf("failed to close webrtc to selector chain: %w", err)
 	}
 
-	delete(sts.WebrtcToSelectors, srcID)
+	delete(sts.WebrtcToSelectors, sessionID)
+	delete(sts.SrcIDToSessionID, srcID)
 
 	if err := sts.ensureActiveSource(); err != nil {
 		return fmt.Errorf("failed to ensure active source after removing source: %w", err)
