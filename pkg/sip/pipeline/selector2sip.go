@@ -1,10 +1,10 @@
 package pipeline
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/app"
@@ -15,6 +15,7 @@ type SelectorToSip struct {
 	WebrtcToSelectors map[uint64]*WebrtcToSelector
 	SrcIDToSessionID  map[string]uint64
 	idCounter         atomic.Uint64
+	currentActiveSrcID string // Track the currently active source to prevent redundant switches
 
 	RecvRtpBin       *gst.Element
 	RtpInputSelector *gst.Element
@@ -248,31 +249,45 @@ func (sts *SelectorToSip) Link() error {
 	}
 
 	if _, err := sts.RecvRtpBin.Connect("pad-added", func(rtpBin *gst.Element, pad *gst.Pad) {
-		fmt.Printf("WEBRTC RTPBIN PAD ADDED: %s\n", pad.GetName())
 		padName := pad.GetName()
+		fmt.Printf("[%s] ====== WEBRTC RTPBIN PAD ADDED: %s ======\n", time.Now().Format("15:04:05.000"), padName)
+
+		// Only process recv_rtp_src pads (RTP output from rtpbin)
+		// Ignore sink pads and RTCP pads
 		if !strings.HasPrefix(padName, "recv_rtp_src_") {
+			fmt.Printf("[%s] Ignoring non-RTP-source pad: %s\n", time.Now().Format("15:04:05.000"), padName)
 			return
 		}
 
 		var sessionID, ssrc, pt uint64
-		if _, err := fmt.Sscanf(padName, "recv_rtp_src_%d_%d_%d", &sessionID, &ssrc, &pt); err != nil {
-			fmt.Printf("failed to parse session id from rtpbin pad name %s: %v\n", padName, err)
+		n, err := fmt.Sscanf(padName, "recv_rtp_src_%d_%d_%d", &sessionID, &ssrc, &pt)
+		if err != nil || n != 3 {
+			fmt.Printf("[%s] ERROR: Failed to parse rtpbin pad name %s: %v (matched %d fields)\n", time.Now().Format("15:04:05.000"), padName, err, n)
 			return
 		}
-		fmt.Printf("Parsed sessionID=%d, ssrc=%d, pt=%d from pad %s\n", sessionID, ssrc, pt, padName)
+		fmt.Printf("[%s] Parsed: sessionID=%d, ssrc=%d, pt=%d from pad %s\n", time.Now().Format("15:04:05.000"), sessionID, ssrc, pt, padName)
+
 		webrtcToSelector, exists := sts.WebrtcToSelectors[sessionID]
 		if !exists {
-			fmt.Printf("no webrtc to selector found for session id %d\n", sessionID)
+			fmt.Printf("[%s] ERROR: No WebRTC source found for session ID %d\n", time.Now().Format("15:04:05.000"), sessionID)
+			fmt.Printf("[%s] Available sessions: ", time.Now().Format("15:04:05.000"))
+			for sid := range sts.WebrtcToSelectors {
+				fmt.Printf("%d ", sid)
+			}
+			fmt.Println()
 			return
 		}
 
-		if err := linkPad(
-			pad,
-			webrtcToSelector.RtpVp8Depay.GetStaticPad("sink"),
-		); err != nil {
-			fmt.Printf("failed to link webrtc rtp src to vp8 depay: %v\n", err)
+		depayPad := webrtcToSelector.RtpVp8Depay.GetStaticPad("sink")
+		fmt.Printf("[%s] Linking rtpbin pad %s to depay pad %s\n", time.Now().Format("15:04:05.000"), padName, depayPad.GetName())
+
+		if err := linkPad(pad, depayPad); err != nil {
+			fmt.Printf("[%s] ERROR: Failed to link pads: %v\n", time.Now().Format("15:04:05.000"), err)
 			return
 		}
+
+		fmt.Printf("[%s] ✓ Successfully linked session %d (SSRC %d) to VP8 depayloader\n", time.Now().Format("15:04:05.000"), sessionID, ssrc)
+
 		// if err := linkPad(
 		// 	webrtcToSelector.RtpQueue.GetStaticPad("src"),
 		// 	sts.RtpInputSelector.GetRequestPad(fmt.Sprintf("sink_%d", sessionID)),
@@ -381,7 +396,7 @@ func (sts *SelectorToSip) AddWebRTCSourceToSelector(srcID string) (*WebrtcToSele
 
 	sts.WebrtcToSelectors[sessionID] = webRTCToSelector
 
-	if err := sts.ensureActiveSource(); err != nil {
+	if _, err := sts.ensureActiveSource(); err != nil {
 		return nil, fmt.Errorf("failed to ensure active source after adding new source: %w", err)
 	}
 
@@ -399,6 +414,12 @@ func (sts *SelectorToSip) switchWebRTCSelectorSource(srcID string) error {
 		return fmt.Errorf("pipeline is closed")
 	}
 
+	// Check if we're already on this source to avoid redundant switches
+	if sts.currentActiveSrcID == srcID {
+		fmt.Printf("[%s] ⏭️  Skipping switch to %s - already active\n", time.Now().Format("15:04:05.000"), srcID)
+		return nil
+	}
+
 	state := sts.Pipeline.GetCurrentState()
 	switch state {
 	case gst.StatePlaying, gst.StatePaused, gst.StateReady:
@@ -408,52 +429,50 @@ func (sts *SelectorToSip) switchWebRTCSelectorSource(srcID string) error {
 
 	sessionID, ok := sts.SrcIDToSessionID[srcID]
 	if !ok {
+		fmt.Printf("[%s] ERROR: No session ID found for source %s\n", time.Now().Format("15:04:05.000"), srcID)
+		fmt.Printf("[%s] Available source mappings:\n", time.Now().Format("15:04:05.000"))
+		for sid, sessID := range sts.SrcIDToSessionID {
+			fmt.Printf("  %s → session %d\n", sid, sessID)
+		}
 		return fmt.Errorf("no session id found for source id %s", srcID)
 	}
 
 	webrtcToSelector, exists := sts.WebrtcToSelectors[sessionID]
 	if !exists {
+		fmt.Printf("[%s] ERROR: WebRTC source with session ID %d does not exist\n", time.Now().Format("15:04:05.000"), sessionID)
 		return fmt.Errorf("webrtc source with id %s does not exist", srcID)
 	}
+
+	fmt.Printf("[%s] === Switching active speaker to source %s (session %d) ===\n", time.Now().Format("15:04:05.000"), srcID, sessionID)
 
 	sel := sts.RtpInputSelector
 	selPad := webrtcToSelector.WebrtcRtpSelectorPad
 
-	done := make(chan struct{})
-	go selPad.AddProbe(gst.PadProbeTypeBuffer|gst.PadProbeTypeBlock, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+	// Install non-blocking probe that switches on next keyframe
+	// This allows the pipeline to continue flowing while waiting for keyframe
+	go selPad.AddProbe(gst.PadProbeTypeBuffer, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
 		buf := info.GetBuffer()
 		if buf == nil {
-			fmt.Println("Buffer is nil, continuing to wait for keyframe")
-			return gst.PadProbeOK
+			return gst.PadProbePass
 		}
 
+		// Check if this is a keyframe (non-delta frame)
 		if !buf.HasFlags(gst.BufferFlagDeltaUnit) {
-			fmt.Println("Got a keyframe!")
-			sel.SetProperty("active-pad", selPad)
-			close(done)
+			fmt.Printf("[%s] Got keyframe from source %s (session %d), switching selector\n", time.Now().Format("15:04:05.000"), srcID, sessionID)
+			if err := sel.SetProperty("active-pad", selPad); err != nil {
+				fmt.Printf("[%s] ERROR: Failed to set active pad: %v\n", time.Now().Format("15:04:05.000"), err)
+			} else {
+				fmt.Printf("[%s] Successfully switched to source %s (session %d)\n", time.Now().Format("15:04:05.000"), srcID, sessionID)
+				sts.currentActiveSrcID = srcID // Update current active source
+			}
 			return gst.PadProbeRemove
 		}
-		fmt.Println("Not a keyframe, waiting...")
-		return gst.PadProbeOK
+		return gst.PadProbePass
 	})
 
-	sinkPad := webrtcToSelector.RtpVp8Depay.GetStaticPad("sink")
-	structure := gst.NewStructure("GstForceKeyUnit")
-	structure.SetValue("all-headers", true)
-	event := gst.NewCustomEvent(gst.EventTypeCustomUpstream, structure)
-	fmt.Println("Sending force key unit event to webrtc source")
-	if !sinkPad.SendEvent(event) {
-		fmt.Println("Failed to send force key unit event to webrtc source")
-		return errors.New("failed to send force key unit event to webrtc source")
-	} else {
-		fmt.Println("Sent force key unit event to webrtc source")
-	}
-
-	<-done
-
-	// if err := sel.SetProperty("active-pad", selPad); err != nil {
-	// 	return fmt.Errorf("failed to set active pad on selector: %w", err)
-	// }
+	fmt.Printf("[%s] Installed keyframe probe for source %s (session %d), waiting for keyframe...\n", time.Now().Format("15:04:05.000"), srcID, sessionID)
+	// NOTE: Keyframe request should be sent via LiveKit SDK before calling this function
+	// The probe will automatically switch when a keyframe arrives
 
 	return nil
 }
@@ -476,6 +495,43 @@ func (sts *SelectorToSip) RemoveWebRTCSourceFromSelector(srcID string) error {
 		return fmt.Errorf("webrtc source with id %s does not exist", srcID)
 	}
 
+	fmt.Printf("[%s] === Removing WebRTC source: %s (session %d) ===\n", time.Now().Format("15:04:05.000"), srcID, sessionID)
+
+	// Check if we're removing the currently active source
+	sel := sts.RtpInputSelector
+	activePadObj, err := sel.GetProperty("active-pad")
+	isActiveSource := false
+	if err == nil && activePadObj != nil {
+		if activePad, ok := activePadObj.(*gst.Pad); ok {
+			// Compare the active pad with the pad being removed
+			if activePad == webrtcToSelector.WebrtcRtpSelectorPad {
+				isActiveSource = true
+				fmt.Printf("[%s] ⚠️  Removing ACTIVE source %s (session %d), need to switch to another participant\n", time.Now().Format("15:04:05.000"), srcID, sessionID)
+			}
+		}
+	}
+
+	// If removing active source, switch to another one BEFORE removing
+	if isActiveSource && len(sts.WebrtcToSelectors) > 1 {
+		fmt.Printf("[%s] Switching to another source before removal...\n", time.Now().Format("15:04:05.000"))
+		// Find another source to switch to
+		for otherSrcID, otherSessionID := range sts.SrcIDToSessionID {
+			if otherSessionID != sessionID {
+				fmt.Printf("[%s] Switching to source %s (session %d)\n", time.Now().Format("15:04:05.000"), otherSrcID, otherSessionID)
+				// Switch immediately without waiting for keyframe since we're about to lose video anyway
+				if otherSelector, ok := sts.WebrtcToSelectors[otherSessionID]; ok {
+					if err := sel.SetProperty("active-pad", otherSelector.WebrtcRtpSelectorPad); err != nil {
+						fmt.Printf("[%s] ERROR: Failed to switch to alternate source: %v\n", time.Now().Format("15:04:05.000"), err)
+					} else {
+						fmt.Printf("[%s] ✓ Switched to alternate source %s (session %d)\n", time.Now().Format("15:04:05.000"), otherSrcID, otherSessionID)
+						sts.currentActiveSrcID = otherSrcID // Update current active source
+					}
+				}
+				break
+			}
+		}
+	}
+
 	if err := webrtcToSelector.Close(sts.Pipeline); err != nil {
 		return fmt.Errorf("failed to close webrtc to selector chain: %w", err)
 	}
@@ -483,39 +539,128 @@ func (sts *SelectorToSip) RemoveWebRTCSourceFromSelector(srcID string) error {
 	delete(sts.WebrtcToSelectors, sessionID)
 	delete(sts.SrcIDToSessionID, srcID)
 
-	if err := sts.ensureActiveSource(); err != nil {
+	fmt.Printf("[%s] ✓ Removed source %s (session %d), %d sources remaining\n", time.Now().Format("15:04:05.000"), srcID, sessionID, len(sts.WebrtcToSelectors))
+
+	// Ensure there's still an active source
+	newActiveSrcID, err := sts.ensureActiveSource()
+	if err != nil {
 		return fmt.Errorf("failed to ensure active source after removing source: %w", err)
+	}
+
+	// If we switched to a new source, we need to trigger it (caller should request keyframe)
+	if newActiveSrcID != "" {
+		fmt.Printf("[%s] 📢 Switched to new active source: %s (caller should request keyframe)\n", time.Now().Format("15:04:05.000"), newActiveSrcID)
 	}
 
 	return nil
 }
 
-func (sts *SelectorToSip) ensureActiveSource() error {
+func (sts *SelectorToSip) ensureActiveSource() (string, error) {
 	if sts.Closed() {
-		return nil
+		return "", nil
 	}
 
 	sel := sts.RtpInputSelector
-	activePad, err := sel.GetProperty("active-pad")
+	activePadObj, err := sel.GetProperty("active-pad")
 	if err != nil {
-		return fmt.Errorf("failed to get active pad from selector: %w", err)
+		return "", fmt.Errorf("failed to get active pad from selector: %w", err)
 	}
-	if activePad != nil {
-		pad, ok := activePad.(*gst.Pad)
-		if ok && pad.GetParentElement() != nil {
-			return nil
+
+	// Check if current active pad is valid
+	hasValidActivePad := false
+	if activePadObj != nil {
+		if pad, ok := activePadObj.(*gst.Pad); ok && pad != nil {
+			// Check if this pad still belongs to an existing source
+			for _, webrtcToSelector := range sts.WebrtcToSelectors {
+				if pad == webrtcToSelector.WebrtcRtpSelectorPad {
+					hasValidActivePad = true
+					fmt.Printf("[%s] Current active pad is valid (session %d)\n", time.Now().Format("15:04:05.000"), webrtcToSelector.ID)
+					break
+				}
+			}
 		}
 	}
 
-	for _, webrtcToSelector := range sts.WebrtcToSelectors {
+	if hasValidActivePad {
+		return "", nil // No change needed
+	}
+
+	// No valid active pad, pick the first available source
+	fmt.Printf("[%s] No valid active source, selecting from %d available sources\n", time.Now().Format("15:04:05.000"), len(sts.WebrtcToSelectors))
+	for srcID, sessionID := range sts.SrcIDToSessionID {
+		webrtcToSelector, ok := sts.WebrtcToSelectors[sessionID]
+		if !ok {
+			continue
+		}
 		selPad := webrtcToSelector.WebrtcRtpSelectorPad
 		if selPad != nil {
-			if err := sel.SetProperty("active-pad", selPad); err != nil {
-				return fmt.Errorf("failed to set active pad on selector: %w", err)
-			}
-			return nil
+			startTime := time.Now()
+			fmt.Printf("[%s] Auto-selecting source %s (session %d) as active\n", startTime.Format("15:04:05.000"), srcID, sessionID)
+
+			// Use the SAME mechanism as manual switching - wait for keyframe before switching
+			// This ensures smooth transitions just like when switching between 2 participants
+			fmt.Printf("[%s] Installing keyframe probe for auto-selected source %s (session %d), waiting for keyframe...\n", time.Now().Format("15:04:05.000"), srcID, sessionID)
+
+			frameCount := 0
+			switched := false
+
+			// Add timeout: if no keyframe arrives within 1 second, switch anyway
+			go func() {
+				time.Sleep(1 * time.Second)
+				if !switched {
+					elapsed := time.Since(startTime).Milliseconds()
+					fmt.Printf("[%s] ⚠️  Timeout: No keyframe received after %dms, switching anyway to avoid black screen\n",
+						time.Now().Format("15:04:05.000"), elapsed)
+					if err := sel.SetProperty("active-pad", selPad); err != nil {
+						fmt.Printf("[%s] ERROR: Failed to set active pad on selector: %v\n", time.Now().Format("15:04:05.000"), err)
+					} else {
+						fmt.Printf("[%s] ✓ Active source set to %s (session %d) (timeout fallback)\n", time.Now().Format("15:04:05.000"), srcID, sessionID)
+						sts.currentActiveSrcID = srcID // Update current active source
+					}
+					switched = true
+				}
+			}()
+
+			go selPad.AddProbe(gst.PadProbeTypeBuffer, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+				buf := info.GetBuffer()
+				if buf == nil {
+					return gst.PadProbePass
+				}
+
+				frameCount++
+				isKeyframe := !buf.HasFlags(gst.BufferFlagDeltaUnit)
+
+				// Log every frame for first 10 frames or until keyframe
+				if frameCount <= 10 || isKeyframe {
+					elapsed := time.Since(startTime).Milliseconds()
+					fmt.Printf("[%s] Frame %d from %s: keyframe=%v (elapsed: %dms)\n",
+						time.Now().Format("15:04:05.000"), frameCount, srcID, isKeyframe, elapsed)
+				}
+
+				// Check if this is a keyframe (non-delta frame)
+				if isKeyframe && !switched {
+					switched = true
+					elapsed := time.Since(startTime).Milliseconds()
+					fmt.Printf("[%s] ✓ Keyframe received from auto-selected source %s (session %d) after %dms and %d frames, switching selector\n",
+						time.Now().Format("15:04:05.000"), srcID, sessionID, elapsed, frameCount)
+					if err := sel.SetProperty("active-pad", selPad); err != nil {
+						fmt.Printf("[%s] ERROR: Failed to set active pad on selector: %v\n", time.Now().Format("15:04:05.000"), err)
+					} else {
+						fmt.Printf("[%s] ✓ Active source set to %s (session %d)\n", time.Now().Format("15:04:05.000"), srcID, sessionID)
+						sts.currentActiveSrcID = srcID // Update current active source
+					}
+					return gst.PadProbeRemove
+				}
+				return gst.PadProbePass
+			})
+
+			return srcID, nil // Return the newly selected source ID
 		}
 	}
 
-	return nil
+	if len(sts.WebrtcToSelectors) > 0 {
+		fmt.Printf("[%s] ⚠️  Warning: No valid selector pads found among %d sources\n", time.Now().Format("15:04:05.000"), len(sts.WebrtcToSelectors))
+	}
+
+	return "", nil
 }

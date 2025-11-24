@@ -3,6 +3,7 @@ package sip
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
 	"github.com/livekit/protocol/logger"
@@ -33,15 +34,18 @@ func NewMediaOrchestrator(log logger.Logger, inbound *sipInbound, room *Room, op
 	}
 	o.camera = camera
 	o.room.OnCameraTrack(func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
+		fmt.Printf("[%s] 📹 Camera track added for participant %s\n", time.Now().Format("15:04:05.000"), rp.SID())
 		ti := NewTrackInput(track, pub, rp)
-		o.camera.WebrtcTrackInput(ti, rp.SID())
+		o.camera.WebrtcTrackInput(ti, rp.SID(), rp)
 	})
 	o.room.OnActiveSpeakersChanged(func(p []lksdk.Participant) {
 		if len(p) == 0 {
 			o.log.Warnw("no active speakers found", nil)
+			fmt.Printf("[%s] ⚠️  No active speakers found\n", time.Now().Format("15:04:05.000"))
 			return
 		}
 		sid := p[0].SID()
+		fmt.Printf("[%s] 🎤 Active speaker changed to: %s\n", time.Now().Format("15:04:05.000"), sid)
 		o.camera.SwitchActiveWebrtcTrack(sid)
 	})
 

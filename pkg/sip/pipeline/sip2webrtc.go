@@ -2,6 +2,8 @@ package pipeline
 
 import (
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/app"
@@ -252,15 +254,24 @@ func (stw *SipToWebrtc) Link() error {
 	}
 
 	if _, err := stw.RtpBin.Connect("pad-added", func(rtpBin *gst.Element, pad *gst.Pad) {
-		fmt.Printf("SIP RTPBIN PAD ADDED: %s\n", pad.GetName())
-		if pad.GetName() == "send_rtp_src_0" {
+		padName := pad.GetName()
+		fmt.Printf("[%s] SIP RTPBIN PAD ADDED: %s\n", time.Now().Format("15:04:05.000"), padName)
+
+		// Only link recv_rtp_src pads (these are the RTP stream output pads from rtpbin)
+		// Ignore sink pads (recv_rtp_sink, recv_rtcp_sink) and RTCP src pads (send_rtcp_src)
+		if !strings.HasPrefix(padName, "recv_rtp_src_") {
+			fmt.Printf("[%s] Ignoring non-RTP-source pad: %s\n", time.Now().Format("15:04:05.000"), padName)
 			return
 		}
+
+		fmt.Printf("[%s] Linking rtpbin RTP source pad %s to H264 depayloader\n", time.Now().Format("15:04:05.000"), padName)
 		if err := linkPad(
 			pad,
 			stw.Depay.GetStaticPad("sink"),
 		); err != nil {
-			fmt.Printf("failed to link rtpbin src to depay sink: %v\n", err)
+			fmt.Printf("[%s] ERROR: failed to link rtpbin src to depay sink: %v\n", time.Now().Format("15:04:05.000"), err)
+		} else {
+			fmt.Printf("[%s] Successfully linked %s to depayloader\n", time.Now().Format("15:04:05.000"), padName)
 		}
 	}); err != nil {
 		return fmt.Errorf("failed to link rtpbin recv pad to depay: %w", err)

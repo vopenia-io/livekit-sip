@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"time"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
@@ -13,8 +14,11 @@ import (
 	mrtp "github.com/livekit/media-sdk/rtp"
 	sdpv1 "github.com/livekit/media-sdk/sdp"
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
+	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
+	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/livekit/sip/pkg/sip/pipeline"
+	"github.com/pion/webrtc/v4"
 )
 
 var mainLoop *glib.MainLoop
@@ -43,13 +47,14 @@ func NewVideoManager(log logger.Logger, room *Room, opts *MediaOptions) (*VideoM
 	}
 
 	v := &VideoManager{
-		VideoIO:  NewVideoIO(),
-		log:      log,
-		room:     room,
-		opts:     opts,
-		rtpConn:  newUDPConn(log.WithComponent("video-rtp"), rtpConn),
-		rtcpConn: newUDPConn(log.WithComponent("video-rtcp"), rtcpConn),
-		status:   VideoStatusStopped,
+		VideoIO:      NewVideoIO(),
+		log:          log,
+		room:         room,
+		opts:         opts,
+		rtpConn:      newUDPConn(log.WithComponent("video-rtp"), rtpConn),
+		rtcpConn:     newUDPConn(log.WithComponent("video-rtcp"), rtcpConn),
+		status:       VideoStatusStopped,
+		participants: make(map[string]*lksdk.RemoteParticipant),
 	}
 
 	v.log.Infow("video manager created")
@@ -59,17 +64,19 @@ func NewVideoManager(log logger.Logger, room *Room, opts *MediaOptions) (*VideoM
 
 type VideoManager struct {
 	*VideoIO
-	mu       sync.Mutex
-	log      logger.Logger
-	opts     *MediaOptions
-	room     *Room
-	rtpConn  *udpConn
-	rtcpConn *udpConn
-	pipeline *pipeline.GstPipeline
-	codec    *sdpv2.Codec
-	recv     bool
-	send     bool
-	status   VideoStatus
+	mu                 sync.Mutex
+	log                logger.Logger
+	opts               *MediaOptions
+	room               *Room
+	rtpConn            *udpConn
+	rtcpConn           *udpConn
+	pipeline           *pipeline.GstPipeline
+	codec              *sdpv2.Codec
+	recv               bool
+	send               bool
+	status             VideoStatus
+	participants       map[string]*lksdk.RemoteParticipant // sid -> participant mapping
+	lastActiveSpeakers []string                             // circular buffer of last N active speakers (max 6)
 }
 
 type VideoIO struct {
@@ -112,7 +119,33 @@ func (v *VideoManager) RtcpPort() int {
 	return v.rtcpConn.LocalAddr().(*net.UDPAddr).Port
 }
 
-func (v *VideoManager) WebrtcTrackInput(ti *TrackInput, sid string) {
+// updateActiveSpeakerCache maintains a circular buffer of the last N active speakers
+// This helps us prioritize keyframe requests to the most likely candidates for switching
+func (v *VideoManager) updateActiveSpeakerCache(sid string) {
+	const maxActiveSpeakers = 6
+
+	// Check if already in cache
+	for i, s := range v.lastActiveSpeakers {
+		if s == sid {
+			// Move to end (most recent)
+			v.lastActiveSpeakers = append(v.lastActiveSpeakers[:i], v.lastActiveSpeakers[i+1:]...)
+			v.lastActiveSpeakers = append(v.lastActiveSpeakers, sid)
+			return
+		}
+	}
+
+	// Add new speaker
+	v.lastActiveSpeakers = append(v.lastActiveSpeakers, sid)
+
+	// Trim to max size
+	if len(v.lastActiveSpeakers) > maxActiveSpeakers {
+		v.lastActiveSpeakers = v.lastActiveSpeakers[len(v.lastActiveSpeakers)-maxActiveSpeakers:]
+	}
+
+	fmt.Printf("[%s] 📊 Active speakers cache updated: %v\n", time.Now().Format("15:04:05.000"), v.lastActiveSpeakers)
+}
+
+func (v *VideoManager) WebrtcTrackInput(ti *TrackInput, sid string, rp *lksdk.RemoteParticipant) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
@@ -122,13 +155,31 @@ func (v *VideoManager) WebrtcTrackInput(ti *TrackInput, sid string) {
 	}
 
 	v.log.Infow("WebRTC video track subscribed - connecting WebRTC→SIP pipeline",
+		"participant", sid,
 		"hasRtpIn", ti.RtpIn != nil,
 		"hasRtcpIn", ti.RtcpIn != nil)
+
+	// Store participant for keyframe requests
+	v.participants[sid] = rp
 
 	s, err := v.pipeline.AddWebRTCSourceToSelector(sid)
 	if err != nil {
 		v.log.Errorw("failed to add WebRTC source to selector", err)
 		return
+	}
+
+	// Request a keyframe immediately when participant joins to prime the pipeline
+	// This ensures we have a keyframe available if they become the active source
+	v.log.Infow("requesting initial keyframe from new participant", "participant", sid)
+	cameraPub := rp.GetTrackPublication(livekit.TrackSource_CAMERA)
+	if cameraPub != nil {
+		if track := cameraPub.Track(); track != nil {
+			if remoteTrack, ok := track.(*webrtc.TrackRemote); ok {
+				ssrc := remoteTrack.SSRC()
+				v.log.Infow("sending initial PLI request", "participant", sid, "ssrc", ssrc)
+				rp.WritePLI(webrtc.SSRC(ssrc))
+			}
+		}
 	}
 
 	webrtcRtpIn, err := NewGstWriter(s.WebrtcRtpAppSrc)
@@ -138,12 +189,70 @@ func (v *VideoManager) WebrtcTrackInput(ti *TrackInput, sid string) {
 	}
 	go func() {
 		Copy(webrtcRtpIn, ti.RtpIn)
+
+		v.log.Infow("participant track ended, cleaning up", "participant", sid)
+		fmt.Printf("[%s] 👋 Participant %s track ended\n", time.Now().Format("15:04:05.000"), sid)
+
+		// Request keyframe from recent active speakers BEFORE removing from map
+		// This scales better (6 requests vs potentially 40+) and targets likely-to-be-selected participants
+		v.mu.Lock()
+
+		// Build list of recent active speakers to request keyframes from (excluding the one leaving)
+		var speakersToRequest []string
+		for _, cachedSid := range v.lastActiveSpeakers {
+			if cachedSid != sid {
+				if _, exists := v.participants[cachedSid]; exists {
+					speakersToRequest = append(speakersToRequest, cachedSid)
+				}
+			}
+		}
+
+		// If no cached speakers (e.g., first participant leaving), fall back to all remaining participants
+		if len(speakersToRequest) == 0 && len(v.participants) > 1 {
+			for remainingSid := range v.participants {
+				if remainingSid != sid {
+					speakersToRequest = append(speakersToRequest, remainingSid)
+				}
+			}
+		}
+
+		v.log.Infow("participant left, requesting keyframes from recent active speakers", "removed", sid, "requesting_from", len(speakersToRequest))
+		fmt.Printf("[%s] 🎯 Participant %s left, requesting keyframes from %d recent active speakers: %v\n",
+			time.Now().Format("15:04:05.000"), sid, len(speakersToRequest), speakersToRequest)
+
+		for _, targetSid := range speakersToRequest {
+			participant, ok := v.participants[targetSid]
+			if !ok {
+				continue
+			}
+			cameraPub := participant.GetTrackPublication(livekit.TrackSource_CAMERA)
+			if cameraPub != nil {
+				if track := cameraPub.Track(); track != nil {
+					if remoteTrack, ok := track.(*webrtc.TrackRemote); ok {
+						ssrc := remoteTrack.SSRC()
+						v.log.Infow("requesting keyframe after participant departure", "participant", targetSid, "ssrc", ssrc)
+						fmt.Printf("[%s] 🔑 Sending PLI request to participant %s (SSRC: %d)\n", time.Now().Format("15:04:05.000"), targetSid, ssrc)
+						participant.WritePLI(webrtc.SSRC(ssrc))
+					}
+				}
+			}
+		}
+
+		// Now remove participant from tracking
+		delete(v.participants, sid)
+		v.mu.Unlock()
+
+		// Note: PLI requests sent above work well (keyframes arrive in ~50-100ms)
+		// The auto-selection mechanism in ensureActiveSource() will wait for keyframe using a probe
+		// just like manual active speaker switching does (see SwitchWebRTCSelectorSource)
+
+		// Remove source from pipeline (this may trigger auto-selection which waits for keyframe)
 		if err := v.pipeline.RemoveWebRTCSourceFromSelector(sid); err != nil {
 			v.log.Errorw("failed to remove WebRTC source from selector", err)
+			return
 		}
 	}()
 
-	// TODO: add webRTC RTCP input here
 	webrtcRtcpIn, err := NewGstWriter(s.WebrtcRtcpAppSrc)
 	if err != nil {
 		v.log.Errorw("failed to create WebRTC RTCP reader", err)
@@ -155,6 +264,36 @@ func (v *VideoManager) WebrtcTrackInput(ti *TrackInput, sid string) {
 func (v *VideoManager) SwitchActiveWebrtcTrack(sid string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+
+	v.log.Infow("switching active speaker", "participant", sid)
+
+	// Update active speaker cache to track recent speakers
+	v.updateActiveSpeakerCache(sid)
+
+	// Request keyframe from LiveKit before switching
+	participant, ok := v.participants[sid]
+	if !ok {
+		v.log.Warnw("participant not found for keyframe request", nil, "participant", sid)
+	} else {
+		// Get the camera track publication to find SSRC
+		cameraPub := participant.GetTrackPublication(livekit.TrackSource_CAMERA)
+		if cameraPub != nil {
+			if track := cameraPub.Track(); track != nil {
+				// Cast to webrtc.TrackRemote to get SSRC
+				if remoteTrack, ok := track.(*webrtc.TrackRemote); ok {
+					ssrc := remoteTrack.SSRC()
+					v.log.Infow("requesting keyframe via PLI", "participant", sid, "ssrc", ssrc)
+					participant.WritePLI(webrtc.SSRC(ssrc))
+				} else {
+					v.log.Warnw("track is not a remote track", nil, "participant", sid)
+				}
+			} else {
+				v.log.Warnw("camera track not available for keyframe request", nil, "participant", sid)
+			}
+		} else {
+			v.log.Warnw("camera track publication not found for keyframe request", nil, "participant", sid)
+		}
+	}
 
 	return v.pipeline.SwitchWebRTCSelectorSource(sid)
 }
