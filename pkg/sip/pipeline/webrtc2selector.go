@@ -35,14 +35,14 @@ var _ GstChain = (*WebrtcToSelector)(nil)
 
 func buildWebRTCToSelectorChain(parent *SelectorToSip, sid string) (*WebrtcToSelector, error) {
 	rtpBin, err := gst.NewElementWithProperties("rtpbin", map[string]interface{}{
-		// "autoremove":         true,
-		// "do-lost":            true,
-		// "do-sync-event":      true,
-		// "drop-on-latency":    true,
-		// "latency":            uint64(50),
-		// "ignore-pt":          true,
-		// "rtcp-sync-interval": uint64(1000000000), // 1s
-		// "rtp-profile":        int(3),             // RTP_PROFILE_AVPF
+		"autoremove":         true,
+		"do-lost":            true,
+		"do-sync-event":      true,
+		"drop-on-latency":    true,
+		"latency":            uint64(50),
+		"ignore-pt":          true,
+		"rtcp-sync-interval": uint64(1000000000), // 1s
+		"rtp-profile":        int(3),             // RTP_PROFILE_AVPF
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create SIP rtpbin: %w", err)
