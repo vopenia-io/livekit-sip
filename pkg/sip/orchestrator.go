@@ -38,11 +38,13 @@ func NewMediaOrchestrator(log logger.Logger, inbound *sipInbound, room *Room, op
 	})
 	o.room.OnActiveSpeakersChanged(func(p []lksdk.Participant) {
 		if len(p) == 0 {
-			o.log.Warnw("no active speakers found", nil)
+			o.log.Debugw("no active speakers found")
 			return
 		}
 		sid := p[0].SID()
-		o.camera.SwitchActiveWebrtcTrack(sid)
+		if err := o.camera.SwitchActiveWebrtcTrack(sid); err != nil {
+			o.log.Warnw("could not switch active webrtc track", err, "sid", sid)
+		}
 	})
 
 	return o, nil

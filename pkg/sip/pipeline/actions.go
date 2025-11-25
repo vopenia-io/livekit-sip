@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/go-gst/go-gst/gst"
 )
@@ -69,23 +70,33 @@ func (gp *GstPipeline) switchWebRTCSelectorSource(sid string) error {
 	sel := gp.RtpInputSelector
 	selPad := webrtcToSelector.RtpPad
 
-	// done := make(chan struct{})
-	// go selPad.AddProbe(gst.PadProbeTypeBuffer|gst.PadProbeTypeBlock, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
-	// 	buf := info.GetBuffer()
-	// 	if buf == nil {
-	// 		fmt.Println("Buffer is nil, continuing to wait for keyframe")
-	// 		return gst.PadProbeOK
-	// 	}
+	activeProp, err := sel.GetProperty("active-pad")
+	if err != nil || activeProp == nil {
+		return fmt.Errorf("failed to get active pad from selector: %w", err)
+	}
+	activePad, ok := activeProp.(*gst.Pad)
+	if !ok || activePad.GetParentElement() == nil {
+		return fmt.Errorf("active pad from selector is invalid")
+	}
 
-	// 	if !buf.HasFlags(gst.BufferFlagDeltaUnit) {
-	// 		fmt.Println("Got a keyframe!")
-	// 		sel.SetProperty("active-pad", selPad)
-	// 		close(done)
-	// 		return gst.PadProbeRemove
-	// 	}
-	// 	fmt.Println("Not a keyframe, waiting...")
-	// 	return gst.PadProbeOK
-	// })
+	done := make(chan struct{})
+	timeout := time.After(2 * time.Second)
+	probe := selPad.AddProbe(gst.PadProbeTypeBuffer, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+		buf := info.GetBuffer()
+		if buf == nil {
+			// fmt.Println("Buffer is nil, continuing to wait for keyframe")
+			return gst.PadProbePass
+		}
+
+		if !buf.HasFlags(gst.BufferFlagDeltaUnit) {
+			// fmt.Println("Got a keyframe!")
+			sel.SetProperty("active-pad", selPad)
+			close(done)
+			return gst.PadProbeRemove
+		}
+		// fmt.Println("Not a keyframe, waiting...")
+		return gst.PadProbePass
+	})
 
 	// sinkPad := webrtcToSelector.RtpVp8Depay.GetStaticPad("sink")
 	// if !sinkPad.IsLinked() {
@@ -104,30 +115,21 @@ func (gp *GstPipeline) switchWebRTCSelectorSource(sid string) error {
 	// 	fmt.Println("Sent force key unit event to webrtc source")
 	// }
 
-	// <-done
-
-	activeProp, err := sel.GetProperty("active-pad")
-	if err != nil || activeProp == nil {
-		return fmt.Errorf("failed to get active pad from selector: %w", err)
-	}
-	activePad, ok := activeProp.(*gst.Pad)
-	if !ok || activePad.GetParentElement() == nil {
-		return fmt.Errorf("active pad from selector is invalid")
+	select {
+	case <-timeout:
+		selPad.RemoveProbe(probe)
+		return fmt.Errorf("timeout waiting for keyframe on WebRTC source sid: %s", sid)
+	case <-done:
 	}
 
-	if activePad.GetName() == selPad.GetName() {
-		println("WebRTC selector source is already set to sid:", sid)
-		return nil
-	}
-
-	println("Switching active WebRTC selector source to sid:", sid)
+	// if activePad.GetName() == selPad.GetName() {
+	// 	println("WebRTC selector source is already set to sid:", sid)
+	// 	return nil
+	// }
 
 	if err := sel.SetProperty("active-pad", selPad); err != nil {
-		println("Failed to set active pad on selector for sid:", sid, "error:", err.Error())
 		return fmt.Errorf("failed to set active pad on selector: %w", err)
 	}
-
-	println("Switched active WebRTC selector source to sid:", sid)
 
 	return nil
 }

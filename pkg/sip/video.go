@@ -165,15 +165,11 @@ func (v *VideoManager) SwitchActiveWebrtcTrack(sid string) error {
 	if !ok {
 		return fmt.Errorf("no SSRC found for sid %s", sid)
 	}
-	v.log.Infow("switching active WebRTC video track", "sid", sid, "ssrc", ssrc)
+	v.log.Debugw("switching active WebRTC video track", "sid", sid, "ssrc", ssrc)
 
 	pli := &rtcp.PictureLossIndication{
 		MediaSSRC:  ssrc, // The track we want a keyframe for
 		SenderSSRC: 0,    // Your local SSRC (0 is usually acceptable if unknown)
-	}
-
-	if err := v.pipeline.SwitchWebRTCSelectorSource(sid); err != nil {
-		return fmt.Errorf("failed to switch WebRTC selector source: %w", err)
 	}
 
 	buf, err := pli.Marshal()
@@ -184,6 +180,10 @@ func (v *VideoManager) SwitchActiveWebrtcTrack(sid string) error {
 	_, err = v.webrtcRtcpOut.Write(buf)
 	if err != nil {
 		return fmt.Errorf("failed to send PLI RTCP packet: %w", err)
+	}
+
+	if err := v.pipeline.SwitchWebRTCSelectorSource(sid); err != nil {
+		return fmt.Errorf("failed to switch WebRTC selector source: %w", err)
 	}
 
 	return nil
