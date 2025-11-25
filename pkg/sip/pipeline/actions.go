@@ -106,6 +106,20 @@ func (gp *GstPipeline) switchWebRTCSelectorSource(sid string) error {
 
 	// <-done
 
+	activeProp, err := sel.GetProperty("active-pad")
+	if err != nil || activeProp == nil {
+		return fmt.Errorf("failed to get active pad from selector: %w", err)
+	}
+	activePad, ok := activeProp.(*gst.Pad)
+	if !ok || activePad.GetParentElement() == nil {
+		return fmt.Errorf("active pad from selector is invalid")
+	}
+
+	if activePad.GetName() == selPad.GetName() {
+		println("WebRTC selector source is already set to sid:", sid)
+		return nil
+	}
+
 	println("Switching active WebRTC selector source to sid:", sid)
 
 	if err := sel.SetProperty("active-pad", selPad); err != nil {

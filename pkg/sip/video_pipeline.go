@@ -20,7 +20,7 @@ func (v *VideoManager) SetupGstPipeline(media *sdpv2.SDPMedia) error {
 	if err != nil {
 		return fmt.Errorf("failed to create SIP WebRTC pipeline: %w", err)
 	}
-	pipeline.Monitor()
+	// pipeline.Monitor()
 
 	// setup SIP to WebRTC pipeline
 	// link rtp path

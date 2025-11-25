@@ -34,7 +34,7 @@ func NewMediaOrchestrator(log logger.Logger, inbound *sipInbound, room *Room, op
 	o.camera = camera
 	o.room.OnCameraTrack(func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
 		ti := NewTrackInput(track, pub, rp)
-		o.camera.WebrtcTrackInput(ti, rp.SID())
+		o.camera.WebrtcTrackInput(ti, rp.SID(), uint32(track.SSRC()))
 	})
 	o.room.OnActiveSpeakersChanged(func(p []lksdk.Participant) {
 		if len(p) == 0 {
