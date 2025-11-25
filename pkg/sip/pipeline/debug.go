@@ -3,6 +3,7 @@ package pipeline
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -11,28 +12,34 @@ import (
 
 var ErrPipielineNotRunning = fmt.Errorf("pipeline not running")
 
-func (b *basePipeline) debug() (string, string, gst.State, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+var runningTimeRegex = regexp.MustCompile(`running-time=\d+`)
 
-	state := b.Pipeline.GetCurrentState()
+func sanitizeDot(dot string) string {
+	return runningTimeRegex.ReplaceAllString(dot, "running-time=XXX")
+}
+
+func (gp *GstPipeline) debug() (string, string, gst.State, error) {
+	gp.mu.Lock()
+	defer gp.mu.Unlock()
+
+	state := gp.Pipeline.GetCurrentState()
 	if state == gst.StateNull {
 		return "", "", state, ErrPipielineNotRunning
 	}
 
-	dotData := b.Pipeline.DebugBinToDotData(gst.DebugGraphShowMediaType)
+	dotData := gp.Pipeline.DebugBinToDotData(gst.DebugGraphShowMediaType)
 
-	data, err := PipelineBranchesAsStrings(b.Pipeline)
+	data, err := PipelineBranchesAsStrings(gp.Pipeline)
 	if err != nil {
 		return "", "", state, fmt.Errorf("failed to get pipeline branches: %w", err)
 	}
 	debugOutput := strings.Join(data, "\n")
 
-	return dotData, debugOutput, state, nil
+	return sanitizeDot(dotData), debugOutput, state, nil
 }
 
-func (b *basePipeline) Monitor() {
-	name := b.Pipeline.GetName()
+func (gp *GstPipeline) Monitor() {
+	name := gp.Pipeline.GetName()
 
 	logFile, err := os.Create(fmt.Sprintf("%s_pipeline_debug.log", name))
 	if err != nil {
@@ -53,8 +60,8 @@ func (b *basePipeline) Monitor() {
 		prevDot := ""
 		prevState := gst.StateNull
 
-		for !b.closed.IsBroken() {
-			dotData, pipelineStr, state, err := b.debug()
+		for !gp.closed.IsBroken() {
+			dotData, pipelineStr, state, err := gp.debug()
 			if err != nil {
 				if err == ErrPipielineNotRunning {
 					pipelineStr = "Pipeline not running"
@@ -62,14 +69,17 @@ func (b *basePipeline) Monitor() {
 				pipelineStr = fmt.Sprintf("failed to get pipeline string: %v", err)
 			}
 
-			if pipelineStr != prevStr || dotData != prevDot || prevState != state {
-				prevStr = pipelineStr
+			if dotData != prevDot {
 				prevDot = dotData
-				prevState = state
-
 				liveFile.Truncate(0)
 				liveFile.Seek(0, 0)
 				liveFile.WriteString(dotData)
+				fmt.Printf("Wrote live pipeline dot data (%d bytes)\n", len(dotData))
+			}
+
+			if pipelineStr != prevStr || dotData != prevDot || prevState != state {
+				prevStr = pipelineStr
+				prevState = state
 
 				logFile.WriteString(
 					fmt.Sprintf("----- %s: %s -----\n%s\n\n", time.Now().Format(time.RFC3339), state.String(), pipelineStr),

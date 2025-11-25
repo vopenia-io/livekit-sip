@@ -2,66 +2,65 @@ package pipeline
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/frostbyte73/core"
+	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/app"
 )
 
 type WebrtcToSelector struct {
-	ID            uint64
-	linked        core.Fuse
-	WebrtcRtpSrc  *gst.Element
+	linked core.Fuse
+	parent *SelectorToSip
+
+	RtpBin *gst.Element
+
+	WebrtcRtpSrc *gst.Element
+	// rptbin
+	RtpVp8Depay *gst.Element
+	RtpQueue    *gst.Element
+
 	WebrtcRtcpSrc *gst.Element
-	RtpVp8Depay   *gst.Element
-	RtpQueue      *gst.Element
-	RtcpQueue     *gst.Element
+	// rptbin
+	RtcpQueue *gst.Element
 
 	WebrtcRtpAppSrc  *app.Source
 	WebrtcRtcpAppSrc *app.Source
-
-	WebrtcRtpSelectorPad *gst.Pad
-	WebrtcRtcpFunnelPad  *gst.Pad
+	RtpPad           *gst.Pad
+	RtcpPad          *gst.Pad
 }
 
-func buildWebRTCToSelectorChain(id uint64) (*WebrtcToSelector, error) {
+var _ GstChain = (*WebrtcToSelector)(nil)
+
+func buildWebRTCToSelectorChain(parent *SelectorToSip, sid string) (*WebrtcToSelector, error) {
+	rtpBin, err := gst.NewElementWithProperties("rtpbin", map[string]interface{}{
+		// "autoremove":         true,
+		// "do-lost":            true,
+		// "do-sync-event":      true,
+		// "drop-on-latency":    true,
+		// "latency":            uint64(50),
+		// "ignore-pt":          true,
+		// "rtcp-sync-interval": uint64(1000000000), // 1s
+		// "rtp-profile":        int(3),             // RTP_PROFILE_AVPF
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create SIP rtpbin: %w", err)
+	}
+
 	webrtcRtpSrc, err := gst.NewElementWithProperties("appsrc", map[string]interface{}{
-		"name":         fmt.Sprintf("webrtc_rtp_in_%d", id),
+		"name":         fmt.Sprintf("webrtc_rtp_in_%s", sid),
 		"is-live":      true,
 		"do-timestamp": true,
 		"format":       int(gst.FormatTime),
 		"max-bytes":    uint64(2_000_000),
 		"block":        false,
 		"caps": gst.NewCapsFromString(
-			"application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,payload=96",
-		),
+			"application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,payload=96,rtcp-fb-nack-pli=true"),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create WebRTC RTP appsrc: %w", err)
 	}
-
-	webrtcRtcpSrc, err := gst.NewElementWithProperties("appsrc", map[string]interface{}{
-		"name":         fmt.Sprintf("webrtc_rtcp_in_%d", id),
-		"is-live":      true,
-		"do-timestamp": true,
-		"format":       int(gst.FormatTime),
-		"max-bytes":    uint64(500_000),
-		"block":        false,
-		"caps":         gst.NewCapsFromString("application/x-rtcp"),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create WebRTC RTCP appsrc: %w", err)
-	}
-
-	// jb, err := gst.NewElementWithProperties("rtpjitterbuffer", map[string]interface{}{
-	// 	"latency":           uint(200),
-	// 	"do-lost":           true,
-	// 	"do-retransmission": false,
-	// 	"drop-on-latency":   false,
-	// })
-	// if err != nil {
-	// 	return nil, fmt.Errorf("failed to create WebRTC RTP jitter buffer: %w", err)
-	// }
 
 	depay, err := gst.NewElementWithProperties("rtpvp8depay", map[string]interface{}{
 		"request-keyframe": true,
@@ -75,120 +74,179 @@ func buildWebRTCToSelectorChain(id uint64) (*WebrtcToSelector, error) {
 		return nil, fmt.Errorf("failed to create WebRTC RTP queue: %w", err)
 	}
 
+	webrtcRtcpSrc, err := gst.NewElementWithProperties("appsrc", map[string]interface{}{
+		"name":         fmt.Sprintf("webrtc_rtcp_in_%s", sid),
+		"is-live":      true,
+		"do-timestamp": true,
+		"format":       int(gst.FormatTime),
+		"max-bytes":    uint64(500_000),
+		"block":        false,
+		"caps":         gst.NewCapsFromString("application/x-rtcp"),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create WebRTC RTCP appsrc: %w", err)
+	}
+
 	RtcpQueue, err := gst.NewElement("queue")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create WebRTC RTCP queue: %w", err)
 	}
 
 	return &WebrtcToSelector{
-		ID:               id,
-		WebrtcRtpSrc:     webrtcRtpSrc,
-		WebrtcRtcpSrc:    webrtcRtcpSrc,
-		RtpVp8Depay:      depay,
-		RtpQueue:         RtpQueue,
-		RtcpQueue:        RtcpQueue,
+		parent: parent,
+		RtpBin: rtpBin,
+
+		WebrtcRtpSrc: webrtcRtpSrc,
+		RtpVp8Depay:  depay,
+		RtpQueue:     RtpQueue,
+
+		WebrtcRtcpSrc: webrtcRtcpSrc,
+		RtcpQueue:     RtcpQueue,
+
 		WebrtcRtpAppSrc:  app.SrcFromElement(webrtcRtpSrc),
 		WebrtcRtcpAppSrc: app.SrcFromElement(webrtcRtcpSrc),
 	}, nil
 }
 
-func (wts *WebrtcToSelector) link(pipeline *gst.Pipeline, sts *SelectorToSip) error {
-	if !wts.linked.Break() {
-		return fmt.Errorf("webrtc to selector already linked")
-	}
-
-	if err := addlinkChain(pipeline,
-		wts.WebrtcRtpSrc,
-	); err != nil {
-		return fmt.Errorf("failed to link webrtc to selector chain: %w", err)
-	}
-
-	if err := linkPad(
-		wts.WebrtcRtpSrc.GetStaticPad("src"),
-		sts.RecvRtpBin.GetRequestPad(fmt.Sprintf("recv_rtp_sink_%d", wts.ID)),
-	); err != nil {
-		return fmt.Errorf("failed to link webrtc rtp src to rtpbin: %w", err)
-	}
-
-	if err := addlinkChain(pipeline,
-		wts.WebrtcRtcpSrc,
-	); err != nil {
-		return fmt.Errorf("failed to link webrtc rtcp to selector chain: %w", err)
-	}
-
-	if err := linkPad(
-		wts.WebrtcRtcpSrc.GetStaticPad("src"),
-		sts.RecvRtpBin.GetRequestPad(fmt.Sprintf("recv_rtcp_sink_%d", wts.ID)),
-	); err != nil {
-		return fmt.Errorf("failed to link webrtc rtcp src to rtpbin: %w", err)
-	}
-
-	if err := addlinkChain(pipeline,
-		wts.RtpVp8Depay,
-		wts.RtpQueue,
-	); err != nil {
-		return fmt.Errorf("failed to link webrtc rtp depay to queue: %w", err)
-	}
-
-	wts.WebrtcRtpSelectorPad = sts.RtpInputSelector.GetRequestPad(fmt.Sprintf("sink_%d", wts.ID))
-	if err := linkPad(
-		wts.RtpQueue.GetStaticPad("src"),
-		wts.WebrtcRtpSelectorPad,
-	); err != nil {
-		return fmt.Errorf("failed to link webrtc rtp queue to selector: %w", err)
-	}
-
-	if err := addlinkChain(pipeline,
-		wts.RtcpQueue,
-	); err != nil {
-		return fmt.Errorf("failed to link webrtc rtcp queue: %w", err)
-	}
-
-	if err := linkPad(
-		sts.RecvRtpBin.GetRequestPad(fmt.Sprintf("send_rtcp_src_%d", wts.ID)),
-		wts.RtcpQueue.GetStaticPad("sink"),
-	); err != nil {
-		return fmt.Errorf("failed to link rtpbin rtcp src to webrtc rtcp queue: %w", err)
-	}
-
-	wts.WebrtcRtcpFunnelPad = sts.RtcpFunnel.GetRequestPad(fmt.Sprintf("sink_%d", wts.ID))
-	if err := linkPad(
-		wts.RtcpQueue.GetStaticPad("src"),
-		wts.WebrtcRtcpFunnelPad,
-	); err != nil {
-		return fmt.Errorf("failed to link webrtc rtcp queue to rtcp funnel: %w", err)
-	}
-
+func (wts *WebrtcToSelector) sync() error {
 	for _, elem := range []*gst.Element{
 		wts.WebrtcRtpSrc,
+		wts.WebrtcRtcpSrc,
+
+		wts.RtpBin,
+
 		wts.RtpVp8Depay,
 		wts.RtpQueue,
-		wts.WebrtcRtcpSrc,
+
 		wts.RtcpQueue,
 	} {
 		if ok := elem.SyncStateWithParent(); !ok {
 			return fmt.Errorf("failed to sync state for %s", elem.GetName())
 		}
 	}
+	return nil
+}
+
+// Add implements GstChain.
+func (wts *WebrtcToSelector) Add(pipeline *gst.Pipeline) error {
+	if err := pipeline.AddMany(
+		wts.RtpBin,
+
+		wts.WebrtcRtpSrc,
+		wts.RtpVp8Depay,
+		wts.RtpQueue,
+
+		wts.WebrtcRtcpSrc,
+		wts.RtcpQueue,
+	); err != nil {
+		return fmt.Errorf("failed to add elements to pipeline: %w", err)
+	}
 
 	return nil
 }
 
-func (wts *WebrtcToSelector) Close(pipeline *gst.Pipeline) error {
-	wts.linked.Break()
+// Link implements GstChain.
+func (wts *WebrtcToSelector) Link(pipeline *gst.Pipeline) error {
+	if !wts.linked.Break() {
+		return nil
+	}
 
-	if wts.WebrtcRtpSelectorPad != nil {
-		wts.WebrtcRtpSelectorPad.GetParentElement().ReleaseRequestPad(wts.WebrtcRtpSelectorPad)
-		wts.WebrtcRtpSelectorPad = nil
+	// Link RTP path
+	if err := linkPad(
+		wts.WebrtcRtpSrc.GetStaticPad("src"),
+		wts.RtpBin.GetRequestPad("recv_rtp_sink_%u"),
+	); err != nil {
+		return fmt.Errorf("failed to link webrtc rtp src to rtpbin: %w", err)
 	}
-	if wts.WebrtcRtcpFunnelPad != nil {
-		wts.WebrtcRtcpFunnelPad.GetParentElement().ReleaseRequestPad(wts.WebrtcRtcpFunnelPad)
-		wts.WebrtcRtcpFunnelPad = nil
+
+	var (
+		err       error
+		hnd       glib.SignalHandle
+		connected bool
+	)
+	if hnd, err = wts.RtpBin.Connect("pad-added", func(rtpbin *gst.Element, pad *gst.Pad) {
+		fmt.Printf("RTPBIN PAD ADDED webrtc2selector: %s\n", pad.GetName())
+		if connected {
+			return
+		}
+		padName := pad.GetName()
+		if !strings.HasPrefix(padName, "recv_rtp_src_") {
+			return
+		}
+		var sessionID, ssrc, payloadType uint32
+		if _, err := fmt.Sscanf(padName, "recv_rtp_src_%d_%d_%d", &sessionID, &ssrc, &payloadType); err != nil {
+			fmt.Printf("Invalid RTP pad format: %s\n", padName)
+			return
+		}
+		fmt.Printf("RTP pad added: %s (sessionID=%d, ssrc=%d, payloadType=%d)\n", padName, sessionID, ssrc, payloadType)
+		if err := linkPad(
+			pad,
+			wts.RtpVp8Depay.GetStaticPad("sink"),
+		); err != nil {
+			fmt.Printf("Failed to link rtpbin pad to depayloader: %v\n", err)
+			return
+		}
+		fmt.Printf("Linked RTP pad: %s\n", padName)
+		connected = true
+		wts.RtpBin.HandlerDisconnect(hnd)
+	}); err != nil {
+		return fmt.Errorf("failed to connect to rtpbin pad-added signal: %w", err)
 	}
+
+	if err := gst.ElementLinkMany(
+		wts.RtpVp8Depay,
+		wts.RtpQueue,
+	); err != nil {
+		return fmt.Errorf("failed to link webrtc to selector rtp path: %w", err)
+	}
+
+	wts.RtpPad = wts.parent.RtpInputSelector.GetRequestPad("sink_%u")
+	if err := linkPad(
+		wts.RtpQueue.GetStaticPad("src"),
+		wts.RtpPad,
+	); err != nil {
+		return fmt.Errorf("failed to link webrtc rtp queue to selector: %w", err)
+	}
+
+	// link rtcp path
+	if err := linkPad(
+		wts.WebrtcRtcpSrc.GetStaticPad("src"),
+		wts.RtpBin.GetRequestPad("recv_rtcp_sink_%u"),
+	); err != nil {
+		return fmt.Errorf("failed to link webrtc rtcp src to rtpbin: %w", err)
+	}
+
+	if err := linkPad(
+		wts.RtpBin.GetRequestPad("send_rtcp_src_%u"),
+		wts.RtcpQueue.GetStaticPad("sink"),
+	); err != nil {
+		return fmt.Errorf("failed to link rtpbin rtcp src to webrtc rtcp queue: %w", err)
+	}
+
+	wts.RtcpPad = wts.parent.RtcpFunnel.GetRequestPad("sink_%u")
+	if err := linkPad(
+		wts.RtcpQueue.GetStaticPad("src"),
+		wts.RtcpPad,
+	); err != nil {
+		return fmt.Errorf("failed to link webrtc rtcp queue to funnel: %w", err)
+	}
+
+	return wts.sync()
+}
+
+// Close implements GstChain.
+func (wts *WebrtcToSelector) Close(pipeline *gst.Pipeline) error {
+
+	releasePad(wts.RtpPad)
+	releasePad(wts.RtcpPad)
 
 	if err := pipeline.RemoveMany(
+		wts.RtpBin,
+
 		wts.WebrtcRtpSrc,
+		wts.RtpVp8Depay,
 		wts.RtpQueue,
+
 		wts.WebrtcRtcpSrc,
 		wts.RtcpQueue,
 	); err != nil {
