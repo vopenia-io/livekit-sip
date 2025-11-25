@@ -8,8 +8,6 @@ import (
 )
 
 type SipToWebrtc struct {
-	*basePipeline
-
 	// raw elements
 	SipRtpSrc     *gst.Element
 	SipRtcpSrc    *gst.Element
@@ -35,11 +33,6 @@ type SipToWebrtc struct {
 }
 
 func buildSipToWebRTCChain(sipPayloadType int) (*SipToWebrtc, error) {
-	pipeline, err := newBasePipeline()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create sip to webrtc pipeline: %w", err)
-	}
-
 	// appsrc with most settings done as properties
 	capsStr := fmt.Sprintf(
 		"application/x-rtp,media=video,encoding-name=H264,payload=%d,clock-rate=90000",
@@ -193,7 +186,6 @@ func buildSipToWebRTCChain(sipPayloadType int) (*SipToWebrtc, error) {
 	}
 
 	return &SipToWebrtc{
-		basePipeline:     pipeline,
 		SipRtpSrc:        sipRtpSrc,
 		SipRtcpSrc:       sipRtcpSrc,
 		RtpBin:           rtpBin,
@@ -217,20 +209,20 @@ func buildSipToWebRTCChain(sipPayloadType int) (*SipToWebrtc, error) {
 	}, nil
 }
 
-func (stw *SipToWebrtc) Link() error {
-	if err := addlinkChain(stw.Pipeline, stw.SipRtpSrc); err != nil {
+func (stw *SipToWebrtc) Link(pipeline *gst.Pipeline) error {
+	if err := addlinkChain(pipeline, stw.SipRtpSrc); err != nil {
 		return fmt.Errorf("failed to link sip to webrtc chain: %w", err)
 	}
 
-	if err := addlinkChain(stw.Pipeline, stw.SipRtcpSrc); err != nil {
+	if err := addlinkChain(pipeline, stw.SipRtcpSrc); err != nil {
 		return fmt.Errorf("failed to link sip to webrtc chain: %w", err)
 	}
 
-	if err := addlinkChain(stw.Pipeline, stw.RtpBin); err != nil {
+	if err := addlinkChain(pipeline, stw.RtpBin); err != nil {
 		return fmt.Errorf("failed to link sip to webrtc chain: %w", err)
 	}
 
-	if err := addlinkChain(stw.Pipeline, GstPipelineChain{
+	if err := addlinkChain(pipeline, GstPipelineChain{
 		stw.Depay,
 		stw.Parse,
 		stw.Decoder,
@@ -247,7 +239,7 @@ func (stw *SipToWebrtc) Link() error {
 		return fmt.Errorf("failed to link sip to webrtc chain: %w", err)
 	}
 
-	if err := addlinkChain(stw.Pipeline, stw.SipRtcpSink); err != nil {
+	if err := addlinkChain(pipeline, stw.SipRtcpSink); err != nil {
 		return fmt.Errorf("failed to link sip to webrtc chain: %w", err)
 	}
 
@@ -295,8 +287,4 @@ func (stw *SipToWebrtc) Link() error {
 	}
 
 	return nil
-}
-
-func (stw *SipToWebrtc) Close() error {
-	return stw.Pipeline.SetState(gst.StateNull)
 }

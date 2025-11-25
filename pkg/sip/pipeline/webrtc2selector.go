@@ -92,12 +92,12 @@ func buildWebRTCToSelectorChain(id uint64) (*WebrtcToSelector, error) {
 	}, nil
 }
 
-func (wts *WebrtcToSelector) link(sts *SelectorToSip) error {
+func (wts *WebrtcToSelector) link(pipeline *gst.Pipeline, sts *SelectorToSip) error {
 	if !wts.linked.Break() {
 		return fmt.Errorf("webrtc to selector already linked")
 	}
 
-	if err := addlinkChain(sts.Pipeline,
+	if err := addlinkChain(pipeline,
 		wts.WebrtcRtpSrc,
 	); err != nil {
 		return fmt.Errorf("failed to link webrtc to selector chain: %w", err)
@@ -110,7 +110,7 @@ func (wts *WebrtcToSelector) link(sts *SelectorToSip) error {
 		return fmt.Errorf("failed to link webrtc rtp src to rtpbin: %w", err)
 	}
 
-	if err := addlinkChain(sts.Pipeline,
+	if err := addlinkChain(pipeline,
 		wts.WebrtcRtcpSrc,
 	); err != nil {
 		return fmt.Errorf("failed to link webrtc rtcp to selector chain: %w", err)
@@ -123,7 +123,7 @@ func (wts *WebrtcToSelector) link(sts *SelectorToSip) error {
 		return fmt.Errorf("failed to link webrtc rtcp src to rtpbin: %w", err)
 	}
 
-	if err := addlinkChain(sts.Pipeline,
+	if err := addlinkChain(pipeline,
 		wts.RtpVp8Depay,
 		wts.RtpQueue,
 	); err != nil {
@@ -138,7 +138,7 @@ func (wts *WebrtcToSelector) link(sts *SelectorToSip) error {
 		return fmt.Errorf("failed to link webrtc rtp queue to selector: %w", err)
 	}
 
-	if err := addlinkChain(sts.Pipeline,
+	if err := addlinkChain(pipeline,
 		wts.RtcpQueue,
 	); err != nil {
 		return fmt.Errorf("failed to link webrtc rtcp queue: %w", err)
