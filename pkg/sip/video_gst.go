@@ -88,7 +88,9 @@ func (g *GstWriter) Write(buf []byte) (int, error) {
 	if buffer == nil {
 		return 0, errors.New("failed to create GST buffer from RTP packet")
 	}
-	g.src.PushBuffer(buffer)
+	if r := g.src.PushBuffer(buffer); r != gst.FlowOK {
+		return 0, errors.New("failed to push buffer to appsrc")
+	}
 	return len(buf), nil
 }
 
