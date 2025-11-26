@@ -7,9 +7,12 @@ import (
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/app"
+	"github.com/livekit/protocol/logger"
 )
 
 type SipToWebrtc struct {
+	log logger.Logger
+
 	RtpBin *gst.Element
 
 	SipRtpSrc *gst.Element
@@ -39,7 +42,7 @@ type SipToWebrtc struct {
 
 var _ GstChain = (*SipToWebrtc)(nil)
 
-func buildSipToWebRTCChain(sipPayloadType int) (*SipToWebrtc, error) {
+func buildSipToWebRTCChain(log logger.Logger, sipPayloadType int) (*SipToWebrtc, error) {
 	rtpBin, err := gst.NewElementWithProperties("rtpbin", map[string]interface{}{
 		"name": "sip_rtp_bin",
 	})
@@ -190,6 +193,7 @@ func buildSipToWebRTCChain(sipPayloadType int) (*SipToWebrtc, error) {
 	}
 
 	return &SipToWebrtc{
+		log:    log,
 		RtpBin: rtpBin,
 
 		SipRtpSrc:     sipRtpSrc,
@@ -258,25 +262,25 @@ func (stw *SipToWebrtc) Link(pipeline *gst.Pipeline) error {
 		err error
 	)
 	if hnd, err = stw.RtpBin.Connect("pad-added", func(rtpbin *gst.Element, pad *gst.Pad) {
-		fmt.Printf("RTPBIN PAD ADDED: %s\n", pad.GetName())
+		stw.log.Debugw("RTPBIN PAD ADDED", "pad", pad.GetName())
 		padName := pad.GetName()
 		if !strings.HasPrefix(padName, "recv_rtp_src_") {
 			return
 		}
 		var sessionID, ssrc, payloadType uint32
 		if _, err := fmt.Sscanf(padName, "recv_rtp_src_%d_%d_%d", &sessionID, &ssrc, &payloadType); err != nil {
-			fmt.Printf("Invalid RTP pad format: %s\n", padName)
+			stw.log.Warnw("Invalid RTP pad format", err, "pad", padName)
 			return
 		}
-		fmt.Printf("RTP pad added: %s (sessionID=%d, ssrc=%d, payloadType=%d)\n", padName, sessionID, ssrc, payloadType)
+		stw.log.Infow("RTP pad added", "pad", padName, "sessionID", sessionID, "ssrc", ssrc, "payloadType", payloadType)
 		if err := linkPad(
 			pad,
 			stw.Depay.GetStaticPad("sink"),
 		); err != nil {
-			fmt.Printf("Failed to link rtpbin pad to depayloader: %v\n", err)
+			stw.log.Errorw("Failed to link rtpbin pad to depayloader", err)
 			return
 		}
-		fmt.Printf("Linked RTP pad: %s\n", padName)
+		stw.log.Infow("Linked RTP pad", "pad", padName)
 		stw.RtpBin.HandlerDisconnect(hnd)
 	}); err != nil {
 		return fmt.Errorf("failed to connect to rtpbin pad-added signal: %w", err)

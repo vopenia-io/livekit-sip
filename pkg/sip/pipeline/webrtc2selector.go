@@ -8,9 +8,12 @@ import (
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/app"
+	"github.com/livekit/protocol/logger"
 )
 
 type WebrtcToSelector struct {
+	log logger.Logger
+
 	linked core.Fuse
 	SSRC   uint32
 	parent *SelectorToSip
@@ -34,13 +37,15 @@ type WebrtcToSelector struct {
 
 var _ GstChain = (*WebrtcToSelector)(nil)
 
-func buildWebRTCToSelectorChain(parent *SelectorToSip, sid string, ssrc uint32) (*WebrtcToSelector, error) {
+func buildWebRTCToSelectorChain(log logger.Logger, parent *SelectorToSip, sid string, ssrc uint32) (*WebrtcToSelector, error) {
+	log = log.WithValues("sid", sid, "ssrc", ssrc)
+
 	rtpBin, err := gst.NewElementWithProperties("rtpbin", map[string]interface{}{
-		"autoremove":         true,
-		"do-lost":            true,
-		"do-sync-event":      true,
-		"drop-on-latency":    true,
-		"latency":            uint64(50),
+		"autoremove":      true,
+		"do-lost":         true,
+		"do-sync-event":   true,
+		"drop-on-latency": true,
+		"latency":         uint64(50),
 		// "ignore-pt":          true,
 		"rtcp-sync-interval": uint64(1000000000), // 1s
 		"rtp-profile":        int(3),             // RTP_PROFILE_AVPF
@@ -94,6 +99,7 @@ func buildWebRTCToSelectorChain(parent *SelectorToSip, sid string, ssrc uint32) 
 	}
 
 	return &WebrtcToSelector{
+		log:    log,
 		parent: parent,
 		SSRC:   ssrc,
 		RtpBin: rtpBin,
@@ -167,7 +173,7 @@ func (wts *WebrtcToSelector) Link(pipeline *gst.Pipeline) error {
 		connected bool
 	)
 	if hnd, err = wts.RtpBin.Connect("pad-added", func(rtpbin *gst.Element, pad *gst.Pad) {
-		fmt.Printf("RTPBIN PAD ADDED webrtc2selector: %s\n", pad.GetName())
+		wts.log.Debugw("RTPBIN PAD ADDED", "pad", pad.GetName())
 		if connected {
 			return
 		}
@@ -177,18 +183,18 @@ func (wts *WebrtcToSelector) Link(pipeline *gst.Pipeline) error {
 		}
 		var sessionID, ssrc, payloadType uint32
 		if _, err := fmt.Sscanf(padName, "recv_rtp_src_%d_%d_%d", &sessionID, &ssrc, &payloadType); err != nil {
-			fmt.Printf("Invalid RTP pad format: %s\n", padName)
+			wts.log.Warnw("Invalid RTP pad format", err, "pad", padName)
 			return
 		}
-		fmt.Printf("RTP pad added: %s (sessionID=%d, ssrc=%d, payloadType=%d)\n", padName, sessionID, ssrc, payloadType)
+		wts.log.Infow("RTP pad added", "pad", padName, "sessionID", sessionID, "ssrc", ssrc, "payloadType", payloadType)
 		if err := linkPad(
 			pad,
 			wts.RtpVp8Depay.GetStaticPad("sink"),
 		); err != nil {
-			fmt.Printf("Failed to link rtpbin pad to depayloader: %v\n", err)
+			wts.log.Errorw("Failed to link rtpbin pad to depayloader", err)
 			return
 		}
-		fmt.Printf("Linked RTP pad: %s\n", padName)
+		wts.log.Infow("Linked RTP pad", "pad", padName)
 		connected = true
 		wts.RtpBin.HandlerDisconnect(hnd)
 	}); err != nil {

@@ -7,11 +7,13 @@ import (
 
 	"github.com/frostbyte73/core"
 	"github.com/go-gst/go-gst/gst"
+	"github.com/livekit/protocol/logger"
 )
 
 type GstPipelineChain = []*gst.Element
 
 type GstPipeline struct {
+	log      logger.Logger
 	mu       sync.Mutex
 	closed   core.Fuse
 	Pipeline *gst.Pipeline
@@ -92,22 +94,23 @@ func (gp *GstPipeline) Closed() bool {
 	return gp.closed.IsBroken()
 }
 
-func NewGstPipeline(sipInPayload, sipOutPayload int) (*GstPipeline, error) {
+func NewGstPipeline(log logger.Logger, sipInPayload, sipOutPayload int) (*GstPipeline, error) {
 	pipeline, err := gst.NewPipeline("")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create gst pipeline: %w", err)
 	}
 
 	gp := &GstPipeline{
+		log:      log,
 		Pipeline: pipeline,
 	}
 
-	gp.SipToWebrtc, err = CastErr[*SipToWebrtc](gp.addChain(buildSipToWebRTCChain(sipInPayload)))
+	gp.SipToWebrtc, err = CastErr[*SipToWebrtc](gp.addChain(buildSipToWebRTCChain(log.WithComponent("sip_to_webrtc"), sipInPayload)))
 	if err != nil {
 		return nil, err
 	}
 
-	gp.SelectorToSip, err = CastErr[*SelectorToSip](gp.addChain(buildSelectorToSipChain(sipOutPayload)))
+	gp.SelectorToSip, err = CastErr[*SelectorToSip](gp.addChain(buildSelectorToSipChain(log.WithComponent("selector_to_sip"), sipOutPayload)))
 	if err != nil {
 		return nil, err
 	}

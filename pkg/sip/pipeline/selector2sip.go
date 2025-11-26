@@ -5,9 +5,12 @@ import (
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/app"
+	"github.com/livekit/protocol/logger"
 )
 
 type SelectorToSip struct {
+	log logger.Logger
+
 	WebrtcToSelectors map[string]*WebrtcToSelector
 
 	RtpInputSelector *gst.Element
@@ -35,7 +38,7 @@ type SelectorToSip struct {
 
 var _ GstChain = (*SelectorToSip)(nil)
 
-func buildSelectorToSipChain(sipOutPayloadType int) (*SelectorToSip, error) {
+func buildSelectorToSipChain(log logger.Logger, sipOutPayloadType int) (*SelectorToSip, error) {
 	rtpInputSelector, err := gst.NewElementWithProperties("input-selector", map[string]interface{}{
 		"name":          "webrtc_rtp_sel",
 		"sync-streams":  false,
@@ -167,6 +170,7 @@ func buildSelectorToSipChain(sipOutPayloadType int) (*SelectorToSip, error) {
 	}
 
 	return &SelectorToSip{
+		log:                log,
 		WebrtcToSelectors:  make(map[string]*WebrtcToSelector),
 		RtpInputSelector:   rtpInputSelector,
 		RtcpInjector:       rtcpInjector,

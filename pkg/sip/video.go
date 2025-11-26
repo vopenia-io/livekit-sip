@@ -133,11 +133,11 @@ func (v *VideoManager) WebrtcTrackInput(ti *TrackInput, sid string, ssrc uint32)
 
 	webrtcRtpIn, err := NewGstWriter(s.WebrtcRtpAppSrc)
 	if err != nil {
-		v.log.Errorw("failed to create WebRTC RTP reader", err)
+		v.log.Errorw("failed to create WebRTC RTP writer", err)
 		return
 	}
 	go func() {
-		Copy(webrtcRtpIn, ti.RtpIn)
+		v.Copy(webrtcRtpIn, ti.RtpIn)
 		if err := v.pipeline.RemoveWebRTCSourceFromSelector(sid); err != nil {
 			v.log.Errorw("failed to remove WebRTC source from selector", err)
 		}
