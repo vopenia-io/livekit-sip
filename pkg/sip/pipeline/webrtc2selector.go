@@ -12,6 +12,7 @@ import (
 
 type WebrtcToSelector struct {
 	linked core.Fuse
+	SSRC   uint32
 	parent *SelectorToSip
 
 	RtpBin *gst.Element
@@ -33,14 +34,14 @@ type WebrtcToSelector struct {
 
 var _ GstChain = (*WebrtcToSelector)(nil)
 
-func buildWebRTCToSelectorChain(parent *SelectorToSip, sid string) (*WebrtcToSelector, error) {
+func buildWebRTCToSelectorChain(parent *SelectorToSip, sid string, ssrc uint32) (*WebrtcToSelector, error) {
 	rtpBin, err := gst.NewElementWithProperties("rtpbin", map[string]interface{}{
 		"autoremove":         true,
 		"do-lost":            true,
 		"do-sync-event":      true,
 		"drop-on-latency":    true,
 		"latency":            uint64(50),
-		"ignore-pt":          true,
+		// "ignore-pt":          true,
 		"rtcp-sync-interval": uint64(1000000000), // 1s
 		"rtp-profile":        int(3),             // RTP_PROFILE_AVPF
 	})
@@ -94,6 +95,7 @@ func buildWebRTCToSelectorChain(parent *SelectorToSip, sid string) (*WebrtcToSel
 
 	return &WebrtcToSelector{
 		parent: parent,
+		SSRC:   ssrc,
 		RtpBin: rtpBin,
 
 		WebrtcRtpSrc: webrtcRtpSrc,

@@ -24,11 +24,13 @@ type SelectorToSip struct {
 	RtpH264Pay       *gst.Element
 	SipRtpSink       *gst.Element
 
+	RtcpInjector   *gst.Element
 	RtcpFunnel     *gst.Element
 	WebrtcRtcpSink *gst.Element
 
-	SipRtpAppSink     *app.Sink
-	WebrtcRtcpAppSink *app.Sink
+	SipRtpAppSink      *app.Sink
+	WebrtcRtcpAppSink  *app.Sink
+	RtcpInjectorAppSrc *app.Source
 }
 
 var _ GstChain = (*SelectorToSip)(nil)
@@ -41,6 +43,11 @@ func buildSelectorToSipChain(sipOutPayloadType int) (*SelectorToSip, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create webrtc input selector: %w", err)
+	}
+
+	rtcpInjector, err := gst.NewElementWithProperties("appsrc", map[string]interface{}{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create webrtc rtcp injector: %w", err)
 	}
 
 	rtcpFunnel, err := gst.NewElementWithProperties("funnel", map[string]interface{}{})
@@ -160,46 +167,49 @@ func buildSelectorToSipChain(sipOutPayloadType int) (*SelectorToSip, error) {
 	}
 
 	return &SelectorToSip{
-		WebrtcToSelectors: make(map[string]*WebrtcToSelector),
-		RtpInputSelector:  rtpInputSelector,
-		RtcpFunnel:        rtcpFunnel,
-		Vp8Dec:            vp8dec,
-		VideoConvert:      vconv,
-		VideoScale:        vscale,
-		ResFilter:         resFilter,
-		VideoConvert2:     vconv2,
-		VideoRate:         vrate,
-		FpsFilter:         fpsFilter,
-		I420Filter:        i420Filter,
-		X264Enc:           x264enc,
-		Parse:             parse,
-		RtpH264Pay:        rtpPay,
-		SipRtpSink:        sipRtpSink,
-		WebrtcRtcpSink:    webrtcRtcpSink,
-		SipRtpAppSink:     app.SinkFromElement(sipRtpSink),
-		WebrtcRtcpAppSink: app.SinkFromElement(webrtcRtcpSink),
+		WebrtcToSelectors:  make(map[string]*WebrtcToSelector),
+		RtpInputSelector:   rtpInputSelector,
+		RtcpInjector:       rtcpInjector,
+		RtcpFunnel:         rtcpFunnel,
+		Vp8Dec:             vp8dec,
+		VideoConvert:       vconv,
+		VideoScale:         vscale,
+		ResFilter:          resFilter,
+		VideoConvert2:      vconv2,
+		VideoRate:          vrate,
+		FpsFilter:          fpsFilter,
+		I420Filter:         i420Filter,
+		X264Enc:            x264enc,
+		Parse:              parse,
+		RtpH264Pay:         rtpPay,
+		SipRtpSink:         sipRtpSink,
+		WebrtcRtcpSink:     webrtcRtcpSink,
+		SipRtpAppSink:      app.SinkFromElement(sipRtpSink),
+		WebrtcRtcpAppSink:  app.SinkFromElement(webrtcRtcpSink),
+		RtcpInjectorAppSrc: app.SrcFromElement(rtcpInjector),
 	}, nil
 }
 
 // Add implements GstChain.
-func (gp *SelectorToSip) Add(pipeline *gst.Pipeline) error {
+func (sts *SelectorToSip) Add(pipeline *gst.Pipeline) error {
 	if err := pipeline.AddMany(
-		gp.RtpInputSelector,
-		gp.Vp8Dec,
-		gp.VideoConvert,
-		gp.VideoScale,
-		gp.ResFilter,
-		gp.VideoConvert2,
-		gp.VideoRate,
-		gp.FpsFilter,
-		gp.I420Filter,
-		gp.X264Enc,
-		gp.Parse,
-		gp.RtpH264Pay,
-		gp.SipRtpSink,
+		sts.RtpInputSelector,
+		sts.Vp8Dec,
+		sts.VideoConvert,
+		sts.VideoScale,
+		sts.ResFilter,
+		sts.VideoConvert2,
+		sts.VideoRate,
+		sts.FpsFilter,
+		sts.I420Filter,
+		sts.X264Enc,
+		sts.Parse,
+		sts.RtpH264Pay,
+		sts.SipRtpSink,
 
-		gp.RtcpFunnel,
-		gp.WebrtcRtcpSink,
+		sts.RtcpInjector,
+		sts.RtcpFunnel,
+		sts.WebrtcRtcpSink,
 	); err != nil {
 		return fmt.Errorf("failed to add SelectorToSip elements to pipeline: %w", err)
 	}
@@ -207,28 +217,35 @@ func (gp *SelectorToSip) Add(pipeline *gst.Pipeline) error {
 }
 
 // Link implements GstChain.
-func (gp *SelectorToSip) Link(pipeline *gst.Pipeline) error {
+func (sts *SelectorToSip) Link(pipeline *gst.Pipeline) error {
 	if err := gst.ElementLinkMany(
-		gp.RtpInputSelector,
-		gp.Vp8Dec,
-		gp.VideoConvert,
-		gp.VideoScale,
-		gp.ResFilter,
-		gp.VideoConvert2,
-		gp.VideoRate,
-		gp.FpsFilter,
-		gp.I420Filter,
-		gp.X264Enc,
-		gp.Parse,
-		gp.RtpH264Pay,
-		gp.SipRtpSink,
+		sts.RtpInputSelector,
+		sts.Vp8Dec,
+		sts.VideoConvert,
+		sts.VideoScale,
+		sts.ResFilter,
+		sts.VideoConvert2,
+		sts.VideoRate,
+		sts.FpsFilter,
+		sts.I420Filter,
+		sts.X264Enc,
+		sts.Parse,
+		sts.RtpH264Pay,
+		sts.SipRtpSink,
 	); err != nil {
 		return fmt.Errorf("failed to link SelectorToSip video elements: %w", err)
 	}
 
+	if err := linkPad(
+		sts.RtcpInjector.GetStaticPad("src"),
+		sts.RtcpFunnel.GetRequestPad("sink_%u"),
+	); err != nil {
+		return fmt.Errorf("failed to link SelectorToSip rtcp injector to funnel: %w", err)
+	}
+
 	if err := gst.ElementLinkMany(
-		gp.RtcpFunnel,
-		gp.WebrtcRtcpSink,
+		sts.RtcpFunnel,
+		sts.WebrtcRtcpSink,
 	); err != nil {
 		return fmt.Errorf("failed to link SelectorToSip rtcp elements: %w", err)
 	}
@@ -237,9 +254,9 @@ func (gp *SelectorToSip) Link(pipeline *gst.Pipeline) error {
 }
 
 // Close implements GstChain.
-func (gp *SelectorToSip) Close(pipeline *gst.Pipeline) error {
+func (sts *SelectorToSip) Close(pipeline *gst.Pipeline) error {
 	var errs []error
-	for _, wts := range gp.WebrtcToSelectors {
+	for _, wts := range sts.WebrtcToSelectors {
 		if err := wts.Close(pipeline); err != nil {
 			errs = append(errs, fmt.Errorf("failed to close webrtc to selector: %w", err))
 		}
@@ -249,22 +266,23 @@ func (gp *SelectorToSip) Close(pipeline *gst.Pipeline) error {
 	}
 
 	pipeline.RemoveMany(
-		gp.RtpInputSelector,
-		gp.Vp8Dec,
-		gp.VideoConvert,
-		gp.VideoScale,
-		gp.ResFilter,
-		gp.VideoConvert2,
-		gp.VideoRate,
-		gp.FpsFilter,
-		gp.I420Filter,
-		gp.X264Enc,
-		gp.Parse,
-		gp.RtpH264Pay,
-		gp.SipRtpSink,
+		sts.RtpInputSelector,
+		sts.Vp8Dec,
+		sts.VideoConvert,
+		sts.VideoScale,
+		sts.ResFilter,
+		sts.VideoConvert2,
+		sts.VideoRate,
+		sts.FpsFilter,
+		sts.I420Filter,
+		sts.X264Enc,
+		sts.Parse,
+		sts.RtpH264Pay,
+		sts.SipRtpSink,
 
-		gp.RtcpFunnel,
-		gp.WebrtcRtcpSink,
+		sts.RtcpInjector,
+		sts.RtcpFunnel,
+		sts.WebrtcRtcpSink,
 	)
 	return nil
 }
