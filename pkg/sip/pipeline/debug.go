@@ -74,7 +74,7 @@ func (gp *GstPipeline) Monitor() {
 				liveFile.Truncate(0)
 				liveFile.Seek(0, 0)
 				liveFile.WriteString(dotData)
-				fmt.Printf("Wrote live pipeline dot data (%d bytes)\n", len(dotData))
+				//				fmt.Printf("Wrote live pipeline dot data (%d bytes)\n", len(dotData))
 			}
 
 			if pipelineStr != prevStr || dotData != prevDot || prevState != state {
