@@ -94,7 +94,28 @@ func (gp *GstPipeline) Closed() bool {
 	return gp.closed.IsBroken()
 }
 
-func NewGstPipeline(log logger.Logger, sipInPayload, sipOutPayload int) (*GstPipeline, error) {
+// func (gp *GstPipeline) WatchStateChanges() {
+// 	bus := gp.Pipeline.GetBus()
+// 	bus.AddWatch(func(msg *gst.Message) bool {
+// 		switch msg.Type() {
+// 		case gst.MessageStateChanged:
+// 			old, new := msg.ParseStateChanged()
+// 			gp.log.Infow("pipeline state changed", "old", old.String(), "new", new.String())
+// 			switch new {
+// 			case gst.StatePlaying:
+// 				gp.onPlaying()
+// 			}
+// 		}
+// 		return true
+// 	})
+// }
+
+// func (gp *GstPipeline) onPlaying() {
+// 	gp.log.Infow("pipeline is playing")
+// 	gp.ensureActiveSource()
+// }
+
+func NewGstPipeline(log logger.Logger, sipPt uint8) (*GstPipeline, error) {
 	pipeline, err := gst.NewPipeline("")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create gst pipeline: %w", err)
@@ -105,13 +126,17 @@ func NewGstPipeline(log logger.Logger, sipInPayload, sipOutPayload int) (*GstPip
 		Pipeline: pipeline,
 	}
 
-	gp.SipToWebrtc, err = CastErr[*SipToWebrtc](gp.addChain(buildSipToWebRTCChain(log.WithComponent("sip_to_webrtc"), sipInPayload)))
+	gp.SipToWebrtc, err = CastErr[*SipToWebrtc](gp.addChain(buildSipToWebRTCChain(log.WithComponent("sip_to_webrtc"), int(sipPt))))
 	if err != nil {
 		return nil, err
 	}
 
-	gp.WebrtcToSip, err = CastErr[*WebrtcToSip](gp.addChain(buildSelectorToSipChain(log.WithComponent("selector_to_sip"), sipOutPayload)))
+	gp.WebrtcToSip, err = CastErr[*WebrtcToSip](gp.addChain(buildSelectorToSipChain(log.WithComponent("selector_to_sip"), int(sipPt))))
 	if err != nil {
+		return nil, err
+	}
+
+	if err := gp.setupAutoSwitching(); err != nil {
 		return nil, err
 	}
 

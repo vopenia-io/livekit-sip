@@ -27,7 +27,7 @@ func (gp *GstPipeline) debug() (string, string, gst.State, error) {
 		return "", "", state, ErrPipielineNotRunning
 	}
 
-	dotData := gp.Pipeline.DebugBinToDotData(gst.DebugGraphShowMediaType)
+	dotData := gp.Pipeline.DebugBinToDotData(gst.DebugGraphShowCapsDetails)
 
 	data, err := PipelineBranchesAsStrings(gp.Pipeline)
 	if err != nil {

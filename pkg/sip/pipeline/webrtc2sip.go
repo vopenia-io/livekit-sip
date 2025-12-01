@@ -3,23 +3,30 @@ package pipeline
 import (
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/app"
 	"github.com/livekit/protocol/logger"
 )
 
+const VP8CAPS = "application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,payload=96,rtcp-fb-nack-pli=true"
+
+var webrtcCaps = map[uint]string{
+	96: VP8CAPS,
+}
+
 type WebrtcToSip struct {
 	log          logger.Logger
-	WebrtcTracks map[string]*WebrtcTrack
+	mu           sync.Mutex
+	WebrtcTracks map[uint32]*WebrtcTrack
 
 	RtpBin *gst.Element
 
-	RtpFunnel  *gst.Element
-	CapsFilter *gst.Element
+	RtpFunnel *gst.Element
 	//rtpbin
 	InputSelector *gst.Element
-	Vp8Depay      *gst.Element
+	// Vp8Depay      *gst.Element
 	Vp8Dec        *gst.Element
 	VideoConvert  *gst.Element
 	VideoScale    *gst.Element
@@ -45,14 +52,13 @@ var _ GstChain = (*WebrtcToSip)(nil)
 
 func buildSelectorToSipChain(log logger.Logger, sipOutPayloadType int) (*WebrtcToSip, error) {
 	rtpbin, err := gst.NewElementWithProperties("rtpbin", map[string]interface{}{
-		// "autoremove":      true,
-		// "do-lost":         true,
-		// "do-sync-event":   true,
-		"drop-on-latency": false,
-		"latency":         uint64(0),
-		// "ignore-pt":          true,
-		// "rtcp-sync-interval": uint64(1000000000), // 1s
-		"rtp-profile": int(3), // RTP_PROFILE_AVPF
+		"autoremove":         true,
+		"do-lost":            true,
+		"do-sync-event":      true,
+		"drop-on-latency":    false,
+		"latency":            uint64(0),
+		"rtcp-sync-interval": uint64(1000000000), // 1s
+		"rtp-profile":        int(3),             // RTP_PROFILE_AVPF
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create webrtc rtpbin: %w", err)
@@ -63,21 +69,9 @@ func buildSelectorToSipChain(log logger.Logger, sipOutPayloadType int) (*WebrtcT
 		return nil, fmt.Errorf("failed to create webrtc rtp funnel: %w", err)
 	}
 
-	capsFilter, err := gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-		"caps": VP8CAPS,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create webrtc caps filter: %w", err)
-	}
-
 	inputSelector, err := gst.NewElementWithProperties("input-selector", map[string]interface{}{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create webrtc input selector: %w", err)
-	}
-
-	vp8depay, err := gst.NewElement("rtpvp8depay")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create webrtc vp8 depayloader: %w", err)
 	}
 
 	vp8dec, err := gst.NewElement("vp8dec")
@@ -198,15 +192,14 @@ func buildSelectorToSipChain(log logger.Logger, sipOutPayloadType int) (*WebrtcT
 
 	return &WebrtcToSip{
 		log:          log,
-		WebrtcTracks: make(map[string]*WebrtcTrack),
+		WebrtcTracks: make(map[uint32]*WebrtcTrack),
 
 		RtpBin: rtpbin,
 
-		RtpFunnel:  rtpFunnel,
-		CapsFilter: capsFilter,
+		RtpFunnel: rtpFunnel,
 		// rtpbin
 		InputSelector: inputSelector,
-		Vp8Depay:      vp8depay,
+		// Vp8Depay:      vp8depay,
 		Vp8Dec:        vp8dec,
 		VideoConvert:  vconv,
 		VideoScale:    vscale,
@@ -235,10 +228,9 @@ func (wts *WebrtcToSip) Add(pipeline *gst.Pipeline) error {
 		wts.RtpBin,
 
 		wts.RtpFunnel,
-		wts.CapsFilter,
 		// rtpbin
 		wts.InputSelector,
-		wts.Vp8Depay,
+		// wts.Vp8Depay,
 		wts.Vp8Dec,
 		wts.VideoConvert,
 		wts.VideoScale,
@@ -263,25 +255,23 @@ func (wts *WebrtcToSip) Add(pipeline *gst.Pipeline) error {
 
 // Link implements GstChain.
 func (wts *WebrtcToSip) Link(pipeline *gst.Pipeline) error {
-	if err := gst.ElementLinkMany(
-		wts.RtpFunnel,
-		wts.CapsFilter,
-	); err != nil {
-		return fmt.Errorf("failed to link webrtc rtp funnel to caps filter: %w", err)
+	if _, err := wts.RtpBin.Connect("request-pt-map", func(self *gst.Element, session uint, pt uint) *gst.Caps {
+		caps, ok := webrtcCaps[pt]
+		if !ok {
+			return nil
+		}
+		wts.log.Debugw("RTPBIN requested PT map", "pt", pt, "caps", caps)
+		return gst.NewCapsFromString(caps)
+	}); err != nil {
+		return fmt.Errorf("failed to connect to rtpbin request-pt-map signal: %w", err)
 	}
 
 	if err := linkPad(
-		wts.CapsFilter.GetStaticPad("src"),
+		wts.RtpFunnel.GetStaticPad("src"),
 		wts.RtpBin.GetRequestPad("recv_rtp_sink_0"),
 	); err != nil {
 		return fmt.Errorf("failed to link WebrtcToSip rtp funnel to rtpbin: %w", err)
 	}
-	// {
-	// 	wts.RtpBin.GetRequestPad("recv_rtp_sink_0").AddProbe(gst.PadProbeTypeBuffer, func(p *gst.Pad, ppi *gst.PadProbeInfo) gst.PadProbeReturn {
-	// 		fmt.Printf("WebrtcToSip RTP BIN RECV RTP SINK PAD PROBE\n")
-	// 		return gst.PadProbePass
-	// 	})
-	// }
 
 	if _, err := wts.RtpBin.Connect("pad-added", func(rtpbin *gst.Element, pad *gst.Pad) {
 		wts.log.Debugw("RTPBIN PAD ADDED", "pad", pad.GetName())
@@ -295,11 +285,18 @@ func (wts *WebrtcToSip) Link(pipeline *gst.Pipeline) error {
 			return
 		}
 		wts.log.Infow("RTP pad added", "pad", padName, "sessionID", sessionID, "ssrc", ssrc, "payloadType", payloadType)
-		if err := linkPad(
-			pad,
-			wts.InputSelector.GetRequestPad("sink_%u"),
-		); err != nil {
-			wts.log.Errorw("Failed to link rtpbin pad to depayloader", err)
+
+		wts.mu.Lock()
+		defer wts.mu.Unlock()
+
+		track, ok := wts.WebrtcTracks[ssrc]
+		if !ok {
+			wts.log.Warnw("No WebRTC track found for SSRC", nil, "ssrc", ssrc)
+			return
+		}
+
+		if err := track.LinkParent(wts, pad); err != nil {
+			wts.log.Errorw("Failed to link RTP pad to WebRTC track", err, "pad", padName, "ssrc", ssrc)
 			return
 		}
 		wts.log.Infow("Linked RTP pad", "pad", padName)
@@ -309,7 +306,7 @@ func (wts *WebrtcToSip) Link(pipeline *gst.Pipeline) error {
 
 	if err := gst.ElementLinkMany(
 		wts.InputSelector,
-		wts.Vp8Depay,
+		// wts.Vp8Depay,
 		wts.Vp8Dec,
 		wts.VideoConvert,
 		wts.VideoScale,

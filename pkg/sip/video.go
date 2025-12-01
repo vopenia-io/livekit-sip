@@ -50,6 +50,7 @@ func NewVideoManager(log logger.Logger, room *Room, opts *MediaOptions) (*VideoM
 		rtpConn:  newUDPConn(log.WithComponent("video-rtp"), rtpConn),
 		rtcpConn: newUDPConn(log.WithComponent("video-rtcp"), rtcpConn),
 		status:   VideoStatusStopped,
+		ssrcs:    make(map[string]uint32),
 	}
 
 	v.log.Infow("video manager created")
@@ -70,6 +71,7 @@ type VideoManager struct {
 	recv     bool
 	send     bool
 	status   VideoStatus
+	ssrcs    map[string]uint32
 }
 
 type VideoIO struct {
@@ -125,11 +127,13 @@ func (v *VideoManager) WebrtcTrackInput(ti *TrackInput, sid string, ssrc uint32)
 		"hasRtpIn", ti.RtpIn != nil,
 		"hasRtcpIn", ti.RtcpIn != nil)
 
-	s, err := v.pipeline.AddWebRTCSourceToSelector(sid, ssrc)
+	s, err := v.pipeline.AddWebRTCSourceToSelector(ssrc)
 	if err != nil {
 		v.log.Errorw("failed to add WebRTC source to selector", err)
 		return
 	}
+
+	v.ssrcs[sid] = ssrc
 
 	webrtcRtpIn, err := NewGstWriter(s.RtpAppSrc)
 	if err != nil {
@@ -138,7 +142,7 @@ func (v *VideoManager) WebrtcTrackInput(ti *TrackInput, sid string, ssrc uint32)
 	}
 	go func() {
 		v.Copy(webrtcRtpIn, ti.RtpIn)
-		if err := v.pipeline.RemoveWebRTCSourceFromSelector(sid); err != nil {
+		if err := v.pipeline.RemoveWebRTCSourceFromSelector(ssrc); err != nil {
 			v.log.Errorw("failed to remove WebRTC source from selector", err)
 		}
 	}()
@@ -156,11 +160,11 @@ func (v *VideoManager) SwitchActiveWebrtcTrack(sid string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
-	// ssrc, ok := v.ssrcs[sid]
-	// if !ok {
-	// 	return fmt.Errorf("no SSRC found for sid %s", sid)
-	// }
-	// v.log.Debugw("switching active WebRTC video track", "sid", sid, "ssrc", ssrc)
+	ssrc, ok := v.ssrcs[sid]
+	if !ok {
+		return fmt.Errorf("no SSRC found for sid %s", sid)
+	}
+	v.log.Debugw("switching active WebRTC video track", "sid", sid, "ssrc", ssrc)
 
 	// pli := &rtcp.PictureLossIndication{
 	// 	MediaSSRC:  ssrc, // The track we want a keyframe for
@@ -177,7 +181,7 @@ func (v *VideoManager) SwitchActiveWebrtcTrack(sid string) error {
 	// 	return fmt.Errorf("failed to send PLI RTCP packet: %w", err)
 	// }
 
-	if err := v.pipeline.SwitchWebRTCSelectorSource(sid); err != nil {
+	if err := v.pipeline.SwitchWebRTCSelectorSource(ssrc); err != nil {
 		return fmt.Errorf("failed to switch WebRTC selector source: %w", err)
 	}
 

@@ -2,14 +2,13 @@ package pipeline
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/go-gst/go-gst/gst"
-	"github.com/go-gst/go-gst/gst/app"
-	"github.com/pion/rtcp"
 )
 
-func (gp *GstPipeline) AddWebRTCSourceToSelector(sid string, ssrc uint32) (*WebrtcTrack, error) {
+func (gp *GstPipeline) AddWebRTCSourceToSelector(ssrc uint32) (*WebrtcTrack, error) {
 	gp.mu.Lock()
 	defer gp.mu.Unlock()
 
@@ -25,74 +24,52 @@ func (gp *GstPipeline) AddWebRTCSourceToSelector(sid string, ssrc uint32) (*Webr
 		return nil, fmt.Errorf("pipeline must be in playing, ready, or paused state to add source, current state: %s", state.String())
 	}
 
-	if _, exists := gp.WebrtcToSip.WebrtcTracks[sid]; exists {
-		return nil, fmt.Errorf("webrtc source with sid %s already exists", sid)
+	if _, exists := gp.WebrtcToSip.WebrtcTracks[ssrc]; exists {
+		return nil, fmt.Errorf("webrtc source with ssrc %d already exists", ssrc)
 	}
 
-	gp.log.Infow("Adding WebRTC source to selector", "sid", sid, "ssrc", ssrc)
+	gp.log.Infow("Adding WebRTC source to selector", "ssrc", ssrc)
 	webRTCToSelector, err := CastErr[*WebrtcTrack](gp.addChain(buildWebrtcTrack(gp.log.WithComponent("webrtc_to_selector"), gp.WebrtcToSip, ssrc)))
 	if err != nil {
 		gp.log.Errorw("Error building WebRTC to selector chain", err)
 		return nil, err
 	}
-	gp.log.Infow("Successfully built WebRTC to selector chain", "sid", sid, "ssrc", ssrc)
+	gp.log.Infow("Successfully built WebRTC to selector chain", "ssrc", ssrc)
 
-	gp.WebrtcToSip.WebrtcTracks[sid] = webRTCToSelector
+	gp.WebrtcToSip.WebrtcTracks[ssrc] = webRTCToSelector
 
-	if err := gp.ensureActiveSource(); err != nil {
-		return nil, fmt.Errorf("failed to ensure active source after adding new source: %w", err)
+	if state != gst.StatePlaying {
+		return webRTCToSelector, nil
 	}
 
 	return webRTCToSelector, nil
 }
 
-func injectKeyframe(src *app.Source, ssrc uint32) error {
-	pli := &rtcp.PictureLossIndication{
-		MediaSSRC:  ssrc, // The track we want a keyframe for
-		SenderSSRC: 0,    // Your local SSRC (0 is usually acceptable if unknown)
-	}
-
-	buf, err := pli.Marshal()
-	if err != nil {
-		return fmt.Errorf("failed to marshal PLI: %w", err)
-	}
-
-	buffer := gst.NewBufferFromBytes(buf)
-	if buffer == nil {
-		return fmt.Errorf("failed to create GST buffer from RTP packet")
-	}
-	if r := src.PushBuffer(buffer); r != gst.FlowOK {
-		return fmt.Errorf("failed to push PLI buffer to source, flow result: %s", r.String())
-	}
-
-	return nil
-}
-
-func (gp *GstPipeline) SwitchWebRTCSelectorSource(sid string) error {
+func (gp *GstPipeline) SwitchWebRTCSelectorSource(ssrc uint32) error {
 	gp.mu.Lock()
 	defer gp.mu.Unlock()
-	return gp.switchWebRTCSelectorSource(sid)
+	return gp.switchWebRTCSelectorSource(ssrc)
 }
 
-func (gp *GstPipeline) switchWebRTCSelectorSource(sid string) error {
+func (gp *GstPipeline) switchWebRTCSelectorSource(ssrc uint32) error {
 	if gp.Closed() {
 		return fmt.Errorf("pipeline is closed")
 	}
 
 	state := gp.Pipeline.GetCurrentState()
 	switch state {
-	case gst.StatePlaying, gst.StatePaused, gst.StateReady:
+	case gst.StatePlaying:
 	default:
 		return fmt.Errorf("pipeline must be in playing, paused, or ready state to switch source, current state: %s", state.String())
 	}
 
-	wts, exists := gp.WebrtcToSip.WebrtcTracks[sid]
+	track, exists := gp.WebrtcToSip.WebrtcTracks[ssrc]
 	if !exists {
-		return fmt.Errorf("webrtc source with sid %s does not exist", sid)
+		return fmt.Errorf("webrtc source with ssrc %d does not exist", ssrc)
 	}
 
 	sel := gp.WebrtcToSip.InputSelector
-	selPad := wts.RtpPad
+	selPad := track.RtpSelPad
 
 	activeProp, err := sel.GetProperty("active-pad")
 	if err == nil || activeProp != nil {
@@ -102,29 +79,12 @@ func (gp *GstPipeline) switchWebRTCSelectorSource(sid string) error {
 		}
 
 		if activePad.GetName() == selPad.GetName() {
-			gp.log.Debugw("WebRTC selector source is already set to sid", "sid", sid)
+			gp.log.Debugw("WebRTC selector source is already set to ssrc", "ssrc", ssrc)
 			return nil
 		}
 	}
 
-	// sinkPad := webrtcToSelector.RtpVp8Depay.GetStaticPad("sink")
-	// if !sinkPad.IsLinked() {
-	// 	return fmt.Errorf("webrtc rtp depayloader sink pad is not linked")
-	// }
-	// rtpBinSrcPad := sinkPad.GetPeer()
-	// defer rtpBinSrcPad.Unref()
-	// structure := gst.NewStructure("GstForceKeyUnit")
-	// structure.SetValue("all-headers", true)
-	// event := gst.NewCustomEvent(gst.EventTypeCustomUpstream, structure)
-	// fmt.Println("Sending force key unit event to webrtc source")
-	// if !rtpBinSrcPad.SendEvent(event) {
-	// 	fmt.Println("Failed to send force key unit event to webrtc source")
-	// 	return errors.New("failed to send force key unit event to webrtc source")
-	// } else {
-	// 	fmt.Println("Sent force key unit event to webrtc source")
-	// }
-
-	return gp.switchSelectorPad(wts, selPad)
+	return gp.switchSelectorPad(track, selPad)
 }
 
 func (gp *GstPipeline) switchSelectorPad(wt *WebrtcTrack, pad *gst.Pad) error {
@@ -132,14 +92,9 @@ func (gp *GstPipeline) switchSelectorPad(wt *WebrtcTrack, pad *gst.Pad) error {
 		return fmt.Errorf("invalid pad provided for selector switch: %w", err)
 	}
 
-	// return gp.WebrtcToSip.InputSelector.SetProperty("active-pad", pad)
-
 	done := make(chan struct{})
-	timeout := time.After(2 * time.Second)
-
-	// if err := injectKeyframe(gp.RtcpInjectorAppSrc, wt.SSRC); err != nil {
-	// 	return fmt.Errorf("failed to request keyframe from webrtc source: %w", err)
-	// }
+	timeout := time.NewTicker(time.Second * 4)
+	defer timeout.Stop()
 
 	var err error
 
@@ -147,6 +102,7 @@ func (gp *GstPipeline) switchSelectorPad(wt *WebrtcTrack, pad *gst.Pad) error {
 	probe := pad.AddProbe(gst.PadProbeTypeBuffer, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
 		buf := info.GetBuffer()
 		if buf == nil {
+			println("Buffer is nil in pad probe")
 			return gst.PadProbePass
 		}
 
@@ -156,16 +112,38 @@ func (gp *GstPipeline) switchSelectorPad(wt *WebrtcTrack, pad *gst.Pad) error {
 				err = fmt.Errorf("failed to set active pad on input selector: %w", err)
 			}
 			close(done)
+			println("Keyframe received on pad probe")
 			return gst.PadProbeRemove
 		}
+		println("Not a keyframe, continuing to wait...")
 		return gst.PadProbePass
 	})
 
-	select {
-	case <-timeout:
+	if err := gp.RequestKeyframe(wt); err != nil {
 		pad.RemoveProbe(probe)
-		gp.log.Errorw("Timeout waiting for keyframe on WebRTC source", nil, "ssrc", wt.SSRC)
-		return fmt.Errorf("timeout waiting for keyframe on webrtc source ssrc: %d", wt.SSRC)
+		return fmt.Errorf("failed to request keyframe from webrtc source: %w", err)
+	}
+
+	maxTrys := 3
+
+	select {
+	case <-timeout.C:
+		maxTrys--
+		if maxTrys > 0 {
+			gp.log.Infow("Retrying keyframe request on WebRTC source", "ssrc", wt.SSRC, "remaining_tries", maxTrys)
+			if err := gp.RequestKeyframe(wt); err != nil {
+				pad.RemoveProbe(probe)
+				return fmt.Errorf("failed to request keyframe from webrtc source: %w", err)
+			}
+			select {
+			case <-timeout.C:
+			case <-done:
+			}
+		} else {
+			pad.RemoveProbe(probe)
+			gp.log.Errorw("Timeout waiting for keyframe on WebRTC source", nil, "ssrc", wt.SSRC)
+			return fmt.Errorf("timeout waiting for keyframe on webrtc source ssrc: %d", wt.SSRC)
+		}
 	case <-done:
 		if err != nil {
 			return err
@@ -175,7 +153,7 @@ func (gp *GstPipeline) switchSelectorPad(wt *WebrtcTrack, pad *gst.Pad) error {
 	return nil
 }
 
-func (gp *GstPipeline) RemoveWebRTCSourceFromSelector(sid string) error {
+func (gp *GstPipeline) RemoveWebRTCSourceFromSelector(ssrc uint32) error {
 	gp.mu.Lock()
 	defer gp.mu.Unlock()
 
@@ -183,20 +161,16 @@ func (gp *GstPipeline) RemoveWebRTCSourceFromSelector(sid string) error {
 		return nil
 	}
 
-	webrtcTrack, exists := gp.WebrtcToSip.WebrtcTracks[sid]
+	webrtcTrack, exists := gp.WebrtcToSip.WebrtcTracks[ssrc]
 	if !exists {
-		return fmt.Errorf("webrtc source with sid %s does not exist", sid)
+		return fmt.Errorf("webrtc source with ssrc %d does not exist", ssrc)
 	}
 
 	if err := webrtcTrack.Close(gp.Pipeline); err != nil {
 		return fmt.Errorf("failed to close webrtc to selector chain: %w", err)
 	}
 
-	delete(gp.WebrtcToSip.WebrtcTracks, sid)
-
-	if err := gp.ensureActiveSource(); err != nil {
-		return fmt.Errorf("failed to ensure active source after removing source: %w", err)
-	}
+	delete(gp.WebrtcToSip.WebrtcTracks, ssrc)
 
 	return nil
 }
@@ -209,6 +183,76 @@ func validatePad(pad *gst.Pad) error {
 	if parent == nil {
 		return fmt.Errorf("pad's parent element is nil")
 	}
+	return nil
+}
+
+func (gp *GstPipeline) setupAutoSwitching() error {
+	mu := sync.Mutex{}
+	sel := gp.WebrtcToSip.InputSelector
+
+	quickSwitch := func() error {
+		activePad, err := sel.GetProperty("active-pad")
+		if err != nil {
+			return fmt.Errorf("failed to get active pad from selector: %w", err)
+		}
+		pad, ok := activePad.(*gst.Pad)
+		if ok && pad != nil && pad.GetParentElement() != nil {
+			return nil
+		}
+
+		mu.Lock()
+		defer mu.Unlock()
+		if err := gp.ensureActiveSource(); err != nil {
+			gp.log.Errorw("Failed to ensure active source during quick switch", err)
+			return err
+		}
+		return nil
+	}
+
+	if _, err := gp.WebrtcToSip.InputSelector.Connect("pad-added", func(selector *gst.Element, pad *gst.Pad) {
+		gp.log.Infow("New pad added to WebRTC selector, ensuring active source", "pad", pad.GetName())
+		if err := quickSwitch(); err != nil {
+			gp.log.Errorw("Failed to ensure active source after new pad added to selector", err)
+		}
+	}); err != nil {
+		return fmt.Errorf("failed to connect pad-added signal to selector: %w", err)
+	}
+
+	if _, err := gp.WebrtcToSip.InputSelector.Connect("pad-removed", func(selector *gst.Element, pad *gst.Pad) {
+		gp.log.Infow("Pad removed from WebRTC selector, ensuring active source", "pad", pad.GetName())
+		if err := quickSwitch(); err != nil {
+			gp.log.Errorw("Failed to ensure active source after pad removed from selector", err)
+		}
+	}); err != nil {
+		return fmt.Errorf("failed to connect pad-removed signal to selector: %w", err)
+	}
+
+	if _, err := gp.WebrtcToSip.InputSelector.Connect("notify::active-pad", func(selector *gst.Element) {
+		gp.log.Infow("WebRTC selector active pad changed")
+		if err := quickSwitch(); err != nil {
+			gp.log.Errorw("Failed to ensure active source after selector active pad changed", err)
+		}
+	}); err != nil {
+		return fmt.Errorf("failed to connect notify::active-pad signal to selector: %w", err)
+	}
+
+	// go func() {
+	// 	defer gp.log.Infow("Exiting active source monitor goroutine")
+	// 	ticker := time.NewTicker(3 * time.Second)
+	// 	defer ticker.Stop()
+	// 	for {
+	// 		select {
+	// 		case <-ticker.C:
+	// 			gp.log.Debugw("Periodic check to ensure active source in WebRTC selector")
+	// 			if err := quickSwitch(); err != nil {
+	// 				gp.log.Errorw("Failed to ensure active source during periodic check", err)
+	// 			}
+	// 		case <-gp.closed.Watch():
+	// 			gp.log.Infow("Pipeline closed, stopping active source monitor")
+	// 			return
+	// 		}
+	// 	}
+	// }()
 	return nil
 }
 
@@ -226,8 +270,37 @@ func (gp *GstPipeline) ensureActiveSource() error {
 		}
 	}
 
+	pads, err := gp.WebrtcToSip.InputSelector.GetSinkPads()
+	if err != nil {
+		return fmt.Errorf("failed to get selector sink pads: %w", err)
+	}
+	if len(pads) == 0 {
+		gp.log.Infow("No webrtc sources available in selector to set as active source")
+		return nil
+	}
+	padsName := make([]string, 0, len(pads))
+	for _, pad := range pads {
+		padsName = append(padsName, pad.GetName())
+	}
+
 	for _, webrtcTrack := range gp.WebrtcToSip.WebrtcTracks {
-		selPad := webrtcTrack.RtpPad
+		selPad := webrtcTrack.RtpSelPad
+		if err := validatePad(selPad); err != nil {
+			gp.log.Debugw("WeRTC track pad is not valid", "ssrc", webrtcTrack.SSRC, "error", err)
+			continue
+		}
+		padName := selPad.GetName()
+		found := false
+		for _, pName := range padsName {
+			if pName == padName {
+				found = true
+				break
+			}
+		}
+		if !found {
+			gp.log.Debugw("WeRTC track pad not found in selector sink pads", "ssrc", webrtcTrack.SSRC, "padName", padName)
+			continue
+		}
 		if err := gp.switchSelectorPad(webrtcTrack, selPad); err != nil {
 			gp.log.Errorw("Failed to switch selector pad to ssrc", err, "ssrc", webrtcTrack.SSRC)
 			continue
@@ -240,22 +313,22 @@ func (gp *GstPipeline) ensureActiveSource() error {
 	return nil
 }
 
-// func (wts *WebrtcToSelector) RequestKeyframe() error {
-// 	structure := gst.NewStructure("GstForceKeyUnit")
-// 	structure.SetValue("timestamp", uint64(gst.ClockTimeNone))
-// 	structure.SetValue("stream-time", uint64(gst.ClockTimeNone))
-// 	structure.SetValue("running-time", uint64(gst.ClockTimeNone))
-// 	structure.SetValue("all-headers", true)
-// 	structure.SetValue("count", uint32(1))
-// 	structure.SetValue("ssrc", uint32(wts.SSRC))
+func (gp *GstPipeline) RequestKeyframe(wt *WebrtcTrack) error {
+	structure := gst.NewStructure("GstForceKeyUnit")
+	structure.SetValue("timestamp", uint64(gst.ClockTimeNone))
+	structure.SetValue("stream-time", uint64(gst.ClockTimeNone))
+	structure.SetValue("running-time", uint64(gst.ClockTimeNone))
+	structure.SetValue("all-headers", true)
+	structure.SetValue("count", uint32(1))
+	structure.SetValue("ssrc", uint32(wt.SSRC))
 
-// 	fmt.Printf("Requesting keyframe: %v\n", structure.Values())
+	fmt.Printf("Requesting keyframe: %v\n", structure.Values())
 
-// 	event := gst.NewCustomEvent(gst.EventTypeCustomDownstream, structure)
+	event := gst.NewCustomEvent(gst.EventTypeCustomUpstream, structure)
 
-// 	if !wts.RtpBin.SendEvent(event) {
-// 		return fmt.Errorf("failed to send force key unit event to webrtc source")
-// 	}
+	if !wt.RtpBinPad.SendEvent(event) {
+		return fmt.Errorf("failed to send force key unit event to webrtc source")
+	}
 
-// 	return nil
-// }
+	return nil
+}

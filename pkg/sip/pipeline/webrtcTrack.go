@@ -14,20 +14,23 @@ type WebrtcTrack struct {
 
 	SSRC uint32
 
-	RtpSrc    *gst.Element
+	RtpSrc   *gst.Element
+	RtpQueue *gst.Element
+	// rtpbin
+	Vp8Depay *gst.Element
+
 	RtcpSrc   *gst.Element
-	RtpQueue  *gst.Element
 	RtcpQueue *gst.Element
 
 	RtpAppSrc  *app.Source
 	RtcpAppSrc *app.Source
 	RtpPad     *gst.Pad
 	RtcpPad    *gst.Pad
+	RtpBinPad  *gst.Pad
+	RtpSelPad  *gst.Pad
 }
 
 var _ GstChain = (*WebrtcTrack)(nil)
-
-const VP8CAPS = "application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,payload=96,rtcp-fb-nack-pli=true"
 
 func buildWebrtcTrack(log logger.Logger, parent *WebrtcToSip, ssrc uint32) (*WebrtcTrack, error) {
 	log = log.WithValues("ssrc", ssrc)
@@ -48,6 +51,11 @@ func buildWebrtcTrack(log logger.Logger, parent *WebrtcToSip, ssrc uint32) (*Web
 	rtpQueue, err := gst.NewElementWithProperties("queue", map[string]interface{}{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create webrtc rtp queue: %w", err)
+	}
+
+	vp8depay, err := gst.NewElement("rtpvp8depay")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create webrtc vp8 depayloader: %w", err)
 	}
 
 	rtcpSrc, err := gst.NewElementWithProperties("appsrc", map[string]interface{}{
@@ -74,9 +82,12 @@ func buildWebrtcTrack(log logger.Logger, parent *WebrtcToSip, ssrc uint32) (*Web
 
 		SSRC: ssrc,
 
-		RtpSrc:    rtpSrc,
+		RtpSrc:   rtpSrc,
+		RtpQueue: rtpQueue,
+		// rtpbin
+		Vp8Depay: vp8depay,
+
 		RtcpSrc:   rtcpSrc,
-		RtpQueue:  rtpQueue,
 		RtcpQueue: rtcpQueue,
 
 		RtpAppSrc:  app.SrcFromElement(rtpSrc),
@@ -88,8 +99,9 @@ func buildWebrtcTrack(log logger.Logger, parent *WebrtcToSip, ssrc uint32) (*Web
 func (wt *WebrtcTrack) Add(pipeline *gst.Pipeline) error {
 	if err := pipeline.AddMany(
 		wt.RtpSrc,
-		wt.RtcpSrc,
 		wt.RtpQueue,
+		wt.Vp8Depay,
+		wt.RtcpSrc,
 		wt.RtcpQueue,
 	); err != nil {
 		return fmt.Errorf("failed to add webrtc track elements to pipeline: %w", err)
@@ -132,11 +144,35 @@ func (wt *WebrtcTrack) Link(pipeline *gst.Pipeline) error {
 	return wt.sync()
 }
 
+func (wt *WebrtcTrack) LinkParent(wts *WebrtcToSip, pad *gst.Pad) error {
+	if err := linkPad(
+		pad,
+		wt.Vp8Depay.GetStaticPad("sink"),
+	); err != nil {
+		wt.log.Errorw("Failed to link rtpbin pad to depayloader", err)
+		return err
+	}
+
+	wt.RtpSelPad = wts.InputSelector.GetRequestPad("sink_%u")
+	if err := linkPad(
+		wt.Vp8Depay.GetStaticPad("src"),
+		wt.RtpSelPad,
+	); err != nil {
+		wt.RtpSelPad = nil
+		wt.log.Errorw("Failed to link rtpbin pad to depayloader", err)
+		return err
+	}
+	wt.RtpBinPad = pad
+
+	return wt.sync()
+}
+
 func (wt *WebrtcTrack) sync() error {
 	for _, elem := range []*gst.Element{
 		wt.RtpSrc,
-		wt.RtcpSrc,
 		wt.RtpQueue,
+		wt.Vp8Depay,
+		wt.RtcpSrc,
 		wt.RtcpQueue,
 	} {
 		if ok := elem.SyncStateWithParent(); !ok {
@@ -150,11 +186,14 @@ func (wt *WebrtcTrack) sync() error {
 func (wt *WebrtcTrack) Close(pipeline *gst.Pipeline) error {
 	releasePad(wt.RtpPad)
 	releasePad(wt.RtcpPad)
+	releasePad(wt.RtpSelPad)
+	releasePad(wt.RtpBinPad)
 
 	pipeline.RemoveMany(
 		wt.RtpSrc,
-		wt.RtcpSrc,
 		wt.RtpQueue,
+		wt.Vp8Depay,
+		wt.RtcpSrc,
 		wt.RtcpQueue,
 	)
 	return nil

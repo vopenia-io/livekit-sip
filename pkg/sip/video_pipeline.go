@@ -16,11 +16,11 @@ func (v *VideoManager) Copy(dst io.WriteCloser, src io.ReadCloser) {
 }
 
 func (v *VideoManager) SetupGstPipeline(media *sdpv2.SDPMedia) error {
-	pipeline, err := pipeline.NewGstPipeline(v.log, int(media.Codec.PayloadType), int(media.Codec.PayloadType))
+	pipeline, err := pipeline.NewGstPipeline(v.log, media.Codec.PayloadType)
 	if err != nil {
 		return fmt.Errorf("failed to create SIP WebRTC pipeline: %w", err)
 	}
-	pipeline.Monitor()
+	// pipeline.Monitor()
 
 	// setup SIP to WebRTC pipeline
 	// link rtp path
