@@ -1,4 +1,4 @@
-package pipeline
+package camera_pipeline
 
 import (
 	"fmt"
@@ -6,6 +6,7 @@ import (
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/app"
 	"github.com/livekit/protocol/logger"
+	"github.com/livekit/sip/pkg/sip/pipeline"
 )
 
 type WebrtcTrack struct {
@@ -30,7 +31,7 @@ type WebrtcTrack struct {
 	RtpSelPad  *gst.Pad
 }
 
-var _ GstChain = (*WebrtcTrack)(nil)
+var _ pipeline.GstChain = (*WebrtcTrack)(nil)
 
 func buildWebrtcTrack(log logger.Logger, parent *WebrtcToSip, ssrc uint32) (*WebrtcTrack, error) {
 	log = log.WithValues("ssrc", ssrc)
@@ -110,7 +111,7 @@ func (wt *WebrtcTrack) Add(pipeline *gst.Pipeline) error {
 }
 
 // Link implements GstChain.
-func (wt *WebrtcTrack) Link(pipeline *gst.Pipeline) error {
+func (wt *WebrtcTrack) Link(p *gst.Pipeline) error {
 	if err := gst.ElementLinkMany(
 		wt.RtpSrc,
 		wt.RtpQueue,
@@ -119,7 +120,7 @@ func (wt *WebrtcTrack) Link(pipeline *gst.Pipeline) error {
 	}
 
 	wt.RtpPad = wt.parent.RtpFunnel.GetRequestPad("sink_%u")
-	if err := linkPad(
+	if err := pipeline.LinkPad(
 		wt.RtpQueue.GetStaticPad("src"),
 		wt.RtpPad,
 	); err != nil {
@@ -134,7 +135,7 @@ func (wt *WebrtcTrack) Link(pipeline *gst.Pipeline) error {
 	}
 
 	wt.RtcpPad = wt.parent.RtcpFunnel.GetRequestPad("sink_%u")
-	if err := linkPad(
+	if err := pipeline.LinkPad(
 		wt.RtcpQueue.GetStaticPad("src"),
 		wt.RtcpPad,
 	); err != nil {
@@ -145,7 +146,7 @@ func (wt *WebrtcTrack) Link(pipeline *gst.Pipeline) error {
 }
 
 func (wt *WebrtcTrack) LinkParent(wts *WebrtcToSip, pad *gst.Pad) error {
-	if err := linkPad(
+	if err := pipeline.LinkPad(
 		pad,
 		wt.Vp8Depay.GetStaticPad("sink"),
 	); err != nil {
@@ -154,7 +155,7 @@ func (wt *WebrtcTrack) LinkParent(wts *WebrtcToSip, pad *gst.Pad) error {
 	}
 
 	wt.RtpSelPad = wts.InputSelector.GetRequestPad("sink_%u")
-	if err := linkPad(
+	if err := pipeline.LinkPad(
 		wt.Vp8Depay.GetStaticPad("src"),
 		wt.RtpSelPad,
 	); err != nil {
@@ -183,13 +184,13 @@ func (wt *WebrtcTrack) sync() error {
 }
 
 // Close implements GstChain.
-func (wt *WebrtcTrack) Close(pipeline *gst.Pipeline) error {
-	releasePad(wt.RtpPad)
-	releasePad(wt.RtcpPad)
-	releasePad(wt.RtpSelPad)
-	releasePad(wt.RtpBinPad)
+func (wt *WebrtcTrack) Close(p *gst.Pipeline) error {
+	pipeline.ReleasePad(wt.RtpPad)
+	pipeline.ReleasePad(wt.RtcpPad)
+	pipeline.ReleasePad(wt.RtpSelPad)
+	pipeline.ReleasePad(wt.RtpBinPad)
 
-	pipeline.RemoveMany(
+	p.RemoveMany(
 		wt.RtpSrc,
 		wt.RtpQueue,
 		wt.Vp8Depay,

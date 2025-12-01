@@ -14,7 +14,7 @@ import (
 	sdpv1 "github.com/livekit/media-sdk/sdp"
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
 	"github.com/livekit/protocol/logger"
-	"github.com/livekit/sip/pkg/sip/pipeline"
+	"github.com/livekit/sip/pkg/sip/pipeline/camera_pipeline"
 )
 
 var mainLoop *glib.MainLoop
@@ -66,7 +66,7 @@ type VideoManager struct {
 	room     *Room
 	rtpConn  *udpConn
 	rtcpConn *udpConn
-	pipeline *pipeline.GstPipeline
+	pipeline *camera_pipeline.GstPipeline
 	codec    *sdpv2.Codec
 	recv     bool
 	send     bool

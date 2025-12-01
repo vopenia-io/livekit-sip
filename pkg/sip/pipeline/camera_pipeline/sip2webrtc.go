@@ -1,4 +1,4 @@
-package pipeline
+package camera_pipeline
 
 import (
 	"fmt"
@@ -8,6 +8,7 @@ import (
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/app"
 	"github.com/livekit/protocol/logger"
+	"github.com/livekit/sip/pkg/sip/pipeline"
 )
 
 type SipToWebrtc struct {
@@ -40,7 +41,7 @@ type SipToWebrtc struct {
 	SipRtcpAppSink   *app.Sink
 }
 
-var _ GstChain = (*SipToWebrtc)(nil)
+var _ pipeline.GstChain = (*SipToWebrtc)(nil)
 
 func buildSipToWebRTCChain(log logger.Logger, sipPayloadType int) (*SipToWebrtc, error) {
 	rtpBin, err := gst.NewElementWithProperties("rtpbin", map[string]interface{}{
@@ -223,8 +224,8 @@ func buildSipToWebRTCChain(log logger.Logger, sipPayloadType int) (*SipToWebrtc,
 }
 
 // Add implements GstChain.
-func (stw *SipToWebrtc) Add(pipeline *gst.Pipeline) error {
-	if err := pipeline.AddMany(
+func (stw *SipToWebrtc) Add(p *gst.Pipeline) error {
+	if err := p.AddMany(
 		stw.RtpBin,
 
 		stw.SipRtpSrc,
@@ -252,9 +253,9 @@ func (stw *SipToWebrtc) Add(pipeline *gst.Pipeline) error {
 }
 
 // Link implements GstChain.
-func (stw *SipToWebrtc) Link(pipeline *gst.Pipeline) error {
+func (stw *SipToWebrtc) Link(p *gst.Pipeline) error {
 	// link rtp path
-	if err := linkPad(
+	if err := pipeline.LinkPad(
 		stw.SipRtpSrc.GetStaticPad("src"),
 		stw.RtpBin.GetRequestPad("recv_rtp_sink_%u"),
 	); err != nil {
@@ -277,7 +278,7 @@ func (stw *SipToWebrtc) Link(pipeline *gst.Pipeline) error {
 			return
 		}
 		stw.log.Infow("RTP pad added", "pad", padName, "sessionID", sessionID, "ssrc", ssrc, "payloadType", payloadType)
-		if err := linkPad(
+		if err := pipeline.LinkPad(
 			pad,
 			stw.Depay.GetStaticPad("sink"),
 		); err != nil {
@@ -308,14 +309,14 @@ func (stw *SipToWebrtc) Link(pipeline *gst.Pipeline) error {
 	}
 
 	// link rtcp path
-	if err := linkPad(
+	if err := pipeline.LinkPad(
 		stw.SipRtcpSrc.GetStaticPad("src"),
 		stw.RtpBin.GetRequestPad("recv_rtcp_sink_%u"),
 	); err != nil {
 		return fmt.Errorf("failed to link sip rtcp src to rtpbin: %w", err)
 	}
 
-	if err := linkPad(
+	if err := pipeline.LinkPad(
 		stw.RtpBin.GetRequestPad("send_rtcp_src_%u"),
 		stw.SipRtcpSink.GetStaticPad("sink"),
 	); err != nil {

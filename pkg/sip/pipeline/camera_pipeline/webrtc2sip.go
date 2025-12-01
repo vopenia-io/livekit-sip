@@ -1,4 +1,4 @@
-package pipeline
+package camera_pipeline
 
 import (
 	"fmt"
@@ -8,6 +8,7 @@ import (
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/app"
 	"github.com/livekit/protocol/logger"
+	"github.com/livekit/sip/pkg/sip/pipeline"
 )
 
 const VP8CAPS = "application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,payload=96,rtcp-fb-nack-pli=true"
@@ -48,7 +49,7 @@ type WebrtcToSip struct {
 	WebrtcRtcpAppSink *app.Sink
 }
 
-var _ GstChain = (*WebrtcToSip)(nil)
+var _ pipeline.GstChain = (*WebrtcToSip)(nil)
 
 func buildSelectorToSipChain(log logger.Logger, sipOutPayloadType int) (*WebrtcToSip, error) {
 	rtpbin, err := gst.NewElementWithProperties("rtpbin", map[string]interface{}{
@@ -254,7 +255,7 @@ func (wts *WebrtcToSip) Add(pipeline *gst.Pipeline) error {
 }
 
 // Link implements GstChain.
-func (wts *WebrtcToSip) Link(pipeline *gst.Pipeline) error {
+func (wts *WebrtcToSip) Link(p *gst.Pipeline) error {
 	if _, err := wts.RtpBin.Connect("request-pt-map", func(self *gst.Element, session uint, pt uint) *gst.Caps {
 		caps, ok := webrtcCaps[pt]
 		if !ok {
@@ -266,7 +267,7 @@ func (wts *WebrtcToSip) Link(pipeline *gst.Pipeline) error {
 		return fmt.Errorf("failed to connect to rtpbin request-pt-map signal: %w", err)
 	}
 
-	if err := linkPad(
+	if err := pipeline.LinkPad(
 		wts.RtpFunnel.GetStaticPad("src"),
 		wts.RtpBin.GetRequestPad("recv_rtp_sink_0"),
 	); err != nil {
@@ -323,14 +324,14 @@ func (wts *WebrtcToSip) Link(pipeline *gst.Pipeline) error {
 		return fmt.Errorf("failed to link SelectorToSip video elements: %w", err)
 	}
 
-	if err := linkPad(
+	if err := pipeline.LinkPad(
 		wts.RtcpFunnel.GetStaticPad("src"),
 		wts.RtpBin.GetRequestPad("recv_rtcp_sink_0"),
 	); err != nil {
 		return fmt.Errorf("failed to link SelectorToSip rtcp funnel to rtpbin: %w", err)
 	}
 
-	if err := linkPad(
+	if err := pipeline.LinkPad(
 		wts.RtpBin.GetRequestPad("send_rtcp_src_0"),
 		wts.WebrtcRtcpSink.GetStaticPad("sink"),
 	); err != nil {
@@ -342,34 +343,39 @@ func (wts *WebrtcToSip) Link(pipeline *gst.Pipeline) error {
 
 // Close implements GstChain.
 func (wts *WebrtcToSip) Close(pipeline *gst.Pipeline) error {
-	// var errs []error
-	// for _, wts := range sts.WebrtcToSelectors {
-	// 	if err := wts.Close(pipeline); err != nil {
-	// 		errs = append(errs, fmt.Errorf("failed to close webrtc to selector: %w", err))
-	// 	}
-	// }
-	// if len(errs) > 0 {
-	// 	return fmt.Errorf("errors closing SelectorToSip: %v", errs)
-	// }
+	var errs []error
+	for _, track := range wts.WebrtcTracks {
+		if err := track.Close(pipeline); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close webrtc to selector: %w", err))
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("errors closing SelectorToSip: %v", errs)
+	}
 
-	// pipeline.RemoveMany(
-	// 	sts.RtpInputSelector,
-	// 	sts.Vp8Dec,
-	// 	sts.VideoConvert,
-	// 	sts.VideoScale,
-	// 	sts.ResFilter,
-	// 	sts.VideoConvert2,
-	// 	sts.VideoRate,
-	// 	sts.FpsFilter,
-	// 	sts.I420Filter,
-	// 	sts.X264Enc,
-	// 	sts.Parse,
-	// 	sts.RtpH264Pay,
-	// 	sts.SipRtpSink,
+	pipeline.RemoveMany(
+		wts.RtpBin,
 
-	// 	sts.RtcpInjector,
-	// 	sts.RtcpFunnel,
-	// 	sts.WebrtcRtcpSink,
-	// )
+		wts.RtpFunnel,
+		// rtpbin
+		wts.InputSelector,
+		// wts.Vp8Depay,
+		wts.Vp8Dec,
+		wts.VideoConvert,
+		wts.VideoScale,
+		wts.ResFilter,
+		wts.VideoConvert2,
+		wts.VideoRate,
+		wts.FpsFilter,
+		wts.I420Filter,
+		wts.X264Enc,
+		wts.Parse,
+		wts.RtpH264Pay,
+		wts.SipRtpSink,
+
+		wts.RtcpFunnel,
+		// rtpbin
+		wts.WebrtcRtcpSink,
+	)
 	return nil
 }

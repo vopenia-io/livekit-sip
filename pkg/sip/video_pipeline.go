@@ -5,7 +5,7 @@ import (
 	"io"
 
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
-	"github.com/livekit/sip/pkg/sip/pipeline"
+	"github.com/livekit/sip/pkg/sip/pipeline/camera_pipeline"
 )
 
 func (v *VideoManager) Copy(dst io.WriteCloser, src io.ReadCloser) {
@@ -16,7 +16,7 @@ func (v *VideoManager) Copy(dst io.WriteCloser, src io.ReadCloser) {
 }
 
 func (v *VideoManager) SetupGstPipeline(media *sdpv2.SDPMedia) error {
-	pipeline, err := pipeline.NewGstPipeline(v.log, media.Codec.PayloadType)
+	pipeline, err := camera_pipeline.New(v.log, media.Codec.PayloadType)
 	if err != nil {
 		return fmt.Errorf("failed to create SIP WebRTC pipeline: %w", err)
 	}
