@@ -196,7 +196,8 @@ func buildSipToWebRTCChain(log logger.Logger, sipPayloadType int) (*SipToWebrtc,
 		log:    log,
 		RtpBin: rtpBin,
 
-		SipRtpSrc:     sipRtpSrc,
+		SipRtpSrc: sipRtpSrc,
+		// rtpbin
 		Depay:         depay,
 		Parse:         parse,
 		Decoder:       dec,
@@ -210,8 +211,9 @@ func buildSipToWebRTCChain(log logger.Logger, sipPayloadType int) (*SipToWebrtc,
 		RtpVp8Pay:     rtpVp8Pay,
 		WebrtcRtpSink: webrtcRtpSink,
 
+		SipRtcpSrc: sipRtcpSrc,
+		// rtpbin
 		SipRtcpSink: sipRtcpSink,
-		SipRtcpSrc:  sipRtcpSrc,
 
 		SipRtpAppSrc:     app.SrcFromElement(sipRtpSrc),
 		WebrtcRtpAppSink: app.SinkFromElement(webrtcRtpSink),
@@ -226,6 +228,7 @@ func (stw *SipToWebrtc) Add(pipeline *gst.Pipeline) error {
 		stw.RtpBin,
 
 		stw.SipRtpSrc,
+		// rptbin
 		stw.Depay,
 		stw.Parse,
 		stw.Decoder,
@@ -240,6 +243,7 @@ func (stw *SipToWebrtc) Add(pipeline *gst.Pipeline) error {
 		stw.WebrtcRtpSink,
 
 		stw.SipRtcpSrc,
+		// rtpbin
 		stw.SipRtcpSink,
 	); err != nil {
 		return fmt.Errorf("failed to add sip to webrtc chain to pipeline: %w", err)
@@ -327,6 +331,7 @@ func (stw *SipToWebrtc) Close(pipeline *gst.Pipeline) error {
 		stw.RtpBin,
 
 		stw.SipRtpSrc,
+		// rptbin
 		stw.Depay,
 		stw.Parse,
 		stw.Decoder,
@@ -340,8 +345,9 @@ func (stw *SipToWebrtc) Close(pipeline *gst.Pipeline) error {
 		stw.RtpVp8Pay,
 		stw.WebrtcRtpSink,
 
-		stw.SipRtcpSink,
 		stw.SipRtcpSrc,
+		// rtpbin
+		stw.SipRtcpSink,
 	); err != nil {
 		return fmt.Errorf("failed to remove sip to webrtc chain from pipeline: %w", err)
 	}

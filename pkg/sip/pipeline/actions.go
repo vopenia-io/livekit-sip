@@ -9,7 +9,7 @@ import (
 	"github.com/pion/rtcp"
 )
 
-func (gp *GstPipeline) AddWebRTCSourceToSelector(sid string, ssrc uint32) (*WebrtcToSelector, error) {
+func (gp *GstPipeline) AddWebRTCSourceToSelector(sid string, ssrc uint32) (*WebrtcTrack, error) {
 	gp.mu.Lock()
 	defer gp.mu.Unlock()
 
@@ -25,19 +25,19 @@ func (gp *GstPipeline) AddWebRTCSourceToSelector(sid string, ssrc uint32) (*Webr
 		return nil, fmt.Errorf("pipeline must be in playing, ready, or paused state to add source, current state: %s", state.String())
 	}
 
-	if _, exists := gp.WebrtcToSelectors[sid]; exists {
+	if _, exists := gp.WebrtcToSip.WebrtcTracks[sid]; exists {
 		return nil, fmt.Errorf("webrtc source with sid %s already exists", sid)
 	}
 
 	gp.log.Infow("Adding WebRTC source to selector", "sid", sid, "ssrc", ssrc)
-	webRTCToSelector, err := CastErr[*WebrtcToSelector](gp.addChain(buildWebRTCToSelectorChain(gp.log.WithComponent("webrtc_to_selector"), gp.SelectorToSip, sid, ssrc)))
+	webRTCToSelector, err := CastErr[*WebrtcTrack](gp.addChain(buildWebrtcTrack(gp.log.WithComponent("webrtc_to_selector"), gp.WebrtcToSip, ssrc)))
 	if err != nil {
 		gp.log.Errorw("Error building WebRTC to selector chain", err)
 		return nil, err
 	}
 	gp.log.Infow("Successfully built WebRTC to selector chain", "sid", sid, "ssrc", ssrc)
 
-	gp.WebrtcToSelectors[sid] = webRTCToSelector
+	gp.WebrtcToSip.WebrtcTracks[sid] = webRTCToSelector
 
 	if err := gp.ensureActiveSource(); err != nil {
 		return nil, fmt.Errorf("failed to ensure active source after adding new source: %w", err)
@@ -86,12 +86,12 @@ func (gp *GstPipeline) switchWebRTCSelectorSource(sid string) error {
 		return fmt.Errorf("pipeline must be in playing, paused, or ready state to switch source, current state: %s", state.String())
 	}
 
-	wts, exists := gp.WebrtcToSelectors[sid]
+	wts, exists := gp.WebrtcToSip.WebrtcTracks[sid]
 	if !exists {
 		return fmt.Errorf("webrtc source with sid %s does not exist", sid)
 	}
 
-	sel := gp.RtpInputSelector
+	sel := gp.WebrtcToSip.InputSelector
 	selPad := wts.RtpPad
 
 	activeProp, err := sel.GetProperty("active-pad")
@@ -127,19 +127,23 @@ func (gp *GstPipeline) switchWebRTCSelectorSource(sid string) error {
 	return gp.switchSelectorPad(wts, selPad)
 }
 
-func (gp *GstPipeline) switchSelectorPad(wts *WebrtcToSelector, pad *gst.Pad) error {
+func (gp *GstPipeline) switchSelectorPad(wt *WebrtcTrack, pad *gst.Pad) error {
 	if err := validatePad(pad); err != nil {
 		return fmt.Errorf("invalid pad provided for selector switch: %w", err)
 	}
 
+	// return gp.WebrtcToSip.InputSelector.SetProperty("active-pad", pad)
+
 	done := make(chan struct{})
 	timeout := time.After(2 * time.Second)
 
-	if err := injectKeyframe(gp.RtcpInjectorAppSrc, wts.SSRC); err != nil {
-		return fmt.Errorf("failed to request keyframe from webrtc source: %w", err)
-	}
+	// if err := injectKeyframe(gp.RtcpInjectorAppSrc, wt.SSRC); err != nil {
+	// 	return fmt.Errorf("failed to request keyframe from webrtc source: %w", err)
+	// }
 
-	gp.log.Debugw("Waiting for keyframe on WebRTC source", "ssrc", wts.SSRC)
+	var err error
+
+	gp.log.Debugw("Waiting for keyframe on WebRTC source", "ssrc", wt.SSRC)
 	probe := pad.AddProbe(gst.PadProbeTypeBuffer, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
 		buf := info.GetBuffer()
 		if buf == nil {
@@ -147,7 +151,10 @@ func (gp *GstPipeline) switchSelectorPad(wts *WebrtcToSelector, pad *gst.Pad) er
 		}
 
 		if !buf.HasFlags(gst.BufferFlagDeltaUnit) {
-			gp.RtpInputSelector.SetProperty("active-pad", pad)
+			if err = gp.WebrtcToSip.InputSelector.SetProperty("active-pad", pad); err != nil {
+				gp.log.Errorw("Failed to set active pad on input selector", err)
+				err = fmt.Errorf("failed to set active pad on input selector: %w", err)
+			}
 			close(done)
 			return gst.PadProbeRemove
 		}
@@ -157,10 +164,13 @@ func (gp *GstPipeline) switchSelectorPad(wts *WebrtcToSelector, pad *gst.Pad) er
 	select {
 	case <-timeout:
 		pad.RemoveProbe(probe)
-		gp.log.Errorw("Timeout waiting for keyframe on WebRTC source", nil, "ssrc", wts.SSRC)
-		return fmt.Errorf("timeout waiting for keyframe on webrtc source ssrc: %d", wts.SSRC)
+		gp.log.Errorw("Timeout waiting for keyframe on WebRTC source", nil, "ssrc", wt.SSRC)
+		return fmt.Errorf("timeout waiting for keyframe on webrtc source ssrc: %d", wt.SSRC)
 	case <-done:
-		gp.log.Infow("Switched WebRTC selector source", "ssrc", wts.SSRC)
+		if err != nil {
+			return err
+		}
+		gp.log.Infow("Switched WebRTC selector source", "ssrc", wt.SSRC)
 	}
 	return nil
 }
@@ -173,16 +183,16 @@ func (gp *GstPipeline) RemoveWebRTCSourceFromSelector(sid string) error {
 		return nil
 	}
 
-	webrtcToSelector, exists := gp.WebrtcToSelectors[sid]
+	webrtcTrack, exists := gp.WebrtcToSip.WebrtcTracks[sid]
 	if !exists {
 		return fmt.Errorf("webrtc source with sid %s does not exist", sid)
 	}
 
-	if err := webrtcToSelector.Close(gp.Pipeline); err != nil {
+	if err := webrtcTrack.Close(gp.Pipeline); err != nil {
 		return fmt.Errorf("failed to close webrtc to selector chain: %w", err)
 	}
 
-	delete(gp.WebrtcToSelectors, sid)
+	delete(gp.WebrtcToSip.WebrtcTracks, sid)
 
 	if err := gp.ensureActiveSource(); err != nil {
 		return fmt.Errorf("failed to ensure active source after removing source: %w", err)
@@ -207,7 +217,7 @@ func (gp *GstPipeline) ensureActiveSource() error {
 		return nil
 	}
 
-	sel := gp.RtpInputSelector
+	sel := gp.WebrtcToSip.InputSelector
 	activePad, err := sel.GetProperty("active-pad")
 	if err == nil && activePad != nil {
 		pad, ok := activePad.(*gst.Pad)
@@ -216,13 +226,13 @@ func (gp *GstPipeline) ensureActiveSource() error {
 		}
 	}
 
-	for _, webrtcToSelector := range gp.WebrtcToSelectors {
-		selPad := webrtcToSelector.RtpPad
-		if err := gp.switchSelectorPad(webrtcToSelector, selPad); err != nil {
-			gp.log.Errorw("Failed to switch selector pad to ssrc", err, "ssrc", webrtcToSelector.SSRC)
+	for _, webrtcTrack := range gp.WebrtcToSip.WebrtcTracks {
+		selPad := webrtcTrack.RtpPad
+		if err := gp.switchSelectorPad(webrtcTrack, selPad); err != nil {
+			gp.log.Errorw("Failed to switch selector pad to ssrc", err, "ssrc", webrtcTrack.SSRC)
 			continue
 		}
-		gp.log.Debugw("Switched selector pad to ssrc", "ssrc", webrtcToSelector.SSRC)
+		gp.log.Debugw("Switched selector pad to ssrc", "ssrc", webrtcTrack.SSRC)
 		return nil
 	}
 

@@ -24,26 +24,26 @@ func (v *VideoManager) SetupGstPipeline(media *sdpv2.SDPMedia) error {
 
 	// setup SIP to WebRTC pipeline
 	// link rtp path
-	sipRtpIn, err := NewGstWriter(pipeline.SipRtpAppSrc)
+	sipRtpIn, err := NewGstWriter(pipeline.SipToWebrtc.SipRtpAppSrc)
 	if err != nil {
 		return fmt.Errorf("failed to create SIP RTP reader: %w", err)
 	}
 	go v.Copy(sipRtpIn, v.sipRtpIn)
 
-	webrtcRtpOut, err := NewGstReader(pipeline.WebrtcRtpAppSink)
+	webrtcRtpOut, err := NewGstReader(pipeline.SipToWebrtc.WebrtcRtpAppSink)
 	if err != nil {
 		return fmt.Errorf("failed to create WebRTC RTP writer: %w", err)
 	}
 	go v.Copy(v.webrtcRtpOut, webrtcRtpOut)
 
 	// link rtcp path
-	sipRtcpIn, err := NewGstWriter(pipeline.SipRtcpAppSrc)
+	sipRtcpIn, err := NewGstWriter(pipeline.SipToWebrtc.SipRtcpAppSrc)
 	if err != nil {
 		return fmt.Errorf("failed to create SIP RTCP reader: %w", err)
 	}
 	go v.Copy(sipRtcpIn, v.sipRtcpIn)
 
-	sipRtcpOut, err := NewGstReader(pipeline.SipRtcpAppSink)
+	sipRtcpOut, err := NewGstReader(pipeline.SipToWebrtc.SipRtcpAppSink)
 	if err != nil {
 		return fmt.Errorf("failed to create WebRTC RTCP writer: %w", err)
 	}
@@ -51,14 +51,14 @@ func (v *VideoManager) SetupGstPipeline(media *sdpv2.SDPMedia) error {
 
 	// setup WebRTC to SIP pipeline
 	// link rtp path
-	sipRtpOut, err := NewGstReader(pipeline.SipRtpAppSink)
+	sipRtpOut, err := NewGstReader(pipeline.WebrtcToSip.SipRtpAppSink)
 	if err != nil {
 		return fmt.Errorf("failed to create SIP RTP writer: %w", err)
 	}
 	go v.Copy(v.sipRtpOut, sipRtpOut)
 
 	// link rtcp path
-	webrtcRtcpOut, err := NewGstReader(pipeline.WebrtcRtcpAppSink)
+	webrtcRtcpOut, err := NewGstReader(pipeline.WebrtcToSip.WebrtcRtcpAppSink)
 	if err != nil {
 		return fmt.Errorf("failed to create WebRTC RTP writer: %w", err)
 	}

@@ -131,7 +131,7 @@ func (v *VideoManager) WebrtcTrackInput(ti *TrackInput, sid string, ssrc uint32)
 		return
 	}
 
-	webrtcRtpIn, err := NewGstWriter(s.WebrtcRtpAppSrc)
+	webrtcRtpIn, err := NewGstWriter(s.RtpAppSrc)
 	if err != nil {
 		v.log.Errorw("failed to create WebRTC RTP writer", err)
 		return
@@ -144,12 +144,12 @@ func (v *VideoManager) WebrtcTrackInput(ti *TrackInput, sid string, ssrc uint32)
 	}()
 
 	// TODO: fix RTCP pipeline then enable this
-	// webrtcRtcpIn, err := NewGstWriter(s.WebrtcRtcpAppSrc)
-	// if err != nil {
-	// 	v.log.Errorw("failed to create WebRTC RTCP reader", err)
-	// 	return
-	// }
-	// go Copy(webrtcRtcpIn, ti.RtcpIn)
+	webrtcRtcpIn, err := NewGstWriter(s.RtcpAppSrc)
+	if err != nil {
+		v.log.Errorw("failed to create WebRTC RTCP reader", err)
+		return
+	}
+	go v.Copy(webrtcRtcpIn, ti.RtcpIn)
 }
 
 func (v *VideoManager) SwitchActiveWebrtcTrack(sid string) error {

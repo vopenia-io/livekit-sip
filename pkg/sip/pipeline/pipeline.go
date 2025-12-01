@@ -18,8 +18,8 @@ type GstPipeline struct {
 	closed   core.Fuse
 	Pipeline *gst.Pipeline
 
-	*SipToWebrtc
-	*SelectorToSip
+	SipToWebrtc *SipToWebrtc
+	WebrtcToSip *WebrtcToSip
 }
 
 type GstChain interface {
@@ -110,7 +110,7 @@ func NewGstPipeline(log logger.Logger, sipInPayload, sipOutPayload int) (*GstPip
 		return nil, err
 	}
 
-	gp.SelectorToSip, err = CastErr[*SelectorToSip](gp.addChain(buildSelectorToSipChain(log.WithComponent("selector_to_sip"), sipOutPayload)))
+	gp.WebrtcToSip, err = CastErr[*WebrtcToSip](gp.addChain(buildSelectorToSipChain(log.WithComponent("selector_to_sip"), sipOutPayload)))
 	if err != nil {
 		return nil, err
 	}
