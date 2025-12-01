@@ -51,7 +51,6 @@ func NewVideoManager(log logger.Logger, room *Room, opts *MediaOptions, factory 
 		rtpConn:         newUDPConn(log.WithComponent("video-rtp"), rtpConn),
 		rtcpConn:        newUDPConn(log.WithComponent("video-rtcp"), rtcpConn),
 		status:          VideoStatusStopped,
-		ssrcs:           make(map[string]uint32),
 		pipelineFactory: factory,
 	}
 
@@ -78,7 +77,6 @@ type VideoManager struct {
 	recv            bool
 	send            bool
 	status          VideoStatus
-	ssrcs           map[string]uint32
 }
 
 type VideoIO struct {

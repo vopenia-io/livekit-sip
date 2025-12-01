@@ -1,6 +1,7 @@
 package sip
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 
@@ -11,12 +12,13 @@ import (
 )
 
 type MediaOrchestrator struct {
-	mu      sync.Mutex
-	opts    *MediaOptions
-	log     logger.Logger
-	inbound *sipInbound
-	room    *Room
-	camera  *CameraManager
+	mu          sync.Mutex
+	opts        *MediaOptions
+	log         logger.Logger
+	inbound     *sipInbound
+	room        *Room
+	camera      *CameraManager
+	screenshare *ScreenshareManager
 }
 
 func NewMediaOrchestrator(log logger.Logger, inbound *sipInbound, room *Room, opts *MediaOptions) (*MediaOrchestrator, error) {
@@ -36,6 +38,17 @@ func NewMediaOrchestrator(log logger.Logger, inbound *sipInbound, room *Room, op
 		ti := NewTrackInput(track, pub, rp)
 		o.camera.WebrtcTrackInput(ti, rp.SID(), uint32(track.SSRC()))
 	})
+
+	screenshare, err := NewScreenshareManager(log.WithComponent("screenshare"), room, opts)
+	if err != nil {
+		return nil, fmt.Errorf("could not create screenshare manager: %w", err)
+	}
+	o.screenshare = screenshare
+	o.room.OnScreenshareTrack(func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
+		ti := NewTrackInput(track, pub, rp)
+		o.screenshare.WebrtcTrackInput(ti, rp.SID(), uint32(track.SSRC()))
+	})
+
 	o.room.OnActiveSpeakersChanged(func(p []lksdk.Participant) {
 		if len(p) == 0 {
 			o.log.Debugw("no active speakers found")
@@ -51,7 +64,7 @@ func NewMediaOrchestrator(log logger.Logger, inbound *sipInbound, room *Room, op
 }
 
 func (o *MediaOrchestrator) Close() error {
-	return nil
+	return errors.Join(o.camera.Close(), o.screenshare.Close())
 }
 
 func (o *MediaOrchestrator) AnswerSDP(offer *sdpv2.SDP) (*sdpv2.SDP, error) {

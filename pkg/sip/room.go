@@ -171,9 +171,10 @@ type Room struct {
 	closed     core.Fuse
 	stats      *RoomStats
 
-	onCameraTrack func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant)
-	trackMu       sync.Mutex
-	cameraOut     *TrackOutput
+	onCameraTrack      func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant)
+	onScreenshareTrack func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant)
+	trackMu            sync.Mutex
+	cameraOut          *TrackOutput
 
 	onActiveSpeakerChanged func(p []lksdk.Participant)
 }
@@ -620,6 +621,13 @@ func (r *Room) participantVideoTrackSubscribed(track *webrtc.TrackRemote, pub *l
 			return
 		}
 		r.onCameraTrack(track, pub, rp)
+	case livekit.TrackSource_SCREEN_SHARE:
+		log.Infow("connecting screenshare track")
+		if r.onScreenshareTrack == nil {
+			log.Warnw("no screenshare track handler set, ignoring track", nil)
+			return
+		}
+		r.onScreenshareTrack(track, pub, rp)
 	default:
 		log.Infow("ignoring non-camera video track", "source", pub.Source())
 	}
@@ -630,6 +638,13 @@ func (r *Room) OnCameraTrack(f func(track *webrtc.TrackRemote, pub *lksdk.Remote
 		r.log.Warnw("overriding existing camera track handler", nil)
 	}
 	r.onCameraTrack = f
+}
+
+func (r *Room) OnScreenshareTrack(f func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant)) {
+	if r.onScreenshareTrack != nil {
+		r.log.Warnw("overriding existing screenshare track handler", nil)
+	}
+	r.onScreenshareTrack = f
 }
 
 func (r *Room) OnActiveSpeakersChanged(f func(p []lksdk.Participant)) {

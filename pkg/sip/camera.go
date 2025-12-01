@@ -11,10 +11,13 @@ import (
 
 type CameraManager struct {
 	*VideoManager
+	ssrcs map[string]uint32
 }
 
 func NewCameraManager(log logger.Logger, room *Room, opts *MediaOptions) (*CameraManager, error) {
-	cm := &CameraManager{}
+	cm := &CameraManager{
+		ssrcs: make(map[string]uint32),
+	}
 
 	vm, err := NewVideoManager(log, room, opts, cm)
 	if err != nil {
@@ -77,58 +80,58 @@ func (cm *CameraManager) NewPipeline(media *sdpv2.SDPMedia) (pipeline.GspPipelin
 	return pipeline, nil
 }
 
-func (v *CameraManager) WebrtcTrackInput(ti *TrackInput, sid string, ssrc uint32) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
+func (cm *CameraManager) WebrtcTrackInput(ti *TrackInput, sid string, ssrc uint32) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
 
-	if v.status != VideoStatusStarted {
-		v.log.Warnw("video manager not started, cannot add WebRTC track input", nil, "status", v.status)
+	if cm.status != VideoStatusStarted {
+		cm.log.Warnw("video manager not started, cannot add WebRTC track input", nil, "status", cm.status)
 		return
 	}
 
-	v.log.Infow("WebRTC video track subscribed - connecting WebRTC→SIP pipeline",
+	cm.log.Infow("WebRTC video track subscribed - connecting WebRTC→SIP pipeline",
 		"hasRtpIn", ti.RtpIn != nil,
 		"hasRtcpIn", ti.RtcpIn != nil)
 
-	s, err := v.pipeline.(*camera_pipeline.CameraPipeline).AddWebRTCSourceToSelector(ssrc)
+	s, err := cm.pipeline.(*camera_pipeline.CameraPipeline).AddWebRTCSourceToSelector(ssrc)
 	if err != nil {
-		v.log.Errorw("failed to add WebRTC source to selector", err)
+		cm.log.Errorw("failed to add WebRTC source to selector", err)
 		return
 	}
 
-	v.ssrcs[sid] = ssrc
+	cm.ssrcs[sid] = ssrc
 
 	webrtcRtpIn, err := NewGstWriter(s.RtpAppSrc)
 	if err != nil {
-		v.log.Errorw("failed to create WebRTC RTP writer", err)
+		cm.log.Errorw("failed to create WebRTC RTP writer", err)
 		return
 	}
 	go func() {
-		v.Copy(webrtcRtpIn, ti.RtpIn)
-		if err := v.pipeline.(*camera_pipeline.CameraPipeline).RemoveWebRTCSourceFromSelector(ssrc); err != nil {
-			v.log.Errorw("failed to remove WebRTC source from selector", err)
+		cm.Copy(webrtcRtpIn, ti.RtpIn)
+		if err := cm.pipeline.(*camera_pipeline.CameraPipeline).RemoveWebRTCSourceFromSelector(ssrc); err != nil {
+			cm.log.Errorw("failed to remove WebRTC source from selector", err)
 		}
 	}()
 
 	webrtcRtcpIn, err := NewGstWriter(s.RtcpAppSrc)
 	if err != nil {
-		v.log.Errorw("failed to create WebRTC RTCP reader", err)
+		cm.log.Errorw("failed to create WebRTC RTCP reader", err)
 		return
 	}
-	go v.Copy(webrtcRtcpIn, ti.RtcpIn)
+	go cm.Copy(webrtcRtcpIn, ti.RtcpIn)
 }
 
-func (v *CameraManager) SwitchActiveWebrtcTrack(sid string) error {
-	v.mu.Lock()
-	defer v.mu.Unlock()
+func (cm *CameraManager) SwitchActiveWebrtcTrack(sid string) error {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
 
-	ssrc, ok := v.ssrcs[sid]
+	ssrc, ok := cm.ssrcs[sid]
 	if !ok {
 		return fmt.Errorf("no SSRC found for sid %s", sid)
 	}
-	v.log.Debugw("switching active WebRTC video track", "sid", sid, "ssrc", ssrc)
+	cm.log.Debugw("switching active WebRTC video track", "sid", sid, "ssrc", ssrc)
 
-	if err := v.pipeline.(*camera_pipeline.CameraPipeline).SwitchWebRTCSelectorSource(ssrc); err != nil {
+	if err := cm.pipeline.(*camera_pipeline.CameraPipeline).SwitchWebRTCSelectorSource(ssrc); err != nil {
 		return fmt.Errorf("failed to switch WebRTC selector source: %w", err)
 	}
 
