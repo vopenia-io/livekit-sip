@@ -3,6 +3,7 @@ package sip
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"sync"
@@ -14,7 +15,7 @@ import (
 	sdpv1 "github.com/livekit/media-sdk/sdp"
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
 	"github.com/livekit/protocol/logger"
-	"github.com/livekit/sip/pkg/sip/pipeline/camera_pipeline"
+	"github.com/livekit/sip/pkg/sip/pipeline"
 )
 
 var mainLoop *glib.MainLoop
@@ -35,7 +36,7 @@ const (
 	VideoStatusStarted
 )
 
-func NewVideoManager(log logger.Logger, room *Room, opts *MediaOptions) (*VideoManager, error) {
+func NewVideoManager(log logger.Logger, room *Room, opts *MediaOptions, factory PipelineFactory) (*VideoManager, error) {
 	// Allocate RTP/RTCP port pair according to RFC 3550 (RTCP on RTP+1)
 	rtpConn, rtcpConn, err := mrtp.ListenUDPPortPair(opts.Ports.Start, opts.Ports.End, opts.IP)
 	if err != nil {
@@ -43,14 +44,15 @@ func NewVideoManager(log logger.Logger, room *Room, opts *MediaOptions) (*VideoM
 	}
 
 	v := &VideoManager{
-		VideoIO:  NewVideoIO(),
-		log:      log,
-		room:     room,
-		opts:     opts,
-		rtpConn:  newUDPConn(log.WithComponent("video-rtp"), rtpConn),
-		rtcpConn: newUDPConn(log.WithComponent("video-rtcp"), rtcpConn),
-		status:   VideoStatusStopped,
-		ssrcs:    make(map[string]uint32),
+		VideoIO:         NewVideoIO(),
+		log:             log,
+		room:            room,
+		opts:            opts,
+		rtpConn:         newUDPConn(log.WithComponent("video-rtp"), rtpConn),
+		rtcpConn:        newUDPConn(log.WithComponent("video-rtcp"), rtcpConn),
+		status:          VideoStatusStopped,
+		ssrcs:           make(map[string]uint32),
+		pipelineFactory: factory,
 	}
 
 	v.log.Infow("video manager created")
@@ -58,20 +60,25 @@ func NewVideoManager(log logger.Logger, room *Room, opts *MediaOptions) (*VideoM
 	return v, nil
 }
 
+type PipelineFactory interface {
+	NewPipeline(media *sdpv2.SDPMedia) (pipeline.GspPipeline, error)
+}
+
 type VideoManager struct {
 	*VideoIO
-	mu       sync.Mutex
-	log      logger.Logger
-	opts     *MediaOptions
-	room     *Room
-	rtpConn  *udpConn
-	rtcpConn *udpConn
-	pipeline *camera_pipeline.GstPipeline
-	codec    *sdpv2.Codec
-	recv     bool
-	send     bool
-	status   VideoStatus
-	ssrcs    map[string]uint32
+	mu              sync.Mutex
+	log             logger.Logger
+	opts            *MediaOptions
+	room            *Room
+	rtpConn         *udpConn
+	rtcpConn        *udpConn
+	pipeline        pipeline.GspPipeline
+	pipelineFactory PipelineFactory
+	codec           *sdpv2.Codec
+	recv            bool
+	send            bool
+	status          VideoStatus
+	ssrcs           map[string]uint32
 }
 
 type VideoIO struct {
@@ -82,6 +89,13 @@ type VideoIO struct {
 
 	webrtcRtpOut  *SwitchWriter
 	webrtcRtcpOut *SwitchWriter
+}
+
+func (v *VideoManager) Copy(dst io.WriteCloser, src io.ReadCloser) {
+	n, err := io.Copy(dst, src)
+	v.log.Infow("finished copying video data", "bytes", n, "err", err)
+	src.Close()
+	dst.Close()
 }
 
 func NewVideoIO() *VideoIO {
@@ -112,80 +126,6 @@ func (v *VideoManager) RtpPort() int {
 
 func (v *VideoManager) RtcpPort() int {
 	return v.rtcpConn.LocalAddr().(*net.UDPAddr).Port
-}
-
-func (v *VideoManager) WebrtcTrackInput(ti *TrackInput, sid string, ssrc uint32) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-
-	if v.status != VideoStatusStarted {
-		v.log.Warnw("video manager not started, cannot add WebRTC track input", nil, "status", v.status)
-		return
-	}
-
-	v.log.Infow("WebRTC video track subscribed - connecting WebRTC→SIP pipeline",
-		"hasRtpIn", ti.RtpIn != nil,
-		"hasRtcpIn", ti.RtcpIn != nil)
-
-	s, err := v.pipeline.AddWebRTCSourceToSelector(ssrc)
-	if err != nil {
-		v.log.Errorw("failed to add WebRTC source to selector", err)
-		return
-	}
-
-	v.ssrcs[sid] = ssrc
-
-	webrtcRtpIn, err := NewGstWriter(s.RtpAppSrc)
-	if err != nil {
-		v.log.Errorw("failed to create WebRTC RTP writer", err)
-		return
-	}
-	go func() {
-		v.Copy(webrtcRtpIn, ti.RtpIn)
-		if err := v.pipeline.RemoveWebRTCSourceFromSelector(ssrc); err != nil {
-			v.log.Errorw("failed to remove WebRTC source from selector", err)
-		}
-	}()
-
-	// TODO: fix RTCP pipeline then enable this
-	webrtcRtcpIn, err := NewGstWriter(s.RtcpAppSrc)
-	if err != nil {
-		v.log.Errorw("failed to create WebRTC RTCP reader", err)
-		return
-	}
-	go v.Copy(webrtcRtcpIn, ti.RtcpIn)
-}
-
-func (v *VideoManager) SwitchActiveWebrtcTrack(sid string) error {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-
-	ssrc, ok := v.ssrcs[sid]
-	if !ok {
-		return fmt.Errorf("no SSRC found for sid %s", sid)
-	}
-	v.log.Debugw("switching active WebRTC video track", "sid", sid, "ssrc", ssrc)
-
-	// pli := &rtcp.PictureLossIndication{
-	// 	MediaSSRC:  ssrc, // The track we want a keyframe for
-	// 	SenderSSRC: 0,    // Your local SSRC (0 is usually acceptable if unknown)
-	// }
-
-	// buf, err := pli.Marshal()
-	// if err != nil {
-	// 	return fmt.Errorf("failed to marshal PLI: %w", err)
-	// }
-
-	// _, err = v.webrtcRtcpOut.Write(buf)
-	// if err != nil {
-	// 	return fmt.Errorf("failed to send PLI RTCP packet: %w", err)
-	// }
-
-	if err := v.pipeline.SwitchWebRTCSelectorSource(ssrc); err != nil {
-		return fmt.Errorf("failed to switch WebRTC selector source: %w", err)
-	}
-
-	return nil
 }
 
 func (v *VideoManager) WebrtcTrackOutput(to *TrackOutput) {
@@ -330,9 +270,11 @@ func (v *VideoManager) Setup(remote netip.Addr, media *sdpv2.SDPMedia) error {
 	}
 	v.codec = media.Codec
 
-	if err := v.SetupGstPipeline(media); err != nil {
-		return fmt.Errorf("failed to setup GStreamer pipeline: %w", err)
+	p, err := v.pipelineFactory.NewPipeline(media)
+	if err != nil {
+		return fmt.Errorf("failed to create SIP WebRTC pipeline: %w", err)
 	}
+	v.pipeline = p
 
 	v.recv = media.Direction.IsRecv()
 	v.send = media.Direction.IsSend()

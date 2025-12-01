@@ -9,7 +9,7 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline"
 )
 
-func (gp *GstPipeline) AddWebRTCSourceToSelector(ssrc uint32) (*WebrtcTrack, error) {
+func (gp *CameraPipeline) AddWebRTCSourceToSelector(ssrc uint32) (*WebrtcTrack, error) {
 	gp.Mu.Lock()
 	defer gp.Mu.Unlock()
 
@@ -46,13 +46,13 @@ func (gp *GstPipeline) AddWebRTCSourceToSelector(ssrc uint32) (*WebrtcTrack, err
 	return webRTCToSelector, nil
 }
 
-func (gp *GstPipeline) SwitchWebRTCSelectorSource(ssrc uint32) error {
+func (gp *CameraPipeline) SwitchWebRTCSelectorSource(ssrc uint32) error {
 	gp.Mu.Lock()
 	defer gp.Mu.Unlock()
 	return gp.switchWebRTCSelectorSource(ssrc)
 }
 
-func (gp *GstPipeline) switchWebRTCSelectorSource(ssrc uint32) error {
+func (gp *CameraPipeline) switchWebRTCSelectorSource(ssrc uint32) error {
 	if gp.Closed() {
 		return fmt.Errorf("pipeline is closed")
 	}
@@ -88,7 +88,7 @@ func (gp *GstPipeline) switchWebRTCSelectorSource(ssrc uint32) error {
 	return gp.switchSelectorPad(track, selPad)
 }
 
-func (gp *GstPipeline) switchSelectorPad(wt *WebrtcTrack, pad *gst.Pad) error {
+func (gp *CameraPipeline) switchSelectorPad(wt *WebrtcTrack, pad *gst.Pad) error {
 	if err := pipeline.ValidatePad(pad); err != nil {
 		return fmt.Errorf("invalid pad provided for selector switch: %w", err)
 	}
@@ -154,7 +154,7 @@ func (gp *GstPipeline) switchSelectorPad(wt *WebrtcTrack, pad *gst.Pad) error {
 	return nil
 }
 
-func (gp *GstPipeline) RemoveWebRTCSourceFromSelector(ssrc uint32) error {
+func (gp *CameraPipeline) RemoveWebRTCSourceFromSelector(ssrc uint32) error {
 	gp.Mu.Lock()
 	defer gp.Mu.Unlock()
 
@@ -176,7 +176,7 @@ func (gp *GstPipeline) RemoveWebRTCSourceFromSelector(ssrc uint32) error {
 	return nil
 }
 
-func (gp *GstPipeline) setupAutoSwitching() error {
+func (gp *CameraPipeline) setupAutoSwitching() error {
 	mu := sync.Mutex{}
 	sel := gp.WebrtcToSip.InputSelector
 
@@ -246,7 +246,7 @@ func (gp *GstPipeline) setupAutoSwitching() error {
 	return nil
 }
 
-func (gp *GstPipeline) ensureActiveSource() error {
+func (gp *CameraPipeline) ensureActiveSource() error {
 	if gp.Closed() {
 		return nil
 	}
@@ -303,7 +303,7 @@ func (gp *GstPipeline) ensureActiveSource() error {
 	return nil
 }
 
-func (gp *GstPipeline) RequestKeyframe(wt *WebrtcTrack) error {
+func (gp *CameraPipeline) RequestKeyframe(wt *WebrtcTrack) error {
 	structure := gst.NewStructure("GstForceKeyUnit")
 	structure.SetValue("timestamp", uint64(gst.ClockTimeNone))
 	structure.SetValue("stream-time", uint64(gst.ClockTimeNone))

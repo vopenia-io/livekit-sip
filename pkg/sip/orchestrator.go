@@ -16,7 +16,7 @@ type MediaOrchestrator struct {
 	log     logger.Logger
 	inbound *sipInbound
 	room    *Room
-	camera  *VideoManager
+	camera  *CameraManager
 }
 
 func NewMediaOrchestrator(log logger.Logger, inbound *sipInbound, room *Room, opts *MediaOptions) (*MediaOrchestrator, error) {
@@ -27,7 +27,7 @@ func NewMediaOrchestrator(log logger.Logger, inbound *sipInbound, room *Room, op
 		opts:    opts,
 	}
 
-	camera, err := NewVideoManager(log.WithComponent("camera"), room, opts)
+	camera, err := NewCameraManager(log.WithComponent("camera"), room, opts)
 	if err != nil {
 		return nil, fmt.Errorf("could not create video manager: %w", err)
 	}

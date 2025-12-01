@@ -7,36 +7,36 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline"
 )
 
-type GstPipeline struct {
+type CameraPipeline struct {
 	*pipeline.BasePipeline
 
 	SipToWebrtc *SipToWebrtc
 	WebrtcToSip *WebrtcToSip
 }
 
-func New(log logger.Logger, sipPt uint8) (*GstPipeline, error) {
+func New(log logger.Logger, sipPt uint8) (*CameraPipeline, error) {
+	cp := &CameraPipeline{}
+
 	p, err := pipeline.New(log)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create gst pipeline: %w", err)
 	}
 
-	gp := &GstPipeline{
-		BasePipeline: p,
-	}
+	cp.BasePipeline = p
 
-	gp.SipToWebrtc, err = pipeline.CastErr[*SipToWebrtc](gp.AddChain(buildSipToWebRTCChain(log.WithComponent("sip_to_webrtc"), int(sipPt))))
+	cp.SipToWebrtc, err = pipeline.CastErr[*SipToWebrtc](cp.AddChain(buildSipToWebRTCChain(log.WithComponent("sip_to_webrtc"), int(sipPt))))
 	if err != nil {
 		return nil, err
 	}
 
-	gp.WebrtcToSip, err = pipeline.CastErr[*WebrtcToSip](gp.AddChain(buildSelectorToSipChain(log.WithComponent("selector_to_sip"), int(sipPt))))
+	cp.WebrtcToSip, err = pipeline.CastErr[*WebrtcToSip](cp.AddChain(buildSelectorToSipChain(log.WithComponent("selector_to_sip"), int(sipPt))))
 	if err != nil {
 		return nil, err
 	}
 
-	if err := gp.setupAutoSwitching(); err != nil {
+	if err := cp.setupAutoSwitching(); err != nil {
 		return nil, err
 	}
 
-	return gp, nil
+	return cp, nil
 }

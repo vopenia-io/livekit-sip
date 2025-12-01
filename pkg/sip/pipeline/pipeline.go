@@ -17,6 +17,13 @@ type BasePipeline struct {
 	closed   core.Fuse
 }
 
+type GspPipeline interface {
+	SetState(state gst.State) error
+	SetStateWait(state gst.State) error
+	Close() error
+	Closed() bool
+}
+
 type GstChain interface {
 	Add(p *gst.Pipeline) error
 	Link(p *gst.Pipeline) error
