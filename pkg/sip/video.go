@@ -279,12 +279,14 @@ func (v *VideoManager) Setup(remote netip.Addr, media *sdpv2.SDPMedia) error {
 
 	v.log.Infow("video setup", "send", v.send, "recv", v.recv, "remote", remote.String(), "rtp_port", v.RtpPort(), "rtcp_port", v.RtcpPort())
 
-	if err := v.setupOutput(remote, media, v.recv); err != nil {
-		return fmt.Errorf("failed to setup video input: %w", err)
+	// setupOutput: send TO SIP device (when we send, i.e., v.send=true)
+	if err := v.setupOutput(remote, media, v.send); err != nil {
+		return fmt.Errorf("failed to setup video output to SIP: %w", err)
 	}
 
-	if err := v.setupInput(remote, media, v.send); err != nil {
-		return fmt.Errorf("failed to setup video output: %w", err)
+	// setupInput: receive FROM SIP device (when we receive, i.e., v.recv=true)
+	if err := v.setupInput(remote, media, v.recv); err != nil {
+		return fmt.Errorf("failed to setup video input from SIP: %w", err)
 	}
 
 	v.status = VideoStatusReady

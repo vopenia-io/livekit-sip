@@ -1,14 +1,19 @@
 package sip
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
+	"github.com/livekit/media-sdk/sdp/v2/bfcp"
 	"github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/webrtc/v4"
+
+	lkbfcp "github.com/livekit/sip/pkg/bfcp"
 )
 
 type MediaOrchestrator struct {
@@ -19,6 +24,15 @@ type MediaOrchestrator struct {
 	room        *Room
 	camera      *CameraManager
 	screenshare *ScreenshareManager
+
+	// BFCP floor control
+	bfcpManager *lkbfcp.Manager
+	bfcpInfo    *bfcp.MediaInfo
+
+	// Callback for SIP re-INVITE when content negotiation is needed.
+	// Called when BFCP floor is granted and no content port was in initial SDP.
+	// Returns the content port from the SIP device's 200 OK response.
+	OnReInviteNeeded func(ctx context.Context) (contentPort uint16, err error)
 }
 
 func NewMediaOrchestrator(log logger.Logger, inbound *sipInbound, room *Room, opts *MediaOptions) (*MediaOrchestrator, error) {
@@ -44,6 +58,37 @@ func NewMediaOrchestrator(log logger.Logger, inbound *sipInbound, room *Room, op
 		return nil, fmt.Errorf("could not create screenshare manager: %w", err)
 	}
 	o.screenshare = screenshare
+
+	// Wire up screenshare lifecycle callbacks for BFCP floor control
+	o.screenshare.OnScreenshareStarted = func() {
+		o.mu.Lock()
+		bfcpMgr := o.bfcpManager
+		o.mu.Unlock()
+
+		if bfcpMgr != nil {
+			o.log.Infow("WebRTC screenshare started - requesting BFCP floor for virtual client")
+			if err := bfcpMgr.RequestFloorForVirtualClient(); err != nil {
+				o.log.Errorw("Failed to request BFCP floor for virtual client", err)
+			}
+		} else {
+			o.log.Debugw("WebRTC screenshare started but no BFCP manager available")
+		}
+	}
+	o.screenshare.OnScreenshareStopped = func() {
+		o.mu.Lock()
+		bfcpMgr := o.bfcpManager
+		o.mu.Unlock()
+
+		if bfcpMgr != nil {
+			o.log.Infow("WebRTC screenshare stopped - releasing BFCP floor for virtual client")
+			if err := bfcpMgr.ReleaseFloorForVirtualClient(); err != nil {
+				o.log.Errorw("Failed to release BFCP floor for virtual client", err)
+			}
+		} else {
+			o.log.Debugw("WebRTC screenshare stopped but no BFCP manager available")
+		}
+	}
+
 	o.room.OnScreenshareTrack(func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
 		ti := NewTrackInput(track, pub, rp)
 		o.screenshare.WebrtcTrackInput(ti, rp.SID(), uint32(track.SSRC()))
@@ -64,6 +109,7 @@ func NewMediaOrchestrator(log logger.Logger, inbound *sipInbound, room *Room, op
 }
 
 func (o *MediaOrchestrator) Close() error {
+	o.StopBFCP()
 	return errors.Join(o.camera.Close(), o.screenshare.Close())
 }
 
@@ -77,11 +123,21 @@ func (o *MediaOrchestrator) AnswerSDP(offer *sdpv2.SDP) (*sdpv2.SDP, error) {
 		}
 	}
 
+	if offer.Screenshare != nil {
+		if err := offer.Screenshare.SelectCodec(); err != nil {
+			return nil, fmt.Errorf("could not select screenshare codec: %w", err)
+		}
+	}
+
 	if err := o.setupSDP(offer); err != nil {
 		return nil, fmt.Errorf("could not setup sdp: %w", err)
 	}
 
-	answer, err := o.offerSDP(offer.Video != nil)
+	// Only include screenshare in initial answer if SIP device offered it.
+	// Otherwise, defer screenshare negotiation to re-INVITE after BFCP floor grant.
+	// This is required for Poly endpoints which ignore slides m-line in initial 200 OK.
+	includeScreenshare := offer.Screenshare != nil
+	answer, err := o.offerSDP(offer.Video != nil, includeScreenshare)
 	if err != nil {
 		return nil, fmt.Errorf("could not create answer sdp: %w", err)
 	}
@@ -89,7 +145,7 @@ func (o *MediaOrchestrator) AnswerSDP(offer *sdpv2.SDP) (*sdpv2.SDP, error) {
 	return answer, nil
 }
 
-func (o *MediaOrchestrator) offerSDP(camera bool) (*sdpv2.SDP, error) {
+func (o *MediaOrchestrator) offerSDP(camera bool, screenshare bool) (*sdpv2.SDP, error) {
 	builder := (&sdpv2.SDP{}).Builder()
 
 	builder.SetAddress(o.opts.IP)
@@ -116,6 +172,28 @@ func (o *MediaOrchestrator) offerSDP(camera bool) (*sdpv2.SDP, error) {
 		})
 	}
 
+	if screenshare {
+		builder.SetScreenshare(func(b *sdpv2.SDPMediaBuilder) (*sdpv2.SDPMedia, error) {
+			codec := o.screenshare.Codec()
+			if codec == nil {
+				for _, c := range o.screenshare.SupportedCodecs() {
+					b.AddCodec(func(_ *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
+						return c, nil
+					}, false)
+				}
+			} else {
+				b.AddCodec(func(_ *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
+					return codec, nil
+				}, true)
+			}
+			b.SetDisabled(o.screenshare.Status() != VideoStatusStarted)
+			b.SetRTPPort(uint16(o.screenshare.RtpPort()))
+			b.SetRTCPPort(uint16(o.screenshare.RtcpPort()))
+			b.SetDirection(o.screenshare.Direction())
+			return b.Build()
+		})
+	}
+
 	offer, err := builder.Build()
 	if err != nil {
 		return nil, fmt.Errorf("could create a new sdp: %w", err)
@@ -127,7 +205,7 @@ func (o *MediaOrchestrator) offerSDP(camera bool) (*sdpv2.SDP, error) {
 func (o *MediaOrchestrator) OfferSDP() (*sdpv2.SDP, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	return o.offerSDP(true)
+	return o.offerSDP(true, true)
 }
 
 func (o *MediaOrchestrator) setupSDP(sdp *sdpv2.SDP) error {
@@ -137,6 +215,9 @@ func (o *MediaOrchestrator) setupSDP(sdp *sdpv2.SDP) error {
 	if err := o.room.StopCamera(); err != nil {
 		return fmt.Errorf("could not stop room camera: %w", err)
 	}
+	if err := o.screenshare.Stop(); err != nil {
+		return fmt.Errorf("could not stop screenshare manager: %w", err)
+	}
 
 	if sdp.Video != nil && !sdp.Video.Disabled {
 		if err := o.camera.Setup(sdp.Addr, sdp.Video); err != nil {
@@ -144,7 +225,46 @@ func (o *MediaOrchestrator) setupSDP(sdp *sdpv2.SDP) error {
 		}
 	}
 
+	// Setup screenshare for WebRTC→SIP even if SIP device didn't offer it.
+	// This allows WebRTC participants to share their screen to SIP devices.
+	if sdp.Screenshare != nil && !sdp.Screenshare.Disabled {
+		if err := o.screenshare.Setup(sdp.Addr, sdp.Screenshare); err != nil {
+			return fmt.Errorf("could not setup screenshare sdp: %w", err)
+		}
+	} else if sdp.Video != nil && !sdp.Video.Disabled {
+		// SIP device didn't offer screenshare, but we want to support WebRTC→SIP screenshare.
+		// Create a sendonly screenshare media using the same remote address and video port as fallback.
+		// Mark as fallback so we can trigger SIP re-INVITE after BFCP floor grant to get the real content port.
+		screenshareMedia := o.createDefaultScreenshareMedia(sdp.Video)
+		o.screenshare.SetFallbackMode(true, sdp.Addr) // Mark for re-INVITE after floor grant
+		if err := o.screenshare.Setup(sdp.Addr, screenshareMedia); err != nil {
+			// Non-fatal: log and continue without screenshare support
+			o.log.Warnw("could not setup default screenshare for WebRTC→SIP", err)
+		}
+	}
+
 	return nil
+}
+
+// createDefaultScreenshareMedia creates a default SDPMedia for WebRTC→SIP screenshare
+// when the SIP device didn't offer screenshare in its SDP.
+// It uses the video media's port as a fallback destination.
+func (o *MediaOrchestrator) createDefaultScreenshareMedia(videoMedia *sdpv2.SDPMedia) *sdpv2.SDPMedia {
+	codecs := o.screenshare.SupportedCodecs()
+	var codec *sdpv2.Codec
+	if len(codecs) > 0 {
+		codec = codecs[0]
+	}
+
+	return &sdpv2.SDPMedia{
+		Kind:      sdpv2.MediaKindVideo,
+		Content:   sdpv2.ContentTypeSlides,
+		Direction: sdpv2.DirectionSendOnly, // We send to SIP, we don't receive
+		Codec:     codec,
+		Codecs:    codecs,
+		Port:      videoMedia.Port,     // Use video port as fallback
+		RTCPPort:  videoMedia.RTCPPort, // Use video RTCP port as fallback
+	}
 }
 
 func (o *MediaOrchestrator) SetupSDP(sdp *sdpv2.SDP) error {
@@ -170,6 +290,173 @@ func (o *MediaOrchestrator) start() error {
 		}
 		o.camera.WebrtcTrackOutput(to)
 	}
-	return nil
 
+	if o.screenshare.Status() == VideoStatusReady {
+		if err := o.screenshare.Start(); err != nil {
+			return fmt.Errorf("could not start screenshare manager: %w", err)
+		}
+		// Note: screenshare doesn't need room track output since it's WebRTC→SIP only
+		// The WebRTC track input comes via OnScreenshareTrack callback
+	}
+
+	return nil
+}
+
+// SetupBFCP parses BFCP from raw SDP and starts the BFCP server asynchronously.
+// This is non-blocking - the server starts in a goroutine.
+func (o *MediaOrchestrator) SetupBFCP(rawOffer []byte) {
+	bfcpMedias, err := bfcp.ParseBFCPFromSDP(rawOffer)
+	if err != nil || len(bfcpMedias) == 0 {
+		return // No BFCP in offer
+	}
+
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	// Use the first BFCP media (typically content/screenshare)
+	o.bfcpInfo = bfcpMedias[0]
+	o.log.Debugw("BFCP offer detected",
+		"port", o.bfcpInfo.Port,
+		"proto", o.bfcpInfo.Proto,
+		"setup", o.bfcpInfo.Setup,
+		"connection", o.bfcpInfo.Connection,
+		"floorctrl", o.bfcpInfo.FloorCtrl,
+		"confid", o.bfcpInfo.ConfID,
+		"userid", o.bfcpInfo.UserID,
+		"floorid", o.bfcpInfo.FloorID,
+		"mstreamid", o.bfcpInfo.MStreamID,
+	)
+
+	// Create BFCP server config
+	bfcpCfg := &lkbfcp.Config{
+		ListenAddr:     ":0", // Let OS pick a port
+		ConferenceID:   o.bfcpInfo.ConfID,
+		ContentFloorID: o.bfcpInfo.FloorID,
+		AutoGrant:      true, // Auto-grant for now (1:1 calls)
+	}
+
+	bfcpMgr, err := lkbfcp.NewManager(o.log, bfcpCfg)
+	if err != nil {
+		o.log.Warnw("Failed to create BFCP manager", err)
+		return
+	}
+	o.bfcpManager = bfcpMgr
+
+	// Set up callbacks for floor events
+	o.bfcpManager.OnFloorGranted = func(floorID, userID uint16) {
+		o.log.Infow("BFCP floor granted - screenshare can start",
+			"floorID", floorID,
+			"userID", userID,
+		)
+		o.screenshare.SetFloorHeld(true)
+		o.log.Infow(">>> DEBUG: After SetFloorHeld, before NeedsReInvite check")
+
+		// If using fallback (no content port from initial SDP), trigger re-INVITE async
+		needsReInvite := o.screenshare.NeedsReInvite()
+		hasCallback := o.OnReInviteNeeded != nil
+		o.log.Infow(">>> REINVITE_DEBUG v2025-12-02: Floor granted, checking re-INVITE",
+			"needsReInvite", needsReInvite,
+			"hasCallback", hasCallback,
+		)
+		o.log.Infow("Checking re-INVITE condition",
+			"needsReInvite", needsReInvite,
+			"hasCallback", hasCallback,
+		)
+		if needsReInvite && hasCallback {
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+
+				o.log.Infow("Sending re-INVITE for screenshare content negotiation")
+				contentPort, err := o.OnReInviteNeeded(ctx)
+				if err != nil {
+					o.log.Warnw("Re-INVITE for screenshare failed, using fallback", err)
+					return
+				}
+				o.screenshare.UpdateRemotePort(contentPort)
+			}()
+		}
+	}
+	o.bfcpManager.OnFloorReleased = func(floorID, userID uint16) {
+		o.log.Infow("BFCP floor released - screenshare stopped",
+			"floorID", floorID,
+			"userID", userID,
+		)
+		o.screenshare.SetFloorHeld(false)
+	}
+
+	// Start BFCP server asynchronously (non-blocking)
+	go func() {
+		if err := o.bfcpManager.Start(); err != nil {
+			o.log.Warnw("Failed to start BFCP manager", err)
+			o.mu.Lock()
+			o.bfcpManager = nil
+			o.mu.Unlock()
+		} else {
+			o.log.Infow("BFCP server started",
+				"addr", o.bfcpManager.Addr(),
+				"confID", o.bfcpInfo.ConfID,
+				"floorID", o.bfcpInfo.FloorID,
+			)
+		}
+	}()
+}
+
+// BFCPAnswerBytes returns the BFCP m-line to append to SDP answer, or nil if no BFCP.
+func (o *MediaOrchestrator) BFCPAnswerBytes() []byte {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	if o.bfcpManager == nil || o.bfcpInfo == nil {
+		return nil
+	}
+
+	// Wait briefly for server to start and get port
+	port := o.bfcpManager.Port()
+	if port == 0 {
+		o.log.Debugw("BFCP server port not ready yet")
+		return nil
+	}
+
+	bfcpAnswerCfg := &bfcp.AnswerConfig{
+		Port: port,
+	}
+	bfcpStr, err := bfcp.MarshalBFCPAnswer(o.bfcpInfo, bfcpAnswerCfg)
+	if err != nil {
+		o.log.Warnw("Failed to create BFCP answer", err)
+		return nil
+	}
+
+	o.log.Debugw("BFCP answer created",
+		"port", port,
+		"setup", o.bfcpInfo.Setup.Reverse(),
+		"floorctrl", o.bfcpInfo.FloorCtrl.Reverse(),
+	)
+
+	return []byte(bfcpStr)
+}
+
+// BFCPMediaStreamID returns the BFCP media stream ID (mstrm) for the content floor.
+// This is used as the label attribute on the screenshare m-line to link with BFCP floorid.
+func (o *MediaOrchestrator) BFCPMediaStreamID() uint16 {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	if o.bfcpInfo == nil {
+		return 0
+	}
+	return o.bfcpInfo.MStreamID
+}
+
+// StopBFCP stops the BFCP server if running.
+func (o *MediaOrchestrator) StopBFCP() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	if o.bfcpManager != nil {
+		if err := o.bfcpManager.Stop(); err != nil {
+			o.log.Warnw("Failed to stop BFCP manager", err)
+		}
+		o.bfcpManager = nil
+	}
 }
