@@ -34,7 +34,6 @@ import (
 
 	msdk "github.com/livekit/media-sdk"
 	"github.com/livekit/media-sdk/dtmf"
-	"github.com/livekit/media-sdk/h264"
 	"github.com/livekit/media-sdk/rtp"
 	"github.com/livekit/media-sdk/sdp"
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
@@ -1013,39 +1012,18 @@ func (c *inboundCall) runMediaConn(tid traceid.ID, offerData []byte, enc livekit
 
 	// Wire up re-INVITE callback for screenshare content negotiation (e.g., Polycom).
 	// This is called when BFCP floor is granted but no content port was in initial SDP.
-	c.log().Infow(">>> REINVITE_DEBUG: OnReInviteNeeded callback registered")
 	orchestrator.OnReInviteNeeded = func(ctx context.Context) (uint16, error) {
-		// Build H264 codec using the proper builder pattern (same as video.go)
-		// Add FMTP parameters that Poly expects for content/slides sharing
-		mediaCodec := sdp.CodecByName(h264.SDPName)
-		if mediaCodec == nil {
-			return 0, errors.New("H264 codec not found")
+		// Use camera's negotiated codec to ensure PT matches what SIP device expects
+		cameraCodec := orchestrator.camera.Codec()
+		if cameraCodec == nil {
+			return 0, errors.New("camera codec not negotiated")
 		}
-		fmtp := map[string]string{
-			"profile-level-id":   "428020",
-			"packetization-mode": "1",
-			"max-mbps":           "490000",
-			"max-fs":             "8192",
-		}
-		codec, err := (&sdpv2.Codec{}).Builder().SetCodec(mediaCodec).SetFMTP(fmtp).Build()
-		if err != nil {
-			return 0, fmt.Errorf("failed to build H264 codec: %w", err)
-		}
-		c.log().Infow(">>> DEBUG: Building screenshare media for re-INVITE",
-			"codecPayloadType", codec.PayloadType,
-			"codecName", codec.Name,
+		screenshareMedia := sdpv2.NewScreenshareMediaFromCodec(
+			cameraCodec,
+			uint16(orchestrator.screenshare.RtpPort()),
+			uint16(orchestrator.screenshare.RtcpPort()),
+			orchestrator.BFCPMediaStreamID(),
 		)
-		screenshareMedia := &sdpv2.SDPMedia{
-			Kind:      sdpv2.MediaKindVideo,
-			Content:   sdpv2.ContentTypeSlides,
-			Direction: sdpv2.DirectionSendOnly,
-			Label:     orchestrator.BFCPMediaStreamID(), // Link to BFCP floorid mstrm
-			Codecs:    []*sdpv2.Codec{codec},            // Codecs slice is used to generate m= line payload types
-			Codec:     codec,
-			Port:      uint16(orchestrator.screenshare.RtpPort()),
-			RTCPPort:  uint16(orchestrator.screenshare.RtcpPort()),
-		}
-		// Get BFCP answer bytes to include in re-INVITE (required for Poly content sharing)
 		bfcpAnswer := c.medias.BFCPAnswerBytes()
 		return c.cc.sendReInviteForScreenshare(ctx, screenshareMedia, bfcpAnswer)
 	}

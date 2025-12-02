@@ -248,12 +248,17 @@ func (o *MediaOrchestrator) setupSDP(sdp *sdpv2.SDP) error {
 
 // createDefaultScreenshareMedia creates a default SDPMedia for WebRTC→SIP screenshare
 // when the SIP device didn't offer screenshare in its SDP.
-// It uses the video media's port as a fallback destination.
+// It uses the video media's port as a fallback destination and the camera's codec
+// to ensure payload type matches what the SIP device expects.
 func (o *MediaOrchestrator) createDefaultScreenshareMedia(videoMedia *sdpv2.SDPMedia) *sdpv2.SDPMedia {
-	codecs := o.screenshare.SupportedCodecs()
-	var codec *sdpv2.Codec
-	if len(codecs) > 0 {
-		codec = codecs[0]
+	// Use camera's negotiated codec to ensure PT matches what SIP device expects
+	codec := o.camera.Codec()
+	if codec == nil {
+		// Fallback to default if camera not negotiated yet
+		codecs := o.screenshare.SupportedCodecs()
+		if len(codecs) > 0 {
+			codec = codecs[0]
+		}
 	}
 
 	return &sdpv2.SDPMedia{
@@ -261,7 +266,7 @@ func (o *MediaOrchestrator) createDefaultScreenshareMedia(videoMedia *sdpv2.SDPM
 		Content:   sdpv2.ContentTypeSlides,
 		Direction: sdpv2.DirectionSendOnly, // We send to SIP, we don't receive
 		Codec:     codec,
-		Codecs:    codecs,
+		Codecs:    []*sdpv2.Codec{codec},
 		Port:      videoMedia.Port,     // Use video port as fallback
 		RTCPPort:  videoMedia.RTCPPort, // Use video RTCP port as fallback
 	}

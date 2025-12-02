@@ -2,6 +2,8 @@ package screenshare_pipeline
 
 import (
 	"fmt"
+	"sync/atomic"
+	"time"
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/app"
@@ -29,6 +31,13 @@ type WebrtcToSip struct {
 
 	RtpAppSrc  *app.Source
 	RtpAppSink *app.Sink
+
+	// Debug stats
+	inputPackets  atomic.Uint64
+	inputBytes    atomic.Uint64
+	outputPackets atomic.Uint64
+	outputBytes   atomic.Uint64
+	stopMonitor   chan struct{}
 }
 
 var _ pipeline.GstChain = (*WebrtcToSip)(nil)
@@ -221,6 +230,11 @@ func (stw *WebrtcToSip) Link(p *gst.Pipeline) error {
 
 // Close implements GstChain.
 func (stw *WebrtcToSip) Close(pipeline *gst.Pipeline) error {
+	// Stop the monitor goroutine
+	if stw.stopMonitor != nil {
+		close(stw.stopMonitor)
+	}
+
 	if err := pipeline.RemoveMany(
 		stw.RtpSrc,
 		stw.Vp8Depay,
@@ -240,4 +254,107 @@ func (stw *WebrtcToSip) Close(pipeline *gst.Pipeline) error {
 		return fmt.Errorf("failed to remove sip to webrtc chain from pipeline: %w", err)
 	}
 	return nil
+}
+
+// StartDataFlowMonitor starts logging data flow statistics for debugging.
+// It adds probes to track input/output and logs total stats periodically.
+// The optional getDst function returns the current RTP destination address.
+func (stw *WebrtcToSip) StartDataFlowMonitor(getDst func() string) {
+	stw.stopMonitor = make(chan struct{})
+
+	// Add probe on RtpSrc output (data entering the pipeline from WebRTC)
+	srcPad := stw.RtpSrc.GetStaticPad("src")
+	if srcPad != nil {
+		srcPad.AddProbe(gst.PadProbeTypeBuffer, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+			buffer := info.GetBuffer()
+			if buffer != nil {
+				stw.inputPackets.Add(1)
+				stw.inputBytes.Add(uint64(buffer.GetSize()))
+			}
+			return gst.PadProbeOK
+		})
+		stw.log.Infow("added INPUT probe on RtpSrc")
+	} else {
+		stw.log.Warnw("failed to get src pad from RtpSrc for probe", nil)
+	}
+
+	// Add probe on RtpSink input (data leaving the pipeline to SIP)
+	sinkPad := stw.RtpSink.GetStaticPad("sink")
+	if sinkPad != nil {
+		sinkPad.AddProbe(gst.PadProbeTypeBuffer, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+			buffer := info.GetBuffer()
+			if buffer != nil {
+				stw.outputPackets.Add(1)
+				stw.outputBytes.Add(uint64(buffer.GetSize()))
+			}
+			return gst.PadProbeOK
+		})
+		stw.log.Infow("added OUTPUT probe on RtpSink")
+	} else {
+		stw.log.Warnw("failed to get sink pad from RtpSink for probe", nil)
+	}
+
+	// Start periodic stats logging
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+
+		var lastInputPackets, lastOutputPackets uint64
+		var lastInputBytes, lastOutputBytes uint64
+
+		for {
+			select {
+			case <-stw.stopMonitor:
+				stw.log.Infow("screenshare data flow monitor stopped",
+					"totalInputPackets", stw.inputPackets.Load(),
+					"totalInputBytes", stw.inputBytes.Load(),
+					"totalOutputPackets", stw.outputPackets.Load(),
+					"totalOutputBytes", stw.outputBytes.Load(),
+				)
+				return
+			case <-ticker.C:
+				currentInputPackets := stw.inputPackets.Load()
+				currentOutputPackets := stw.outputPackets.Load()
+				currentInputBytes := stw.inputBytes.Load()
+				currentOutputBytes := stw.outputBytes.Load()
+
+				deltaInputPackets := currentInputPackets - lastInputPackets
+				deltaOutputPackets := currentOutputPackets - lastOutputPackets
+				deltaInputBytes := currentInputBytes - lastInputBytes
+				deltaOutputBytes := currentOutputBytes - lastOutputBytes
+
+				dst := ""
+				if getDst != nil {
+					dst = getDst()
+				}
+				stw.log.Infow("screenshare pipeline data flow stats",
+					"inputPackets", currentInputPackets,
+					"outputPackets", currentOutputPackets,
+					"inputBytes", currentInputBytes,
+					"outputBytes", currentOutputBytes,
+					"deltaInputPackets", deltaInputPackets,
+					"deltaOutputPackets", deltaOutputPackets,
+					"deltaInputKB", float64(deltaInputBytes)/1024,
+					"deltaOutputKB", float64(deltaOutputBytes)/1024,
+					"sendingToDestination", currentOutputPackets > 0,
+					"rtpDestination", dst,
+				)
+
+				// Warn if no output data
+				if currentInputPackets > 0 && deltaOutputPackets == 0 {
+					stw.log.Warnw("screenshare pipeline receiving input but NOT sending output!", nil,
+						"inputPackets", currentInputPackets,
+						"outputPackets", currentOutputPackets,
+					)
+				}
+
+				lastInputPackets = currentInputPackets
+				lastOutputPackets = currentOutputPackets
+				lastInputBytes = currentInputBytes
+				lastOutputBytes = currentOutputBytes
+			}
+		}
+	}()
+
+	stw.log.Infow("screenshare data flow monitor started")
 }

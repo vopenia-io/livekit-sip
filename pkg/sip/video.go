@@ -96,6 +96,47 @@ func (v *VideoManager) Copy(dst io.WriteCloser, src io.ReadCloser) {
 	dst.Close()
 }
 
+func (v *VideoManager) CopyWithDebug(dst io.WriteCloser, src io.ReadCloser, label string) {
+	buf := make([]byte, 1500) // MTU size
+	var totalBytes int64
+	var totalPackets int64
+
+	for {
+		n, readErr := src.Read(buf)
+		if n > 0 {
+			written, writeErr := dst.Write(buf[:n])
+			totalBytes += int64(written)
+			totalPackets++
+
+			// Log every 500 packets
+			if totalPackets%500 == 0 {
+				v.log.Infow("copy debug stats",
+					"label", label,
+					"totalPackets", totalPackets,
+					"totalBytes", totalBytes,
+					"lastPacketSize", n,
+					"lastWritten", written,
+				)
+			}
+
+			if writeErr != nil {
+				v.log.Warnw("write error in copy", writeErr, "label", label, "totalPackets", totalPackets)
+				break
+			}
+		}
+		if readErr != nil {
+			if readErr != io.EOF {
+				v.log.Warnw("read error in copy", readErr, "label", label)
+			}
+			break
+		}
+	}
+
+	v.log.Infow("finished copying with debug", "label", label, "totalBytes", totalBytes, "totalPackets", totalPackets)
+	src.Close()
+	dst.Close()
+}
+
 func NewVideoIO() *VideoIO {
 	return &VideoIO{
 		sipRtpIn:      NewSwitchReader(),
