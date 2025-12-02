@@ -116,6 +116,9 @@ func buildWebrtcToSipChain(log logger.Logger, sipPayloadType int) (*WebrtcToSip,
 		return nil, fmt.Errorf("failed to create webrtc i420 capsfilter: %w", err)
 	}
 
+	// Use constrained-baseline profile for Poly compatibility (PT 109: profile-level-id=428020)
+	// Constrained Baseline profile has no B-frames and simpler encoding, which is required
+	// for SIP devices that don't support packetization-mode=1 (FU-A/STAP-A)
 	x264enc, err := gst.NewElementWithProperties("x264enc", map[string]interface{}{
 		"bitrate":        int(1500),
 		"key-int-max":    int(30),

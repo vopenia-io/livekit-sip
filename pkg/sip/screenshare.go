@@ -16,9 +16,8 @@ type ScreenshareManager struct {
 	active    atomic.Bool
 	floorHeld atomic.Bool // BFCP floor is held by remote SIP participant
 
-	// Fallback tracking for re-INVITE negotiation
-	usingFallback bool       // True if using main video port as fallback (no content port from initial SDP)
-	remoteAddr    netip.Addr // Remote SIP device address for UpdateRemotePort
+	// Remote address for UpdateRemotePort after re-INVITE
+	remoteAddr netip.Addr
 
 	// Callbacks for screenshare lifecycle events
 	OnScreenshareStarted func() // Called when WebRTC screenshare track starts
@@ -38,11 +37,16 @@ func NewScreenshareManager(log logger.Logger, room *Room, opts *MediaOptions) (*
 }
 
 func (sm *ScreenshareManager) NewPipeline(media *sdpv2.SDPMedia) (pipeline.GspPipeline, error) {
+	sm.log.Infow("Creating screenshare pipeline with negotiated codec from SDP answer",
+		"codec", media.Codec.Name,
+		"payloadType", media.Codec.PayloadType,
+		"direction", media.Direction,
+	)
 	p, err := screenshare_pipeline.New(sm.log, media.Codec.PayloadType)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create screenshare pipeline: %w", err)
 	}
-	// p.Monitor()
+	p.Monitor()
 
 	// Start data flow monitoring for debugging
 	// Pass a function to get the current RTP destination address
@@ -137,21 +141,18 @@ func (sm *ScreenshareManager) HasFloor() bool {
 	return sm.floorHeld.Load()
 }
 
-// SetFallbackMode marks whether using video port fallback (no content port from initial SDP).
-// This is called when the SIP device's initial SDP has no screenshare m=video line.
-func (sm *ScreenshareManager) SetFallbackMode(fallback bool, remoteAddr netip.Addr) {
+// IsReady returns true if the screenshare manager is set up and ready to receive tracks.
+func (sm *ScreenshareManager) IsReady() bool {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	sm.usingFallback = fallback
-	sm.remoteAddr = remoteAddr
-	sm.log.Infow("screenshare fallback mode set", "fallback", fallback, "remoteAddr", remoteAddr)
+	return sm.status >= VideoStatusReady
 }
 
-// NeedsReInvite returns true if content port needs negotiation via SIP re-INVITE.
-func (sm *ScreenshareManager) NeedsReInvite() bool {
+// SetRemoteAddr stores the remote address for UpdateRemotePort after re-INVITE.
+func (sm *ScreenshareManager) SetRemoteAddr(remoteAddr netip.Addr) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	return sm.usingFallback
+	sm.remoteAddr = remoteAddr
 }
 
 // UpdateRemotePort updates the RTP/RTCP destination after re-INVITE success.
@@ -165,7 +166,6 @@ func (sm *ScreenshareManager) UpdateRemotePort(port uint16) {
 
 	sm.rtpConn.SetDst(newRtpDst)
 	sm.rtcpConn.SetDst(newRtcpDst)
-	sm.usingFallback = false
 
 	sm.log.Infow("screenshare remote port updated from re-INVITE", "rtpAddr", newRtpDst, "rtcpAddr", newRtcpDst)
 }

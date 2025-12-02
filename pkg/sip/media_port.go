@@ -164,9 +164,11 @@ func newUDPConn(log logger.Logger, conn UDPConn) *udpConn {
 
 type udpConn struct {
 	UDPConn
-	log logger.Logger
-	src atomic.Pointer[netip.AddrPort]
-	dst atomic.Pointer[netip.AddrPort]
+	log          logger.Logger
+	src          atomic.Pointer[netip.AddrPort]
+	dst          atomic.Pointer[netip.AddrPort]
+	writeCount   atomic.Uint64
+	writtenBytes atomic.Uint64
 }
 
 func (c *udpConn) GetSrc() (netip.AddrPort, bool) {
@@ -203,9 +205,28 @@ func (c *udpConn) Read(b []byte) (n int, err error) {
 func (c *udpConn) Write(b []byte) (n int, err error) {
 	dst := c.dst.Load()
 	if dst == nil {
+		c.log.Warnw("UDP write with no destination set", nil, "bytes", len(b))
 		return len(b), nil // ignore
 	}
-	return c.WriteToUDPAddrPort(b, *dst)
+	n, err = c.WriteToUDPAddrPort(b, *dst)
+	if err != nil {
+		c.log.Errorw("UDP write failed", err, "dst", dst.String(), "bytes", len(b), "written", n)
+	} else {
+		count := c.writeCount.Add(1)
+		totalBytes := c.writtenBytes.Add(uint64(n))
+		// Log every 500 packets to verify actual UDP sends
+		if count%500 == 0 {
+			localAddr := c.LocalAddr()
+			c.log.Infow("UDP send stats",
+				"packets", count,
+				"totalBytes", totalBytes,
+				"lastPacketSize", n,
+				"dst", dst.String(),
+				"localAddr", localAddr.String(),
+			)
+		}
+	}
+	return n, err
 }
 
 type MediaConf struct {

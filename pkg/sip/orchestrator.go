@@ -29,9 +29,9 @@ type MediaOrchestrator struct {
 	bfcpInfo    *sdpv2.SDPBfcp
 
 	// Callback for SIP re-INVITE when content negotiation is needed.
-	// Called when BFCP floor is granted and no content port was in initial SDP.
-	// Returns the content port from the SIP device's 200 OK response.
-	OnReInviteNeeded func(ctx context.Context) (contentPort uint16, err error)
+	// Called when WebRTC screenshare track arrives and screenshare not yet set up.
+	// Returns the full SDP from the SIP device's 200 OK response.
+	OnReInviteNeeded func(ctx context.Context) (answer *sdpv2.SDP, err error)
 }
 
 func NewMediaOrchestrator(log logger.Logger, inbound *sipInbound, room *Room, opts *MediaOptions) (*MediaOrchestrator, error) {
@@ -89,8 +89,86 @@ func NewMediaOrchestrator(log logger.Logger, inbound *sipInbound, room *Room, op
 	}
 
 	o.room.OnScreenshareTrack(func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
-		ti := NewTrackInput(track, pub, rp)
-		o.screenshare.WebrtcTrackInput(ti, rp.SID(), uint32(track.SSRC()))
+		o.log.Infow("WebRTC screenshare track received",
+			"participant", rp.Identity(),
+			"trackID", track.ID(),
+			"ssrc", track.SSRC(),
+		)
+
+		// Check if screenshare manager is already set up
+		if o.screenshare.IsReady() {
+			ti := NewTrackInput(track, pub, rp)
+			o.screenshare.WebrtcTrackInput(ti, rp.SID(), uint32(track.SSRC()))
+			return
+		}
+
+		// Screenshare not set up - need to send re-INVITE to negotiate content port
+		if o.OnReInviteNeeded == nil {
+			o.log.Warnw("WebRTC screenshare track received but no re-INVITE callback configured", nil)
+			return
+		}
+
+		o.log.Infow("Screenshare not set up, triggering re-INVITE for content negotiation")
+
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			// Send re-INVITE and get answer SDP with screenshare media
+			answer, err := o.OnReInviteNeeded(ctx)
+			if err != nil {
+				o.log.Errorw("Re-INVITE for screenshare failed", err)
+				return
+			}
+
+			if answer.Screenshare == nil || answer.Screenshare.Disabled {
+				o.log.Warnw("Re-INVITE succeeded but no screenshare in answer", nil)
+				return
+			}
+
+			// Prepare the screenshare media for sending (codec selection + direction reversal)
+			if err := answer.Screenshare.PrepareForSending(); err != nil {
+				o.log.Errorw("Failed to prepare screenshare for sending", err)
+				return
+			}
+			// Log the negotiated codec details
+			answeredPT := answer.Screenshare.Codec.PayloadType
+			const offeredPT uint8 = 109 // Must match the PT offered in inbound.go OnReInviteNeeded
+			o.log.Infow("Prepared screenshare for sending",
+				"codec", answer.Screenshare.Codec.Name,
+				"offeredPT", offeredPT,
+				"answeredPT", answeredPT,
+				"direction", answer.Screenshare.Direction,
+			)
+			if answeredPT != offeredPT {
+				o.log.Warnw("Screenshare PT mismatch: SDP answer returned different PT than offered",
+					nil,
+					"offeredPT", offeredPT,
+					"answeredPT", answeredPT,
+					"usingPT", answeredPT, // We use the answered PT for RTP
+				)
+			}
+
+			// Set up the screenshare manager with the negotiated media
+			if err := o.screenshare.Setup(answer.Addr, answer.Screenshare); err != nil {
+				o.log.Errorw("Failed to setup screenshare after re-INVITE", err)
+				return
+			}
+
+			// Start the screenshare pipeline
+			if err := o.screenshare.Start(); err != nil {
+				o.log.Errorw("Failed to start screenshare after re-INVITE", err)
+				return
+			}
+
+			o.log.Infow("Screenshare set up after re-INVITE, connecting WebRTC track",
+				"contentPort", answer.Screenshare.Port,
+			)
+
+			// Now connect the WebRTC track
+			ti := NewTrackInput(track, pub, rp)
+			o.screenshare.WebrtcTrackInput(ti, rp.SID(), uint32(track.SSRC()))
+		}()
 	})
 
 	o.room.OnActiveSpeakersChanged(func(p []lksdk.Participant) {
@@ -207,6 +285,67 @@ func (o *MediaOrchestrator) OfferSDP() (*sdpv2.SDP, error) {
 	return o.offerSDP(true, true)
 }
 
+// BuildReInviteSDPBytes builds and marshals a complete SDP for a re-INVITE that includes
+// screenshare content negotiation with BFCP. This is specifically designed for Poly endpoints.
+// Returns the raw SDP bytes ready to send in a SIP INVITE request.
+func (o *MediaOrchestrator) BuildReInviteSDPBytes(screenshareMedia *sdpv2.SDPMedia) ([]byte, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	// Get camera codec - required for main video
+	cameraCodec := o.camera.Codec()
+	if cameraCodec == nil {
+		return nil, errors.New("camera codec not negotiated")
+	}
+
+	o.log.Infow("Building re-INVITE SDP for screenshare",
+		"localIP", o.opts.IP,
+		"cameraPort", o.camera.RtpPort(),
+		"cameraCodecPT", cameraCodec.PayloadType,
+		"screensharePort", screenshareMedia.Port,
+		"screenshareRTCPPort", screenshareMedia.RTCPPort,
+		"screenshareLabel", screenshareMedia.Label,
+	)
+
+	// Build re-INVITE config using the media-sdk API
+	cfg := sdpv2.NewReInviteConfigForPoly(o.opts.IP).
+		WithVideo(cameraCodec, uint16(o.camera.RtpPort()), uint16(o.camera.RtcpPort()), o.camera.Direction()).
+		WithScreenshare(screenshareMedia.Codec, screenshareMedia.Port, screenshareMedia.RTCPPort, sdpv2.DirectionSendOnly)
+
+	// Add BFCP if available (required for Poly content sharing)
+	if o.bfcpManager != nil && o.bfcpInfo != nil {
+		bfcpPort := o.bfcpManager.Port()
+		if bfcpPort > 0 {
+			cfg.WithBFCP(
+				bfcpPort,
+				o.bfcpInfo.Proto,
+				o.bfcpInfo.ConfID,
+				o.bfcpInfo.UserID,
+				o.bfcpInfo.FloorID,
+				screenshareMedia.Label, // Link to screenshare label (typically 3)
+			)
+			o.log.Infow("Including BFCP in re-INVITE",
+				"bfcpPort", bfcpPort,
+				"floorID", o.bfcpInfo.FloorID,
+				"mstreamID", screenshareMedia.Label,
+			)
+		}
+	}
+
+	// Build and marshal the SDP
+	sdpBytes, err := cfg.Build()
+	if err != nil {
+		return nil, fmt.Errorf("build re-INVITE SDP: %w", err)
+	}
+
+	o.log.Infow("Generated re-INVITE SDP",
+		"sdpLength", len(sdpBytes),
+		"sdp", string(sdpBytes),
+	)
+
+	return sdpBytes, nil
+}
+
 func (o *MediaOrchestrator) setupSDP(sdp *sdpv2.SDP) error {
 	if err := o.camera.Stop(); err != nil {
 		return fmt.Errorf("could not stop video manager: %w", err)
@@ -224,52 +363,20 @@ func (o *MediaOrchestrator) setupSDP(sdp *sdpv2.SDP) error {
 		}
 	}
 
-	// Setup screenshare for WebRTC→SIP even if SIP device didn't offer it.
-	// This allows WebRTC participants to share their screen to SIP devices.
+	// Setup screenshare if offered by SIP device.
 	if sdp.Screenshare != nil && !sdp.Screenshare.Disabled {
 		if err := o.screenshare.Setup(sdp.Addr, sdp.Screenshare); err != nil {
 			return fmt.Errorf("could not setup screenshare sdp: %w", err)
 		}
-	} else if sdp.Video != nil && !sdp.Video.Disabled {
-		// SIP device didn't offer screenshare, but we want to support WebRTC→SIP screenshare.
-		// Create a sendonly screenshare media using the same remote address and video port as fallback.
-		// Mark as fallback so we can trigger SIP re-INVITE after BFCP floor grant to get the real content port.
-		screenshareMedia := o.createDefaultScreenshareMedia(sdp.Video)
-		o.screenshare.SetFallbackMode(true, sdp.Addr) // Mark for re-INVITE after floor grant
-		if err := o.screenshare.Setup(sdp.Addr, screenshareMedia); err != nil {
-			// Non-fatal: log and continue without screenshare support
-			o.log.Warnw("could not setup default screenshare for WebRTC→SIP", err)
-		}
 	}
+	// Always store remote address for re-INVITE (triggered on BFCP floor grant).
+	o.screenshare.SetRemoteAddr(sdp.Addr)
 
 	return nil
 }
 
-// createDefaultScreenshareMedia creates a default SDPMedia for WebRTC→SIP screenshare
-// when the SIP device didn't offer screenshare in its SDP.
-// It uses the video media's port as a fallback destination and the camera's codec
-// to ensure payload type matches what the SIP device expects.
-func (o *MediaOrchestrator) createDefaultScreenshareMedia(videoMedia *sdpv2.SDPMedia) *sdpv2.SDPMedia {
-	// Use camera's negotiated codec to ensure PT matches what SIP device expects
-	codec := o.camera.Codec()
-	if codec == nil {
-		// Fallback to default if camera not negotiated yet
-		codecs := o.screenshare.SupportedCodecs()
-		if len(codecs) > 0 {
-			codec = codecs[0]
-		}
-	}
-
-	return &sdpv2.SDPMedia{
-		Kind:      sdpv2.MediaKindVideo,
-		Content:   sdpv2.ContentTypeSlides,
-		Direction: sdpv2.DirectionSendOnly, // We send to SIP, we don't receive
-		Codec:     codec,
-		Codecs:    []*sdpv2.Codec{codec},
-		Port:      videoMedia.Port,     // Use video port as fallback
-		RTCPPort:  videoMedia.RTCPPort, // Use video RTCP port as fallback
-	}
-}
+// REMOVED: createDefaultScreenshareMedia - no longer needed since fallback mode is removed.
+// Re-INVITE will negotiate the real content port when BFCP floor is granted.
 
 func (o *MediaOrchestrator) SetupSDP(sdp *sdpv2.SDP) error {
 	o.mu.Lock()
@@ -329,12 +436,19 @@ func (o *MediaOrchestrator) SetupBFCP(offer *sdpv2.SDP) {
 		"mstreamid", o.bfcpInfo.MStreamID,
 	)
 
+	// Get sipCallID for logging correlation
+	var sipCallID string
+	if o.inbound != nil {
+		sipCallID = o.inbound.SIPCallID()
+	}
+
 	// Create BFCP server config
 	bfcpCfg := &lkbfcp.Config{
 		ListenAddr:     ":0", // Let OS pick a port
 		ConferenceID:   o.bfcpInfo.ConfID,
 		ContentFloorID: o.bfcpInfo.FloorID,
 		AutoGrant:      true, // Auto-grant for now (1:1 calls)
+		SIPCallID:      sipCallID,
 	}
 
 	bfcpMgr, err := lkbfcp.NewManager(o.log, bfcpCfg)
@@ -351,33 +465,7 @@ func (o *MediaOrchestrator) SetupBFCP(offer *sdpv2.SDP) {
 			"userID", userID,
 		)
 		o.screenshare.SetFloorHeld(true)
-		o.log.Infow(">>> DEBUG: After SetFloorHeld, before NeedsReInvite check")
-
-		// If using fallback (no content port from initial SDP), trigger re-INVITE async
-		needsReInvite := o.screenshare.NeedsReInvite()
-		hasCallback := o.OnReInviteNeeded != nil
-		o.log.Infow(">>> REINVITE_DEBUG v2025-12-02: Floor granted, checking re-INVITE",
-			"needsReInvite", needsReInvite,
-			"hasCallback", hasCallback,
-		)
-		o.log.Infow("Checking re-INVITE condition",
-			"needsReInvite", needsReInvite,
-			"hasCallback", hasCallback,
-		)
-		if needsReInvite && hasCallback {
-			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer cancel()
-
-				o.log.Infow("Sending re-INVITE for screenshare content negotiation")
-				contentPort, err := o.OnReInviteNeeded(ctx)
-				if err != nil {
-					o.log.Warnw("Re-INVITE for screenshare failed, using fallback", err)
-					return
-				}
-				o.screenshare.UpdateRemotePort(contentPort)
-			}()
-		}
+		// Note: re-INVITE is triggered by WebRTC screenshare track, not by BFCP floor grant
 	}
 	o.bfcpManager.OnFloorReleased = func(floorID, userID uint16) {
 		o.log.Infow("BFCP floor released - screenshare stopped",
@@ -387,21 +475,19 @@ func (o *MediaOrchestrator) SetupBFCP(offer *sdpv2.SDP) {
 		o.screenshare.SetFloorHeld(false)
 	}
 
-	// Start BFCP server asynchronously (non-blocking)
-	go func() {
-		if err := o.bfcpManager.Start(); err != nil {
-			o.log.Warnw("Failed to start BFCP manager", err)
-			o.mu.Lock()
-			o.bfcpManager = nil
-			o.mu.Unlock()
-		} else {
-			o.log.Infow("BFCP server started",
-				"addr", o.bfcpManager.Addr(),
-				"confID", o.bfcpInfo.ConfID,
-				"floorID", o.bfcpInfo.FloorID,
-			)
-		}
-	}()
+	// Start BFCP server synchronously - this binds the port immediately
+	// so Port() returns the correct value for the SDP answer
+	if err := o.bfcpManager.Start(); err != nil {
+		o.log.Warnw("Failed to start BFCP manager", err)
+		o.bfcpManager = nil
+	} else {
+		o.log.Infow("BFCP server started",
+			"addr", o.bfcpManager.Addr(),
+			"port", o.bfcpManager.Port(),
+			"confID", o.bfcpInfo.ConfID,
+			"floorID", o.bfcpInfo.FloorID,
+		)
+	}
 }
 
 // BFCPAnswerBytes returns the BFCP m-line to append to SDP answer, or nil if no BFCP.
@@ -413,10 +499,10 @@ func (o *MediaOrchestrator) BFCPAnswerBytes() []byte {
 		return nil
 	}
 
-	// Wait briefly for server to start and get port
+	// Port is available immediately since Start() binds synchronously
 	port := o.bfcpManager.Port()
 	if port == 0 {
-		o.log.Debugw("BFCP server port not ready yet")
+		o.log.Errorw("BFCP server port is 0 - server start may have failed", nil)
 		return nil
 	}
 

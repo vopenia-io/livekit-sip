@@ -16,6 +16,10 @@ type ScreensharePipeline struct {
 func New(log logger.Logger, sipPt uint8) (*ScreensharePipeline, error) {
 	cp := &ScreensharePipeline{}
 
+	log.Infow("Creating screenshare pipeline with RTP payload type from SDP answer",
+		"sipPayloadType", sipPt,
+	)
+
 	p, err := pipeline.New(log)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create gst pipeline: %w", err)
