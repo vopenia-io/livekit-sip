@@ -8,7 +8,6 @@ import (
 	"time"
 
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
-	"github.com/livekit/media-sdk/sdp/v2/bfcp"
 	"github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/webrtc/v4"
@@ -27,7 +26,7 @@ type MediaOrchestrator struct {
 
 	// BFCP floor control
 	bfcpManager *lkbfcp.Manager
-	bfcpInfo    *bfcp.MediaInfo
+	bfcpInfo    *sdpv2.SDPBfcp
 
 	// Callback for SIP re-INVITE when content negotiation is needed.
 	// Called when BFCP floor is granted and no content port was in initial SDP.
@@ -307,19 +306,17 @@ func (o *MediaOrchestrator) start() error {
 	return nil
 }
 
-// SetupBFCP parses BFCP from raw SDP and starts the BFCP server asynchronously.
+// SetupBFCP configures BFCP from a parsed SDP and starts the BFCP server asynchronously.
 // This is non-blocking - the server starts in a goroutine.
-func (o *MediaOrchestrator) SetupBFCP(rawOffer []byte) {
-	bfcpMedias, err := bfcp.ParseBFCPFromSDP(rawOffer)
-	if err != nil || len(bfcpMedias) == 0 {
+func (o *MediaOrchestrator) SetupBFCP(offer *sdpv2.SDP) {
+	if offer.BFCP == nil {
 		return // No BFCP in offer
 	}
 
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	// Use the first BFCP media (typically content/screenshare)
-	o.bfcpInfo = bfcpMedias[0]
+	o.bfcpInfo = offer.BFCP
 	o.log.Debugw("BFCP offer detected",
 		"port", o.bfcpInfo.Port,
 		"proto", o.bfcpInfo.Proto,
@@ -423,10 +420,11 @@ func (o *MediaOrchestrator) BFCPAnswerBytes() []byte {
 		return nil
 	}
 
-	bfcpAnswerCfg := &bfcp.AnswerConfig{
+	bfcpAnswerCfg := &sdpv2.SDPBfcpAnswerConfig{
 		Port: port,
 	}
-	bfcpStr, err := bfcp.MarshalBFCPAnswer(o.bfcpInfo, bfcpAnswerCfg)
+	bfcpAnswer := o.bfcpInfo.Answer(bfcpAnswerCfg)
+	bfcpStr, err := bfcpAnswer.Marshal()
 	if err != nil {
 		o.log.Warnw("Failed to create BFCP answer", err)
 		return nil

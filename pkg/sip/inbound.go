@@ -1044,7 +1044,7 @@ func (c *inboundCall) runMediaConn(tid traceid.ID, offerData []byte, enc livekit
 	}
 
 	// Setup BFCP if present in offer (non-blocking)
-	c.medias.SetupBFCP(offerData)
+	c.medias.SetupBFCP(offer)
 
 	answer, err := c.medias.AnswerSDP(offer)
 	if err != nil {
