@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/app"
@@ -28,18 +29,16 @@ type WebrtcToSip struct {
 	//rtpbin
 	InputSelector *gst.Element
 	// Vp8Depay      *gst.Element
-	Vp8Dec        *gst.Element
-	VideoConvert  *gst.Element
-	VideoScale    *gst.Element
-	ResFilter     *gst.Element
-	VideoConvert2 *gst.Element
-	VideoRate     *gst.Element
-	FpsFilter     *gst.Element
-	I420Filter    *gst.Element
-	X264Enc       *gst.Element
-	Parse         *gst.Element
-	RtpH264Pay    *gst.Element
-	SipRtpSink    *gst.Element
+	Vp8Dec      *gst.Element
+	VideoRate   *gst.Element
+	RateFilter  *gst.Element
+	VideoScale  *gst.Element
+	ScaleFilter *gst.Element
+	Queue       *gst.Element
+	X264Enc     *gst.Element
+	RtpH264Pay  *gst.Element
+	OutQueue    *gst.Element
+	SipRtpSink  *gst.Element
 
 	RtcpFunnel *gst.Element
 	//rtpbin
@@ -56,7 +55,7 @@ func buildSelectorToSipChain(log logger.Logger, sipOutPayloadType int) (*WebrtcT
 		"autoremove":         true,
 		"do-lost":            true,
 		"do-sync-event":      true,
-		"drop-on-latency":    false,
+		"drop-on-latency":    true,
 		"latency":            uint64(0),
 		"rtcp-sync-interval": uint64(1000000000), // 1s
 		"rtp-profile":        int(3),             // RTP_PROFILE_AVPF
@@ -65,7 +64,7 @@ func buildSelectorToSipChain(log logger.Logger, sipOutPayloadType int) (*WebrtcT
 		return nil, fmt.Errorf("failed to create webrtc rtpbin: %w", err)
 	}
 
-	rtpFunnel, err := gst.NewElementWithProperties("rtpfunnel", map[string]interface{}{})
+	rtpfunnel, err := gst.NewElementWithProperties("rtpfunnel", map[string]interface{}{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create webrtc rtp funnel: %w", err)
 	}
@@ -75,88 +74,57 @@ func buildSelectorToSipChain(log logger.Logger, sipOutPayloadType int) (*WebrtcT
 		return nil, fmt.Errorf("failed to create webrtc input selector: %w", err)
 	}
 
-	vp8dec, err := gst.NewElement("vp8dec")
+	vp8dec, err := gst.NewElementWithProperties("vp8dec", map[string]interface{}{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create webrtc vp8 decoder: %w", err)
 	}
 
-	vconv, err := gst.NewElement("videoconvert")
+	videorate, err := gst.NewElement("videorate")
 	if err != nil {
-		return nil, fmt.Errorf("failed to create webrtc videoconvert: %w", err)
+		return nil, fmt.Errorf("failed to create webrtc videorate: %w", err)
 	}
 
-	// Scale to 720p - videoscale will letterbox automatically when add-borders=true
-	vscale, err := gst.NewElementWithProperties("videoscale", map[string]interface{}{
+	ratefilter, err := gst.NewElementWithProperties("capsfilter", map[string]interface{}{
+		"caps": gst.NewCapsFromString("video/x-raw,framerate=24/1"),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create webrtc rate capsfilter: %w", err)
+	}
+
+	videoscale, err := gst.NewElementWithProperties("videoscale", map[string]interface{}{
 		"add-borders": true, // Add black bars for aspect ratio preservation
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create webrtc videoscale: %w", err)
 	}
 
-	// Force 1280x720 resolution with PAR 1:1 - this forces letterboxing for non-16:9 content
-	resFilter, err := gst.NewElementWithProperties("capsfilter", map[string]interface{}{
+	scalefilter, err := gst.NewElementWithProperties("capsfilter", map[string]interface{}{
 		"caps": gst.NewCapsFromString("video/x-raw,width=1280,height=720,pixel-aspect-ratio=1/1"),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create webrtc resolution capsfilter: %w", err)
+		return nil, fmt.Errorf("failed to create webrtc scale capsfilter: %w", err)
 	}
 
-	// videoconvert after scaling to ensure proper format
-	vconv2, err := gst.NewElement("videoconvert")
+	queue, err := gst.NewElementWithProperties("queue", map[string]interface{}{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create webrtc videoconvert2: %w", err)
-	}
-
-	// Force 24fps output
-	vrate, err := gst.NewElementWithProperties("videorate", map[string]interface{}{
-		"drop-only": true, // Only drop frames, don't duplicate
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create webrtc videorate: %w", err)
-	}
-
-	// Force 24fps in caps
-	fpsFilter, err := gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-		"caps": gst.NewCapsFromString("video/x-raw,framerate=24/1"),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create webrtc fps capsfilter: %w", err)
-	}
-
-	// caps filter: video/x-raw,format=I420
-	i420Filter, err := gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-		"caps": gst.NewCapsFromString("video/x-raw,format=I420"),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create webrtc i420 capsfilter: %w", err)
+		return nil, fmt.Errorf("failed to create webrtc queue: %w", err)
 	}
 
 	x264enc, err := gst.NewElementWithProperties("x264enc", map[string]interface{}{
-		"bitrate":        int(1500),
-		"key-int-max":    int(30),
-		"bframes":        int(0),
-		"rc-lookahead":   int(0),
-		"sliced-threads": true,
-		"sync-lookahead": int(0),
-		"tune":           0x00000004, // GST_X264_ENC_TUNE_ZERO_LATENCY
-		"speed-preset":   7,          // GST_X264_ENC_PRESET_SUPERFAST
+		"bitrate":      int(2000),
+		"key-int-max":  int(48), // Matches framerate for 1 keyframe/sec
+		"speed-preset": int(1),  // ultrafast
+		"tune":         int(4),  // zerolatency
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create webrtc x264 encoder: %w", err)
 	}
 
-	parse, err := gst.NewElementWithProperties("h264parse", map[string]interface{}{
-		"config-interval": int(1),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create webrtc h264 parser: %w", err)
-	}
-
-	rtpPay, err := gst.NewElementWithProperties("rtph264pay", map[string]interface{}{
+	rtph264pay, err := gst.NewElementWithProperties("rtph264pay", map[string]interface{}{
 		"pt":              int(sipOutPayloadType),
 		"mtu":             int(1200),
 		"config-interval": int(1),
-		"aggregate-mode":  int(0), // zero-latency
+		"aggregate-mode":  int(1), // zero-latency
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create webrtc rtp h264 payloader: %w", err)
@@ -179,6 +147,11 @@ func buildSelectorToSipChain(log logger.Logger, sipOutPayloadType int) (*WebrtcT
 		return nil, fmt.Errorf("failed to create webrtc rtcp funnel: %w", err)
 	}
 
+	outQueue, err := gst.NewElementWithProperties("queue", map[string]interface{}{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create webrtc rtcp out queue: %w", err)
+	}
+
 	webrtcRtcpSink, err := gst.NewElementWithProperties("appsink", map[string]interface{}{
 		"name":         "webrtc_rtcp_out",
 		"emit-signals": false,
@@ -197,22 +170,20 @@ func buildSelectorToSipChain(log logger.Logger, sipOutPayloadType int) (*WebrtcT
 
 		RtpBin: rtpbin,
 
-		RtpFunnel: rtpFunnel,
+		RtpFunnel: rtpfunnel,
 		// rtpbin
 		InputSelector: inputSelector,
 		// Vp8Depay:      vp8depay,
-		Vp8Dec:        vp8dec,
-		VideoConvert:  vconv,
-		VideoScale:    vscale,
-		ResFilter:     resFilter,
-		VideoConvert2: vconv2,
-		VideoRate:     vrate,
-		FpsFilter:     fpsFilter,
-		I420Filter:    i420Filter,
-		X264Enc:       x264enc,
-		Parse:         parse,
-		RtpH264Pay:    rtpPay,
-		SipRtpSink:    sipRtpSink,
+		Vp8Dec:      vp8dec,
+		VideoRate:   videorate,
+		RateFilter:  ratefilter,
+		VideoScale:  videoscale,
+		ScaleFilter: scalefilter,
+		Queue:       queue,
+		X264Enc:     x264enc,
+		RtpH264Pay:  rtph264pay,
+		OutQueue:    outQueue,
+		SipRtpSink:  sipRtpSink,
 
 		RtcpFunnel: rtcpFunnel,
 		// rtpbin
@@ -233,16 +204,14 @@ func (wts *WebrtcToSip) Add(pipeline *gst.Pipeline) error {
 		wts.InputSelector,
 		// wts.Vp8Depay,
 		wts.Vp8Dec,
-		wts.VideoConvert,
-		wts.VideoScale,
-		wts.ResFilter,
-		wts.VideoConvert2,
 		wts.VideoRate,
-		wts.FpsFilter,
-		wts.I420Filter,
+		wts.RateFilter,
+		wts.VideoScale,
+		wts.ScaleFilter,
+		wts.Queue,
 		wts.X264Enc,
-		wts.Parse,
 		wts.RtpH264Pay,
+		wts.OutQueue,
 		wts.SipRtpSink,
 
 		wts.RtcpFunnel,
@@ -307,18 +276,15 @@ func (wts *WebrtcToSip) Link(p *gst.Pipeline) error {
 
 	if err := gst.ElementLinkMany(
 		wts.InputSelector,
-		// wts.Vp8Depay,
 		wts.Vp8Dec,
-		wts.VideoConvert,
-		wts.VideoScale,
-		wts.ResFilter,
-		wts.VideoConvert2,
 		wts.VideoRate,
-		wts.FpsFilter,
-		wts.I420Filter,
+		wts.RateFilter,
+		wts.VideoScale,
+		wts.ScaleFilter,
+		wts.Queue,
 		wts.X264Enc,
-		wts.Parse,
 		wts.RtpH264Pay,
+		wts.OutQueue,
 		wts.SipRtpSink,
 	); err != nil {
 		return fmt.Errorf("failed to link SelectorToSip video elements: %w", err)
@@ -353,6 +319,8 @@ func (wts *WebrtcToSip) Close(pipeline *gst.Pipeline) error {
 		return fmt.Errorf("errors closing SelectorToSip: %v", errs)
 	}
 
+	time.Sleep(100 * time.Millisecond) // webrtc tracks need time to unlink
+
 	pipeline.RemoveMany(
 		wts.RtpBin,
 
@@ -361,16 +329,14 @@ func (wts *WebrtcToSip) Close(pipeline *gst.Pipeline) error {
 		wts.InputSelector,
 		// wts.Vp8Depay,
 		wts.Vp8Dec,
-		wts.VideoConvert,
-		wts.VideoScale,
-		wts.ResFilter,
-		wts.VideoConvert2,
 		wts.VideoRate,
-		wts.FpsFilter,
-		wts.I420Filter,
+		wts.RateFilter,
+		wts.VideoScale,
+		wts.ScaleFilter,
+		wts.Queue,
 		wts.X264Enc,
-		wts.Parse,
 		wts.RtpH264Pay,
+		wts.OutQueue,
 		wts.SipRtpSink,
 
 		wts.RtcpFunnel,
