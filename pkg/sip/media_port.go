@@ -211,21 +211,22 @@ func (c *udpConn) Write(b []byte) (n int, err error) {
 	n, err = c.WriteToUDPAddrPort(b, *dst)
 	if err != nil {
 		c.log.Errorw("UDP write failed", err, "dst", dst.String(), "bytes", len(b), "written", n)
-	} else {
-		count := c.writeCount.Add(1)
-		totalBytes := c.writtenBytes.Add(uint64(n))
-		// Log every 500 packets to verify actual UDP sends
-		if count%500 == 0 {
-			localAddr := c.LocalAddr()
-			c.log.Infow("UDP send stats",
-				"packets", count,
-				"totalBytes", totalBytes,
-				"lastPacketSize", n,
-				"dst", dst.String(),
-				"localAddr", localAddr.String(),
-			)
-		}
 	}
+	// else {
+	// 	count := c.writeCount.Add(1)
+	// 	totalBytes := c.writtenBytes.Add(uint64(n))
+	// 	// Log every 500 packets to verify actual UDP sends
+	// 	if count%500 == 0 {
+	// 		localAddr := c.LocalAddr()
+	// 		c.log.Infow("UDP send stats",
+	// 			"packets", count,
+	// 			"totalBytes", totalBytes,
+	// 			"lastPacketSize", n,
+	// 			"dst", dst.String(),
+	// 			"localAddr", localAddr.String(),
+	// 		)
+	// 	}
+	// }
 	return n, err
 }
 

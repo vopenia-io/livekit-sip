@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"net/netip"
 	"sync/atomic"
+	"time"
 
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/sip/pkg/sip/pipeline"
 	"github.com/livekit/sip/pkg/sip/pipeline/screenshare_pipeline"
+	"github.com/pion/rtcp"
 )
 
 type ScreenshareManager struct {
@@ -48,18 +50,10 @@ func (sm *ScreenshareManager) NewPipeline(media *sdpv2.SDPMedia) (pipeline.GspPi
 	}
 	p.Monitor()
 
-	// Start data flow monitoring for debugging
-	// Pass a function to get the current RTP destination address
-	p.WebrtcToSip.StartDataFlowMonitor(func() string {
-		if ptr := sm.rtpConn.dst.Load(); ptr != nil && ptr.IsValid() {
-			return ptr.String()
-		}
-		return "<not set>"
-	})
 
 	// Setup WebRTC → SIP pipeline
 	// Input: WebRTC RTP from sipRtpIn (gets swapped with WebRTC track reader in WebrtcTrackInput)
-	webrtcRtpIn, err := NewGstWriter(p.WebrtcToSip.RtpAppSrc)
+	webrtcRtpIn, err := NewGstWriter(p.WebrtcToSip.WebrtcRtpAppSrc)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create WebRTC RTP input writer: %w", err)
 	}
@@ -70,12 +64,12 @@ func (sm *ScreenshareManager) NewPipeline(media *sdpv2.SDPMedia) (pipeline.GspPi
 	}()
 
 	// Output: H264 RTP to SIP device via sipRtpOut
-	sipRtpOut, err := NewGstReader(p.WebrtcToSip.RtpAppSink)
+	sipRtpOut, err := NewGstReader(p.WebrtcToSip.SipRtpAppSink)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create SIP RTP output reader: %w", err)
 	}
 	// Wrap sipRtpOut with debug logging to track actual UDP writes
-	go sm.CopyWithDebug(sm.sipRtpOut, sipRtpOut, "screenshare→SIP")
+	go sm.Copy(sm.sipRtpOut, sipRtpOut)
 
 	return p, nil
 }

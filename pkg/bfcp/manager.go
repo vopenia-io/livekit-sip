@@ -8,7 +8,7 @@ import (
 	"sync"
 
 	"github.com/livekit/protocol/logger"
-	"github.com/vopenia/bfcp"
+	"github.com/vopenia-io/bfcp"
 )
 
 // Config holds configuration for the BFCP Manager.
