@@ -4,13 +4,11 @@ import (
 	"fmt"
 	"net/netip"
 	"sync/atomic"
-	"time"
 
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/sip/pkg/sip/pipeline"
 	"github.com/livekit/sip/pkg/sip/pipeline/screenshare_pipeline"
-	"github.com/pion/rtcp"
 )
 
 type ScreenshareManager struct {
@@ -48,8 +46,7 @@ func (sm *ScreenshareManager) NewPipeline(media *sdpv2.SDPMedia) (pipeline.GspPi
 	if err != nil {
 		return nil, fmt.Errorf("failed to create screenshare pipeline: %w", err)
 	}
-	p.Monitor()
-
+	// p.Monitor()
 
 	// Setup WebRTC → SIP pipeline
 	// Input: WebRTC RTP from sipRtpIn (gets swapped with WebRTC track reader in WebrtcTrackInput)
