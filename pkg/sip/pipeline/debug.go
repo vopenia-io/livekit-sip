@@ -185,3 +185,100 @@ func walkElement(e *gst.Element, prefix string, visited map[*gst.Element]bool) [
 	}
 	return out
 }
+
+func NewDebugView(name string) (*gst.Bin, error) {
+	// 1. Create the Bin
+	bin := gst.NewBin(name)
+
+	// 2. Create internal elements
+	tee, err := gst.NewElement("tee")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create tee: %w", err)
+	}
+
+	queuePass, err := gst.NewElementWithProperties("queue", map[string]interface{}{
+		"max-size-buffers": uint(1),
+		"leaky":            int(2), // downstream
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create pass queue: %w", err)
+	}
+
+	queueView, err := gst.NewElementWithProperties("queue", map[string]interface{}{
+		"max-size-buffers": uint(1),
+		"leaky":            int(2), // downstream
+		"silent":           true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create view queue: %w", err)
+	}
+
+	convert, err := gst.NewElement("videoconvert")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create videoconvert: %w", err)
+	}
+
+	// CHANGED: Use glimagesink instead of autovideosink.
+	// We NEED to set 'async=false' to prevent the pipeline from hanging
+	// if this element is unlinked or waiting for data.
+	sink, err := gst.NewElementWithProperties("glimagesink", map[string]interface{}{
+		"sync":  false, // Play as fast as possible (don't block pipeline clock)
+		"async": false, // CRITICAL: Don't wait for preroll. Fixes the "broken signal" issue.
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create video sink: %w", err)
+	}
+
+	// 3. Add elements to the bin
+	if err := bin.AddMany(tee, queuePass, queueView, convert, sink); err != nil {
+		return nil, fmt.Errorf("failed to add elements to bin: %w", err)
+	}
+
+	// 4. Link the Preview Branch (Queue -> Convert -> Sink)
+	if err := gst.ElementLinkMany(queueView, convert, sink); err != nil {
+		return nil, fmt.Errorf("failed to link preview branch: %w", err)
+	}
+
+	// 5. Link Tee to Queues using Request Pads
+
+	// -- Link Tee -> Passthrough Queue
+	// CHANGED: Using GetRequestPad directly as requested
+	teePadPass := tee.GetRequestPad("src_%u")
+	if teePadPass == nil {
+		return nil, fmt.Errorf("failed to request passthrough pad from tee")
+	}
+
+	queuePassSink := queuePass.GetStaticPad("sink")
+	if linkRes := teePadPass.Link(queuePassSink); linkRes != gst.PadLinkOK {
+		return nil, fmt.Errorf("failed to link tee to passthrough queue: %s", linkRes)
+	}
+
+	// -- Link Tee -> Preview Queue
+	teePadView := tee.GetRequestPad("src_%u")
+	if teePadView == nil {
+		return nil, fmt.Errorf("failed to request preview pad from tee")
+	}
+
+	queueViewSink := queueView.GetStaticPad("sink")
+	if linkRes := teePadView.Link(queueViewSink); linkRes != gst.PadLinkOK {
+		return nil, fmt.Errorf("failed to link tee to preview queue: %s", linkRes)
+	}
+
+	// 6. Create Ghost Pads to expose the interface
+
+	// A. Ghost Sink (Links external -> Tee Sink)
+	teeSink := tee.GetStaticPad("sink")
+	ghostSink := gst.NewGhostPad("sink", teeSink)
+	if !bin.AddPad(ghostSink.Pad) {
+		return nil, fmt.Errorf("failed to add ghost sink pad")
+	}
+
+	// B. Ghost Src (Links Passthrough Queue Src -> External)
+	queuePassSrc := queuePass.GetStaticPad("src")
+	ghostSrc := gst.NewGhostPad("src", queuePassSrc)
+	if !bin.AddPad(ghostSrc.Pad) {
+		return nil, fmt.Errorf("failed to add ghost src pad")
+	}
+
+	return bin, nil
+}
