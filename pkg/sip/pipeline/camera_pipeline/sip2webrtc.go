@@ -125,16 +125,19 @@ func buildSipToWebRTCChain(log logger.Logger, sipPayloadType int) (*SipToWebrtc,
 		return nil, fmt.Errorf("failed to create webrtc scale capsfilter: %w", err)
 	}
 
-	queue, err := gst.NewElementWithProperties("queue", map[string]interface{}{})
+	queue, err := gst.NewElementWithProperties("queue", map[string]interface{}{
+		"max-size-buffers": uint(3),
+		"leaky":            int(2), // downstream
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create webrtc queue: %w", err)
 	}
 
 	vp8enc, err := gst.NewElementWithProperties("vp8enc", map[string]interface{}{
 		"deadline":            int(1),
-		"target-bitrate":      int(1_500_000),
+		"target-bitrate":      int(1_024_000),
 		"cpu-used":            int(4),
-		"keyframe-max-dist":   int(30),
+		"keyframe-max-dist":   int(24),
 		"lag-in-frames":       int(0),
 		"threads":             int(4),
 		"buffer-initial-size": int(100),
@@ -158,7 +161,9 @@ func buildSipToWebRTCChain(log logger.Logger, sipPayloadType int) (*SipToWebrtc,
 		return nil, fmt.Errorf("failed to create SIP rtp vp8 payloader: %w", err)
 	}
 
-	outQueue, err := gst.NewElementWithProperties("queue", map[string]interface{}{})
+	outQueue, err := gst.NewElementWithProperties("queue", map[string]interface{}{
+		"max-size-time": uint64(100000000), // 100ms
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create webrtc rtcp out queue: %w", err)
 	}
