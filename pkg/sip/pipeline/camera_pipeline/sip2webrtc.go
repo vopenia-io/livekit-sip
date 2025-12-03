@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/app"
 	"github.com/livekit/protocol/logger"
@@ -18,17 +17,18 @@ type SipToWebrtc struct {
 
 	SipRtpSrc *gst.Element
 	// rptbin
-	Depay         *gst.Element
-	Parse         *gst.Element
-	Decoder       *gst.Element
+	H264Depay     *gst.Element
+	H264Parse     *gst.Element
+	AvdecH264     *gst.Element
 	VideoConvert  *gst.Element
-	VideoScale    *gst.Element
-	ResFilter     *gst.Element
-	VideoConvert2 *gst.Element
 	VideoRate     *gst.Element
-	FpsFilter     *gst.Element
+	RateFilter    *gst.Element
+	VideoScale    *gst.Element
+	ScaleFilter   *gst.Element
+	Queue         *gst.Element
 	Vp8Enc        *gst.Element
 	RtpVp8Pay     *gst.Element
+	OutQueue      *gst.Element
 	WebrtcRtpSink *gst.Element
 
 	SipRtcpSrc *gst.Element
@@ -45,7 +45,13 @@ var _ pipeline.GstChain = (*SipToWebrtc)(nil)
 
 func buildSipToWebRTCChain(log logger.Logger, sipPayloadType int) (*SipToWebrtc, error) {
 	rtpBin, err := gst.NewElementWithProperties("rtpbin", map[string]interface{}{
-		"name": "sip_rtp_bin",
+		"autoremove":         true,
+		"do-lost":            true,
+		"do-sync-event":      true,
+		"drop-on-latency":    true,
+		"latency":            uint64(0),
+		"rtcp-sync-interval": uint64(1000000000), // 1s
+		"rtp-profile":        int(3),             // RTP_PROFILE_AVPF
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create SIP rtpbin: %w", err)
@@ -55,8 +61,8 @@ func buildSipToWebRTCChain(log logger.Logger, sipPayloadType int) (*SipToWebrtc,
 		"name":         "sip_rtp_in",
 		"is-live":      true,
 		"do-timestamp": true,
-		"format":       int(3), // GST_FORMAT_TIME; using the same numeric value as your launch string
-		"max-bytes":    uint64(5_000_000),
+		"format":       int(gst.FormatTime),
+		"max-bytes":    uint64(2_000_000),
 		"block":        false,
 		"caps": gst.NewCapsFromString(fmt.Sprintf(
 			"application/x-rtp,media=video,encoding-name=H264,payload=%d,clock-rate=90000",
@@ -67,67 +73,61 @@ func buildSipToWebRTCChain(log logger.Logger, sipPayloadType int) (*SipToWebrtc,
 		return nil, fmt.Errorf("failed to create SIP appsrc: %w", err)
 	}
 
-	depay, err := gst.NewElementWithProperties("rtph264depay", map[string]interface{}{
+	h264depay, err := gst.NewElementWithProperties("rtph264depay", map[string]interface{}{
 		"request-keyframe": true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create SIP rtp depayloader: %w", err)
 	}
 
-	parse, err := gst.NewElementWithProperties("h264parse", map[string]interface{}{
+	h264parse, err := gst.NewElementWithProperties("h264parse", map[string]interface{}{
 		"config-interval": int(1),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create SIP h264 parser: %w", err)
 	}
 
-	dec, err := gst.NewElementWithProperties("avdec_h264", map[string]interface{}{
+	avdecH264, err := gst.NewElementWithProperties("avdec_h264", map[string]interface{}{
 		"max-threads": int(4),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create SIP h264 decoder: %w", err)
 	}
 
-	vconv, err := gst.NewElement("videoconvert")
+	videoconvert, err := gst.NewElementWithProperties("videoconvert", map[string]interface{}{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create SIP videoconvert: %w", err)
+		return nil, fmt.Errorf("failed to create webrtc videoconvert: %w", err)
 	}
 
-	vscale, err := gst.NewElementWithProperties("videoscale", map[string]interface{}{
-		"add-borders": true, // Add black bars for aspect ratio preservation
-	})
+	videorate, err := gst.NewElement("videorate")
 	if err != nil {
-		return nil, fmt.Errorf("failed to create SIP videoscale: %w", err)
+		return nil, fmt.Errorf("failed to create webrtc videorate: %w", err)
 	}
 
-	// Force 1280x720 resolution with PAR 1:1 - this forces letterboxing for non-16:9 content
-	resFilter, err := gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-		"caps": gst.NewCapsFromString("video/x-raw,width=1280,height=720,pixel-aspect-ratio=1/1"),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create SIP resolution capsfilter: %w", err)
-	}
-
-	// videoconvert after scaling to ensure proper format
-	vconv2, err := gst.NewElement("videoconvert")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create SIP videoconvert2: %w", err)
-	}
-
-	// Force 24fps output
-	vrate, err := gst.NewElementWithProperties("videorate", map[string]interface{}{
-		"drop-only": true, // Only drop frames, don't duplicate
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create SIP videorate: %w", err)
-	}
-
-	// Force 24fps in caps
-	fpsFilter, err := gst.NewElementWithProperties("capsfilter", map[string]interface{}{
+	ratefilter, err := gst.NewElementWithProperties("capsfilter", map[string]interface{}{
 		"caps": gst.NewCapsFromString("video/x-raw,framerate=24/1"),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create SIP fps capsfilter: %w", err)
+		return nil, fmt.Errorf("failed to create webrtc rate capsfilter: %w", err)
+	}
+
+	videoscale, err := gst.NewElementWithProperties("videoscale", map[string]interface{}{
+		"add-borders": true, // Add black bars for aspect ratio preservation
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create webrtc videoscale: %w", err)
+	}
+
+	scalefilter, err := gst.NewElementWithProperties("capsfilter", map[string]interface{}{
+		"caps": gst.NewCapsFromString("video/x-raw,width=1280,height=720,pixel-aspect-ratio=1/1"),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create webrtc scale capsfilter: %w", err)
+	}
+
+	queue, err := gst.NewElementWithProperties("queue", map[string]interface{}{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create webrtc queue: %w", err)
 	}
 
 	vp8enc, err := gst.NewElementWithProperties("vp8enc", map[string]interface{}{
@@ -156,6 +156,11 @@ func buildSipToWebRTCChain(log logger.Logger, sipPayloadType int) (*SipToWebrtc,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create SIP rtp vp8 payloader: %w", err)
+	}
+
+	outQueue, err := gst.NewElementWithProperties("queue", map[string]interface{}{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create webrtc rtcp out queue: %w", err)
 	}
 
 	webrtcRtpSink, err := gst.NewElementWithProperties("appsink", map[string]interface{}{
@@ -199,17 +204,18 @@ func buildSipToWebRTCChain(log logger.Logger, sipPayloadType int) (*SipToWebrtc,
 
 		SipRtpSrc: sipRtpSrc,
 		// rtpbin
-		Depay:         depay,
-		Parse:         parse,
-		Decoder:       dec,
-		VideoConvert:  vconv,
-		VideoScale:    vscale,
-		ResFilter:     resFilter,
-		VideoConvert2: vconv2,
-		VideoRate:     vrate,
-		FpsFilter:     fpsFilter,
+		H264Depay:     h264depay,
+		H264Parse:     h264parse,
+		AvdecH264:     avdecH264,
+		VideoConvert:  videoconvert,
+		VideoRate:     videorate,
+		RateFilter:    ratefilter,
+		VideoScale:    videoscale,
+		ScaleFilter:   scalefilter,
+		Queue:         queue,
 		Vp8Enc:        vp8enc,
 		RtpVp8Pay:     rtpVp8Pay,
+		OutQueue:      outQueue,
 		WebrtcRtpSink: webrtcRtpSink,
 
 		SipRtcpSrc: sipRtcpSrc,
@@ -230,17 +236,18 @@ func (stw *SipToWebrtc) Add(p *gst.Pipeline) error {
 
 		stw.SipRtpSrc,
 		// rptbin
-		stw.Depay,
-		stw.Parse,
-		stw.Decoder,
+		stw.H264Depay,
+		stw.H264Parse,
+		stw.AvdecH264,
 		stw.VideoConvert,
-		stw.VideoScale,
-		stw.ResFilter,
-		stw.VideoConvert2,
 		stw.VideoRate,
-		stw.FpsFilter,
+		stw.RateFilter,
+		stw.VideoScale,
+		stw.ScaleFilter,
+		stw.Queue,
 		stw.Vp8Enc,
 		stw.RtpVp8Pay,
+		stw.OutQueue,
 		stw.WebrtcRtpSink,
 
 		stw.SipRtcpSrc,
@@ -262,11 +269,7 @@ func (stw *SipToWebrtc) Link(p *gst.Pipeline) error {
 		return fmt.Errorf("failed to link sip rtp src to rtpbin: %w", err)
 	}
 
-	var (
-		hnd glib.SignalHandle
-		err error
-	)
-	if hnd, err = stw.RtpBin.Connect("pad-added", func(rtpbin *gst.Element, pad *gst.Pad) {
+	if _, err := stw.RtpBin.Connect("pad-added", func(rtpbin *gst.Element, pad *gst.Pad) {
 		stw.log.Debugw("RTPBIN PAD ADDED", "pad", pad.GetName())
 		padName := pad.GetName()
 		if !strings.HasPrefix(padName, "recv_rtp_src_") {
@@ -280,29 +283,29 @@ func (stw *SipToWebrtc) Link(p *gst.Pipeline) error {
 		stw.log.Infow("RTP pad added", "pad", padName, "sessionID", sessionID, "ssrc", ssrc, "payloadType", payloadType)
 		if err := pipeline.LinkPad(
 			pad,
-			stw.Depay.GetStaticPad("sink"),
+			stw.H264Depay.GetStaticPad("sink"),
 		); err != nil {
 			stw.log.Errorw("Failed to link rtpbin pad to depayloader", err)
 			return
 		}
 		stw.log.Infow("Linked RTP pad", "pad", padName)
-		stw.RtpBin.HandlerDisconnect(hnd)
 	}); err != nil {
 		return fmt.Errorf("failed to connect to rtpbin pad-added signal: %w", err)
 	}
 
 	if err := gst.ElementLinkMany(
-		stw.Depay,
-		stw.Parse,
-		stw.Decoder,
+		stw.H264Depay,
+		stw.H264Parse,
+		stw.AvdecH264,
 		stw.VideoConvert,
-		stw.VideoScale,
-		stw.ResFilter,
-		stw.VideoConvert2,
 		stw.VideoRate,
-		stw.FpsFilter,
+		stw.RateFilter,
+		stw.VideoScale,
+		stw.ScaleFilter,
+		stw.Queue,
 		stw.Vp8Enc,
 		stw.RtpVp8Pay,
+		stw.OutQueue,
 		stw.WebrtcRtpSink,
 	); err != nil {
 		return fmt.Errorf("failed to link sip to webrtc rtp path: %w", err)
@@ -333,17 +336,18 @@ func (stw *SipToWebrtc) Close(pipeline *gst.Pipeline) error {
 
 		stw.SipRtpSrc,
 		// rptbin
-		stw.Depay,
-		stw.Parse,
-		stw.Decoder,
+		stw.H264Depay,
+		stw.H264Parse,
+		stw.AvdecH264,
 		stw.VideoConvert,
-		stw.VideoScale,
-		stw.ResFilter,
-		stw.VideoConvert2,
 		stw.VideoRate,
-		stw.FpsFilter,
+		stw.RateFilter,
+		stw.VideoScale,
+		stw.ScaleFilter,
+		stw.Queue,
 		stw.Vp8Enc,
 		stw.RtpVp8Pay,
+		stw.OutQueue,
 		stw.WebrtcRtpSink,
 
 		stw.SipRtcpSrc,

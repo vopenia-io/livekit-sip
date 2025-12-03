@@ -29,16 +29,17 @@ type WebrtcToSip struct {
 	//rtpbin
 	InputSelector *gst.Element
 	// Vp8Depay      *gst.Element
-	Vp8Dec      *gst.Element
-	VideoRate   *gst.Element
-	RateFilter  *gst.Element
-	VideoScale  *gst.Element
-	ScaleFilter *gst.Element
-	Queue       *gst.Element
-	X264Enc     *gst.Element
-	RtpH264Pay  *gst.Element
-	OutQueue    *gst.Element
-	SipRtpSink  *gst.Element
+	Vp8Dec       *gst.Element
+	VideoConvert *gst.Element
+	VideoRate    *gst.Element
+	RateFilter   *gst.Element
+	VideoScale   *gst.Element
+	ScaleFilter  *gst.Element
+	Queue        *gst.Element
+	X264Enc      *gst.Element
+	RtpH264Pay   *gst.Element
+	OutQueue     *gst.Element
+	SipRtpSink   *gst.Element
 
 	RtcpFunnel *gst.Element
 	//rtpbin
@@ -77,6 +78,11 @@ func buildSelectorToSipChain(log logger.Logger, sipOutPayloadType int) (*WebrtcT
 	vp8dec, err := gst.NewElementWithProperties("vp8dec", map[string]interface{}{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create webrtc vp8 decoder: %w", err)
+	}
+
+	videoconvert, err := gst.NewElementWithProperties("videoconvert", map[string]interface{}{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create webrtc videoconvert: %w", err)
 	}
 
 	videorate, err := gst.NewElement("videorate")
@@ -174,16 +180,17 @@ func buildSelectorToSipChain(log logger.Logger, sipOutPayloadType int) (*WebrtcT
 		// rtpbin
 		InputSelector: inputSelector,
 		// Vp8Depay:      vp8depay,
-		Vp8Dec:      vp8dec,
-		VideoRate:   videorate,
-		RateFilter:  ratefilter,
-		VideoScale:  videoscale,
-		ScaleFilter: scalefilter,
-		Queue:       queue,
-		X264Enc:     x264enc,
-		RtpH264Pay:  rtph264pay,
-		OutQueue:    outQueue,
-		SipRtpSink:  sipRtpSink,
+		Vp8Dec:       vp8dec,
+		VideoConvert: videoconvert,
+		VideoRate:    videorate,
+		RateFilter:   ratefilter,
+		VideoScale:   videoscale,
+		ScaleFilter:  scalefilter,
+		Queue:        queue,
+		X264Enc:      x264enc,
+		RtpH264Pay:   rtph264pay,
+		OutQueue:     outQueue,
+		SipRtpSink:   sipRtpSink,
 
 		RtcpFunnel: rtcpFunnel,
 		// rtpbin
@@ -204,6 +211,7 @@ func (wts *WebrtcToSip) Add(pipeline *gst.Pipeline) error {
 		wts.InputSelector,
 		// wts.Vp8Depay,
 		wts.Vp8Dec,
+		wts.VideoConvert,
 		wts.VideoRate,
 		wts.RateFilter,
 		wts.VideoScale,
@@ -277,6 +285,7 @@ func (wts *WebrtcToSip) Link(p *gst.Pipeline) error {
 	if err := gst.ElementLinkMany(
 		wts.InputSelector,
 		wts.Vp8Dec,
+		wts.VideoConvert,
 		wts.VideoRate,
 		wts.RateFilter,
 		wts.VideoScale,
@@ -329,6 +338,7 @@ func (wts *WebrtcToSip) Close(pipeline *gst.Pipeline) error {
 		wts.InputSelector,
 		// wts.Vp8Depay,
 		wts.Vp8Dec,
+		wts.VideoConvert,
 		wts.VideoRate,
 		wts.RateFilter,
 		wts.VideoScale,

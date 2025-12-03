@@ -43,6 +43,10 @@ func (gp *CameraPipeline) AddWebRTCSourceToSelector(ssrc uint32) (*WebrtcTrack, 
 		return webRTCToSelector, nil
 	}
 
+	if err := gp.RequestKeyframe(webRTCToSelector); err != nil {
+		gp.Log.Warnw("failed to request keyframe from webrtc source after adding to selector", err, "ssrc", ssrc)
+	}
+
 	return webRTCToSelector, nil
 }
 
