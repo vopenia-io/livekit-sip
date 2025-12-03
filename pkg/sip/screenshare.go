@@ -167,15 +167,26 @@ func (sm *ScreenshareManager) UpdateRemotePort(port uint16) {
 
 // handleWebrtcTrackEnded is called when the WebRTC→SIP Copy loop terminates (track EOF).
 // This triggers BFCP floor release so the Poly switches back to video mode.
+// IMPORTANT: We must stop the VideoManager to reset the status to Stopped, so that
+// the next screenshare track triggers a re-INVITE and recreates the pipeline + Copy loops.
 func (sm *ScreenshareManager) handleWebrtcTrackEnded() {
 	if !sm.active.Load() {
 		return // Already stopped
 	}
 
-	sm.log.Infow("WebRTC screenshare track ended - triggering BFCP floor release")
+	sm.log.Infow("WebRTC screenshare track ended - stopping manager and triggering BFCP floor release")
+
+	// Stop the VideoManager to reset status to Stopped.
+	// This is critical for the restart flow: when the next WebRTC track arrives,
+	// IsReady() will return false (status=Stopped), triggering a re-INVITE which
+	// recreates the pipeline and Copy loops.
+	if err := sm.VideoManager.Stop(); err != nil {
+		sm.log.Warnw("Failed to stop video manager after track ended", err)
+	}
 
 	// Mark as inactive and trigger callback
 	if sm.active.Swap(false) {
+		sm.floorHeld.Store(false)
 		if sm.OnScreenshareStopped != nil {
 			sm.OnScreenshareStopped()
 		}

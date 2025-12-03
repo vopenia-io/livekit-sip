@@ -159,6 +159,13 @@ func (v *VideoIO) Close() error {
 	)
 }
 
+// Reset clears the closed flag on SwitchReaders so they can be reused
+// after being stopped. This is needed for screenshare restart.
+func (v *VideoIO) Reset() {
+	v.sipRtpIn.Reset()
+	v.sipRtcpIn.Reset()
+}
+
 func (v *VideoManager) RtpPort() int {
 	return v.rtpConn.LocalAddr().(*net.UDPAddr).Port
 }
@@ -264,10 +271,12 @@ func (v *VideoManager) setupOutput(remote netip.Addr, media *sdpv2.SDPMedia, sen
 	v.rtcpConn.SetDst(rtcpAddr)
 
 	v.log.Infow("setting up video send to SIP", "remote", remote.String(), "port", media.Port, "rtcp_port", media.RTCPPort)
-	if w := v.sipRtpOut.Swap(v.rtpConn); w != nil {
+	// Swap in the connection, but don't close the old one if it's the same connection.
+	// This happens during screenshare restart when we reuse the same UDP connection.
+	if w := v.sipRtpOut.Swap(v.rtpConn); w != nil && w != v.rtpConn {
 		_ = w.Close()
 	}
-	if w := v.sipRtcpOut.Swap(v.rtcpConn); w != nil {
+	if w := v.sipRtcpOut.Swap(v.rtcpConn); w != nil && w != v.rtcpConn {
 		_ = w.Close()
 	}
 	return nil
@@ -303,6 +312,10 @@ func (v *VideoManager) Setup(remote netip.Addr, media *sdpv2.SDPMedia) error {
 	}
 
 	v.log.Debugw("setting up video manager", "media", media)
+
+	// Reset the VideoIO switch readers so they can be reused after being stopped.
+	// This is critical for screenshare restart: the Copy loops check the closed flag.
+	v.VideoIO.Reset()
 
 	if media.Codec == nil {
 		return fmt.Errorf("no codec selected for video media")
