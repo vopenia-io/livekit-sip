@@ -28,6 +28,10 @@ type MediaOrchestrator struct {
 	bfcpManager *lkbfcp.Manager
 	bfcpInfo    *sdpv2.SDPBfcp
 
+	// Re-INVITE state - captures negotiated media for building re-INVITEs
+	// This ensures audio m-line is preserved when adding screenshare
+	reinviteState *sdpv2.ReInviteState
+
 	// Callback for SIP re-INVITE when content negotiation is needed.
 	// Called when WebRTC screenshare track arrives and screenshare not yet set up.
 	// Returns the full SDP from the SIP device's 200 OK response.
@@ -36,10 +40,11 @@ type MediaOrchestrator struct {
 
 func NewMediaOrchestrator(log logger.Logger, inbound *sipInbound, room *Room, opts *MediaOptions) (*MediaOrchestrator, error) {
 	o := &MediaOrchestrator{
-		log:     log,
-		inbound: inbound,
-		room:    room,
-		opts:    opts,
+		log:           log,
+		inbound:       inbound,
+		room:          room,
+		opts:          opts,
+		reinviteState: sdpv2.NewReInviteState(opts.IP),
 	}
 
 	camera, err := NewCameraManager(log.WithComponent("camera"), room, opts)
@@ -285,55 +290,80 @@ func (o *MediaOrchestrator) OfferSDP() (*sdpv2.SDP, error) {
 	return o.offerSDP(true, true)
 }
 
+// SetAudioForReInvite stores the audio codec and port info from initial negotiation.
+// This MUST be called after initial INVITE/200 OK to ensure audio is preserved in re-INVITEs.
+func (o *MediaOrchestrator) SetAudioForReInvite(codec *sdpv2.Codec, rtpPort uint16) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.reinviteState.SetAudioFromAnswer(codec, rtpPort)
+	o.log.Debugw("Audio info stored for re-INVITE",
+		"codec", codec.Name,
+		"payloadType", codec.PayloadType,
+		"rtpPort", rtpPort,
+	)
+}
+
+// updateVideoStateForReInvite updates the video state from current camera manager.
+// Called internally before building re-INVITE to ensure video state is current.
+func (o *MediaOrchestrator) updateVideoStateForReInvite() {
+	cameraCodec := o.camera.Codec()
+	if cameraCodec != nil {
+		o.reinviteState.SetVideoFromAnswer(
+			cameraCodec,
+			uint16(o.camera.RtpPort()),
+			o.camera.Direction(),
+		)
+	}
+}
+
+// updateBFCPStateForReInvite updates the BFCP state from current manager.
+// Called internally before building re-INVITE.
+func (o *MediaOrchestrator) updateBFCPStateForReInvite() {
+	if o.bfcpManager != nil && o.bfcpInfo != nil {
+		bfcpPort := o.bfcpManager.Port()
+		if bfcpPort > 0 {
+			o.reinviteState.SetBFCP(o.bfcpInfo, bfcpPort)
+		}
+	}
+}
+
 // BuildReInviteSDPBytes builds and marshals a complete SDP for a re-INVITE that includes
 // screenshare content negotiation with BFCP. This is specifically designed for Poly endpoints.
 // Returns the raw SDP bytes ready to send in a SIP INVITE request.
+//
+// IMPORTANT: SetAudioForReInvite must be called after initial negotiation to ensure
+// the audio m-line is preserved in the re-INVITE.
 func (o *MediaOrchestrator) BuildReInviteSDPBytes(screenshareMedia *sdpv2.SDPMedia) ([]byte, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	// Get camera codec - required for main video
-	cameraCodec := o.camera.Codec()
-	if cameraCodec == nil {
-		return nil, errors.New("camera codec not negotiated")
+	// Update video and BFCP state from current managers
+	o.updateVideoStateForReInvite()
+	o.updateBFCPStateForReInvite()
+
+	// Validate we have video state
+	if !o.reinviteState.HasVideo() {
+		return nil, errors.New("video state not set - camera codec not negotiated")
 	}
 
 	o.log.Infow("Building re-INVITE SDP for screenshare",
 		"localIP", o.opts.IP,
-		"cameraPort", o.camera.RtpPort(),
-		"cameraCodecPT", cameraCodec.PayloadType,
+		"hasAudio", o.reinviteState.HasAudio(),
+		"audioPort", o.reinviteState.AudioRTPPort,
+		"videoPort", o.reinviteState.VideoRTPPort,
 		"screensharePort", screenshareMedia.Port,
 		"screenshareRTCPPort", screenshareMedia.RTCPPort,
 		"screenshareLabel", screenshareMedia.Label,
+		"hasBFCP", o.reinviteState.HasBFCP(),
 	)
 
-	// Build re-INVITE config using the media-sdk API
-	cfg := sdpv2.NewReInviteConfigForPoly(o.opts.IP).
-		WithVideo(cameraCodec, uint16(o.camera.RtpPort()), uint16(o.camera.RtcpPort()), o.camera.Direction()).
-		WithScreenshare(screenshareMedia.Codec, screenshareMedia.Port, screenshareMedia.RTCPPort, sdpv2.DirectionSendOnly)
-
-	// Add BFCP if available (required for Poly content sharing)
-	if o.bfcpManager != nil && o.bfcpInfo != nil {
-		bfcpPort := o.bfcpManager.Port()
-		if bfcpPort > 0 {
-			cfg.WithBFCP(
-				bfcpPort,
-				o.bfcpInfo.Proto,
-				o.bfcpInfo.ConfID,
-				o.bfcpInfo.UserID,
-				o.bfcpInfo.FloorID,
-				screenshareMedia.Label, // Link to screenshare label (typically 3)
-			)
-			o.log.Infow("Including BFCP in re-INVITE",
-				"bfcpPort", bfcpPort,
-				"floorID", o.bfcpInfo.FloorID,
-				"mstreamID", screenshareMedia.Label,
-			)
-		}
-	}
-
-	// Build and marshal the SDP
-	sdpBytes, err := cfg.Build()
+	// Build re-INVITE SDP using the state (which now includes audio!)
+	sdpBytes, err := o.reinviteState.BuildScreenshareReInvite(
+		screenshareMedia.Codec,
+		screenshareMedia.Port,
+		screenshareMedia.RTCPPort,
+		screenshareMedia.Label,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("build re-INVITE SDP: %w", err)
 	}

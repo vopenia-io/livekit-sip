@@ -1114,6 +1114,9 @@ func (c *inboundCall) runMediaConn(tid traceid.ID, offerData []byte, enc livekit
 		return nil, SDPError{Err: err}
 	}
 
+	// Store audio info for re-INVITE (critical for preserving audio when adding screenshare)
+	orchestrator.SetAudioForReInvite(offer.Audio.Codec, uint16(c.media.Port()))
+
 	mc, err := answer.V1MediaConfig(netip.AddrPortFrom(offer.Addr, offer.Audio.Port))
 	if err != nil {
 		return nil, err

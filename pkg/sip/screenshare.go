@@ -63,7 +63,11 @@ func (sm *ScreenshareManager) NewPipeline(media *sdpv2.SDPMedia) (pipeline.GspPi
 	if err != nil {
 		return nil, fmt.Errorf("failed to create WebRTC RTP input writer: %w", err)
 	}
-	go sm.Copy(webrtcRtpIn, sm.sipRtpIn)
+	go func() {
+		sm.Copy(webrtcRtpIn, sm.sipRtpIn)
+		// Copy returned - WebRTC track has ended (EOF)
+		sm.handleWebrtcTrackEnded()
+	}()
 
 	// Output: H264 RTP to SIP device via sipRtpOut
 	sipRtpOut, err := NewGstReader(p.WebrtcToSip.RtpAppSink)
@@ -168,4 +172,21 @@ func (sm *ScreenshareManager) UpdateRemotePort(port uint16) {
 	sm.rtcpConn.SetDst(newRtcpDst)
 
 	sm.log.Infow("screenshare remote port updated from re-INVITE", "rtpAddr", newRtpDst, "rtcpAddr", newRtcpDst)
+}
+
+// handleWebrtcTrackEnded is called when the WebRTC→SIP Copy loop terminates (track EOF).
+// This triggers BFCP floor release so the Poly switches back to video mode.
+func (sm *ScreenshareManager) handleWebrtcTrackEnded() {
+	if !sm.active.Load() {
+		return // Already stopped
+	}
+
+	sm.log.Infow("WebRTC screenshare track ended - triggering BFCP floor release")
+
+	// Mark as inactive and trigger callback
+	if sm.active.Swap(false) {
+		if sm.OnScreenshareStopped != nil {
+			sm.OnScreenshareStopped()
+		}
+	}
 }
