@@ -1102,12 +1102,22 @@ func (c *inboundCall) runMediaConn(tid traceid.ID, offerData []byte, enc livekit
 	}
 
 	answer, err = answer.Builder().SetAudio(func(b *sdpv2.SDPMediaBuilder) (*sdpv2.SDPMedia, error) {
-		return b.
-			AddCodec(func(_ *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
-				return offer.Audio.Codec, nil
-			}, true).
-			SetRTPPort(uint16(c.media.Port())).
-			Build()
+		// Add the selected audio codec
+		b = b.AddCodec(func(_ *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
+			return offer.Audio.Codec, nil
+		}, true)
+
+		// Also add DTMF codec (telephone-event) if present in offer
+		for _, codec := range offer.Audio.Codecs {
+			if codec.Name == "telephone-event/8000" {
+				b = b.AddCodec(func(_ *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
+					return codec, nil
+				}, false)
+				break
+			}
+		}
+
+		return b.SetRTPPort(uint16(c.media.Port())).Build()
 	}).Build()
 	if err != nil {
 		c.log().Errorw("Cannot configure audio in SDP answer", err)
