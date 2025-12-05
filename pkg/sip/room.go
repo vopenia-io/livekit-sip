@@ -144,6 +144,7 @@ type RoomInterface interface {
 	SetDTMFOutput(w dtmf.Writer)
 	Close() error
 	CloseWithReason(reason livekit.DisconnectReason) error
+	SetSwitching(v bool) // Set to true during room switch to prevent OnDisconnected from triggering call close
 	Participant() ParticipantInfo
 	NewParticipantTrack(sampleRate int) (msdk.WriteCloser[msdk.PCM16Sample], error)
 	SendData(data lksdk.DataPacket, opts ...lksdk.DataPublishOption) error
@@ -170,6 +171,7 @@ type Room struct {
 	stopped    core.Fuse
 	closed     core.Fuse
 	stats      *RoomStats
+	switching  atomic.Bool // Set to true during room switch to prevent OnDisconnected from triggering stopped.Break()
 
 	onCameraTrack      func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant)
 	onScreenshareTrack func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant)
@@ -261,6 +263,10 @@ func (r *Room) participantJoin(rp *lksdk.RemoteParticipant) {
 		// So we just assume SIP participants will eventually start speaking.
 		r.subscribed.Break()
 		log.Infow("unblocking subscription - second sip participant is in the room")
+	// Note: ParticipantAgent is intentionally NOT handled here.
+	// For lobby-bot pattern, we want the call to remain ringing until the agent
+	// explicitly publishes an audio track (after user accepts the call).
+	// The track subscription in subscribeTo() will trigger subscribed.Break().
 	}
 }
 
@@ -295,7 +301,8 @@ func (r *Room) Connect(conf *config.Config, rconf RoomConfig) error {
 	}
 	roomCallback := &lksdk.RoomCallback{
 		OnParticipantConnected: func(rp *lksdk.RemoteParticipant) {
-			log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID())
+			log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID(), "kind", rp.Kind())
+			log.Infow("OnParticipantConnected callback fired")
 			if !r.subscribe.Load() {
 				log.Debugw("skipping participant join event - subscribed flag not set")
 				return // will subscribe later
@@ -344,7 +351,11 @@ func (r *Room) Connect(conf *config.Config, rconf RoomConfig) error {
 			},
 		},
 		OnDisconnected: func() {
-			r.stopped.Break()
+			// Don't trigger stopped.Break() during a room switch, as the main event loop
+			// may still be watching the old room's stopped channel
+			if !r.switching.Load() {
+				r.stopped.Break()
+			}
 		},
 	}
 
@@ -495,6 +506,15 @@ func (r *Room) Participant() ParticipantInfo {
 		return ParticipantInfo{}
 	}
 	return r.p
+}
+
+// SetSwitching sets the switching flag to prevent OnDisconnected from
+// triggering stopped.Break() during a room switch operation.
+func (r *Room) SetSwitching(v bool) {
+	if r == nil {
+		return
+	}
+	r.switching.Store(v)
 }
 
 func (r *Room) NewParticipantTrack(sampleRate int) (msdk.WriteCloser[msdk.PCM16Sample], error) {

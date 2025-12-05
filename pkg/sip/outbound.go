@@ -680,6 +680,91 @@ func (c *outboundCall) transferCall(ctx context.Context, transferTo string, head
 	return nil
 }
 
+// switchRoom performs an internal room-to-room transfer without SIP REFER.
+// This is useful when the SIP provider doesn't support REFER.
+// It disconnects from the current LiveKit room and reconnects to the target room
+// while keeping the SIP call active.
+func (c *outboundCall) switchRoom(ctx context.Context, targetRoomName string, dialtone bool) (retErr error) {
+	c.log.Infow("switching room internally for outbound call", "targetRoom", targetRoomName)
+
+	tID := c.state.StartTransfer(ctx, targetRoomName)
+	defer func() {
+		c.state.EndTransfer(ctx, tID, retErr)
+	}()
+
+	// Optionally play dial tone during switch
+	var rcancel context.CancelFunc
+	if dialtone && c.started.IsBroken() && !c.stopped.IsBroken() {
+		const ringVolume = math.MaxInt16 / 2
+		var rctx context.Context
+		rctx, rcancel = context.WithCancel(ctx)
+
+		go func() {
+			aw := c.media.GetAudioWriter()
+			err := tones.Play(rctx, aw, ringVolume, tones.ETSIRinging)
+			if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				c.log.Infow("cannot play dial tone during room switch", "error", err)
+			}
+		}()
+	}
+	defer func() {
+		if rcancel != nil {
+			rcancel()
+		}
+	}()
+
+	// Get the old room to disconnect
+	oldRoom := c.lkRoom.Room()
+	if oldRoom == nil {
+		return psrpc.NewErrorf(psrpc.Internal, "not connected to any room")
+	}
+
+	// Get participant info from old room
+	oldParticipant := c.lkRoom.Participant()
+
+	// Create new room config for target room
+	newRconf := RoomConfig{
+		RoomName: targetRoomName,
+		Participant: ParticipantConfig{
+			Identity:   oldParticipant.Identity,
+			Name:       oldParticipant.Name,
+			Attributes: oldRoom.LocalParticipant.Attributes(),
+		},
+	}
+
+	// Create a new Room instance for the target room
+	newLkRoom := c.c.getRoom(c.log, &c.stats.Room)
+
+	// Connect to the new room first (before disconnecting old)
+	err := newLkRoom.Connect(c.c.conf, newRconf)
+	if err != nil {
+		c.log.Errorw("failed to connect to target room", err, "targetRoom", targetRoomName)
+		return psrpc.NewErrorf(psrpc.Internal, "failed to connect to target room: %v", err)
+	}
+
+	// Publish audio track in the new room
+	local, err := newLkRoom.NewParticipantTrack(RoomSampleRate)
+	if err != nil {
+		_ = newLkRoom.Close()
+		c.log.Errorw("failed to publish track in target room", err)
+		return psrpc.NewErrorf(psrpc.Internal, "failed to publish track: %v", err)
+	}
+
+	// Swap the room - redirect audio to new room
+	oldLkRoom := c.lkRoom
+	c.lkRoom = newLkRoom
+	c.media.WriteAudioTo(local)
+
+	// Enable subscription in new room
+	newLkRoom.Subscribe()
+
+	// Disconnect from old room
+	_ = oldLkRoom.CloseWithReason(livekit.DisconnectReason_CLIENT_INITIATED)
+
+	c.log.Infow("room switch completed for outbound call", "targetRoom", targetRoomName)
+	return nil
+}
+
 func (c *Client) newOutbound(log logger.Logger, id LocalTag, from, contact URI, displayName *string, getHeaders setHeadersFunc) *sipOutbound {
 	from = from.Normalize()
 	if displayName == nil { // Nothing specified, preserve legacy behavior

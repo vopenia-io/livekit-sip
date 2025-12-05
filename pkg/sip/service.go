@@ -331,6 +331,11 @@ func (s *Service) TransferSIPParticipant(ctx context.Context, req *rpc.InternalT
 }
 
 func (s *Service) processParticipantTransfer(ctx context.Context, callID string, transferTo string, headers map[string]string, dialtone bool) error {
+	// Determine if this is an internal room transfer (LiveKit room name) or external SIP transfer (SIP URI)
+	// Internal transfer: transferTo looks like a UUID or room name (no "sip:" prefix, no "@")
+	// External transfer: transferTo is a SIP URI (e.g., "sip:user@domain.com")
+	isInternalTransfer := !strings.Contains(transferTo, "@") && !strings.HasPrefix(strings.ToLower(transferTo), "sip:")
+
 	// Look for call both in client (outbound) and server (inbound)
 	s.cli.cmu.Lock()
 	out := s.cli.activeCalls[LocalTag(callID)]
@@ -338,7 +343,13 @@ func (s *Service) processParticipantTransfer(ctx context.Context, callID string,
 
 	if out != nil {
 		s.mon.TransferStarted(stats.Outbound)
-		err := out.transferCall(ctx, transferTo, headers, dialtone)
+		var err error
+		if isInternalTransfer {
+			s.log.Infow("using internal room switch for outbound call", "callID", callID, "targetRoom", transferTo)
+			err = out.switchRoom(ctx, transferTo, dialtone)
+		} else {
+			err = out.transferCall(ctx, transferTo, headers, dialtone)
+		}
 		if err != nil {
 			s.mon.TransferFailed(stats.Outbound, extractTransferErrorReason(err), true)
 			return err
@@ -353,7 +364,13 @@ func (s *Service) processParticipantTransfer(ctx context.Context, callID string,
 
 	if in != nil {
 		s.mon.TransferStarted(stats.Inbound)
-		err := in.transferCall(ctx, transferTo, headers, dialtone)
+		var err error
+		if isInternalTransfer {
+			s.log.Infow("using internal room switch for inbound call", "callID", callID, "targetRoom", transferTo)
+			err = in.switchRoom(ctx, transferTo, dialtone)
+		} else {
+			err = in.transferCall(ctx, transferTo, headers, dialtone)
+		}
 		if err != nil {
 			s.mon.TransferFailed(stats.Inbound, extractTransferErrorReason(err), true)
 			return err
