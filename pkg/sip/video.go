@@ -54,7 +54,7 @@ func NewVideoManager(log logger.Logger, room *Room, opts *MediaOptions, factory 
 		pipelineFactory: factory,
 	}
 
-	v.log.Infow("video manager created")
+	v.log.Debugw("video manager created")
 
 	return v, nil
 }
@@ -91,15 +91,14 @@ type VideoIO struct {
 
 func (v *VideoManager) Copy(dst io.WriteCloser, src io.ReadCloser) {
 	n, err := io.Copy(dst, src)
-	v.log.Infow("finished copying video data", "bytes", n, "err", err)
+	v.log.Debugw("copy done", "bytes", n, "err", err)
 	src.Close()
 	dst.Close()
 }
 
 func (v *VideoManager) CopyWithDebug(dst io.WriteCloser, src io.ReadCloser, label string) {
-	buf := make([]byte, 1500) // MTU size
-	var totalBytes int64
-	var totalPackets int64
+	buf := make([]byte, 1500)
+	var totalBytes, totalPackets int64
 
 	for {
 		n, readErr := src.Read(buf)
@@ -108,31 +107,24 @@ func (v *VideoManager) CopyWithDebug(dst io.WriteCloser, src io.ReadCloser, labe
 			totalBytes += int64(written)
 			totalPackets++
 
-			// Log every 500 packets
-			if totalPackets%500 == 0 {
-				v.log.Infow("copy debug stats",
-					"label", label,
-					"totalPackets", totalPackets,
-					"totalBytes", totalBytes,
-					"lastPacketSize", n,
-					"lastWritten", written,
-				)
+			if totalPackets%1000 == 0 {
+				v.log.Debugw("copy stats", "label", label, "packets", totalPackets, "bytes", totalBytes)
 			}
 
 			if writeErr != nil {
-				v.log.Warnw("write error in copy", writeErr, "label", label, "totalPackets", totalPackets)
+				v.log.Warnw("write error", writeErr, "label", label)
 				break
 			}
 		}
 		if readErr != nil {
 			if readErr != io.EOF {
-				v.log.Warnw("read error in copy", readErr, "label", label)
+				v.log.Warnw("read error", readErr, "label", label)
 			}
 			break
 		}
 	}
 
-	v.log.Infow("finished copying with debug", "label", label, "totalBytes", totalBytes, "totalPackets", totalPackets)
+	v.log.Debugw("copy done", "label", label, "bytes", totalBytes, "packets", totalPackets)
 	src.Close()
 	dst.Close()
 }
@@ -175,9 +167,7 @@ func (v *VideoManager) RtcpPort() int {
 }
 
 func (v *VideoManager) WebrtcTrackOutput(to *TrackOutput) {
-	v.log.Infow("WebRTC video track published - connecting SIP→WebRTC pipeline",
-		"hasRtpOut", to.RtpOut != nil,
-		"hasRtcpOut", to.RtcpOut != nil)
+	v.log.Debugw("WebRTC track output connected")
 
 	if w := v.webrtcRtpOut.Swap(to.RtpOut); w != nil {
 		_ = w.Close()
@@ -270,7 +260,7 @@ func (v *VideoManager) setupOutput(remote netip.Addr, media *sdpv2.SDPMedia, sen
 	rtcpAddr := netip.AddrPortFrom(remote, media.RTCPPort)
 	v.rtcpConn.SetDst(rtcpAddr)
 
-	v.log.Infow("setting up video send to SIP", "remote", remote.String(), "port", media.Port, "rtcp_port", media.RTCPPort)
+	v.log.Debugw("video send setup", "remote", remote.String(), "port", media.Port)
 	// Swap in the connection, but don't close the old one if it's the same connection.
 	// This happens during screenshare restart when we reuse the same UDP connection.
 	if w := v.sipRtpOut.Swap(v.rtpConn); w != nil && w != v.rtpConn {
@@ -293,7 +283,7 @@ func (v *VideoManager) setupInput(remote netip.Addr, media *sdpv2.SDPMedia, recv
 		return nil
 	}
 
-	v.log.Infow("setting up video receive from SIP", "remote", remote.String(), "port", media.Port, "rtcp_port", media.RTCPPort)
+	v.log.Debugw("video recv setup", "remote", remote.String(), "port", media.Port)
 	if r := v.sipRtpIn.Swap(v.rtpConn); r != nil {
 		_ = r.Close()
 	}
@@ -331,7 +321,7 @@ func (v *VideoManager) Setup(remote netip.Addr, media *sdpv2.SDPMedia) error {
 	v.recv = media.Direction.IsRecv()
 	v.send = media.Direction.IsSend()
 
-	v.log.Infow("video setup", "send", v.send, "recv", v.recv, "remote", remote.String(), "rtp_port", v.RtpPort(), "rtcp_port", v.RtcpPort())
+	v.log.Debugw("video setup", "send", v.send, "recv", v.recv, "port", v.RtpPort())
 
 	// setupOutput: send TO SIP device (when we send, i.e., v.send=true)
 	if err := v.setupOutput(remote, media, v.send); err != nil {

@@ -15,8 +15,7 @@ type SipToWebrtc struct {
 
 	RtpBin *gst.Element
 
-	SipRtpSrc *gst.Element
-	// rptbin
+	SipRtpSrc     *gst.Element
 	H264Depay     *gst.Element
 	H264Parse     *gst.Element
 	AvdecH264     *gst.Element
@@ -31,8 +30,7 @@ type SipToWebrtc struct {
 	OutQueue      *gst.Element
 	WebrtcRtpSink *gst.Element
 
-	SipRtcpSrc *gst.Element
-	// rptbin
+	SipRtcpSrc  *gst.Element
 	SipRtcpSink *gst.Element
 
 	SipRtpAppSrc     *app.Source
@@ -112,7 +110,7 @@ func buildSipToWebRTCChain(log logger.Logger, sipPayloadType int) (*SipToWebrtc,
 	}
 
 	videoscale, err := gst.NewElementWithProperties("videoscale", map[string]interface{}{
-		"add-borders": true, // Add black bars for aspect ratio preservation
+		"add-borders": true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create webrtc videoscale: %w", err)
@@ -207,8 +205,7 @@ func buildSipToWebRTCChain(log logger.Logger, sipPayloadType int) (*SipToWebrtc,
 		log:    log,
 		RtpBin: rtpBin,
 
-		SipRtpSrc: sipRtpSrc,
-		// rtpbin
+		SipRtpSrc:     sipRtpSrc,
 		H264Depay:     h264depay,
 		H264Parse:     h264parse,
 		AvdecH264:     avdecH264,
@@ -223,8 +220,7 @@ func buildSipToWebRTCChain(log logger.Logger, sipPayloadType int) (*SipToWebrtc,
 		OutQueue:      outQueue,
 		WebrtcRtpSink: webrtcRtpSink,
 
-		SipRtcpSrc: sipRtcpSrc,
-		// rtpbin
+		SipRtcpSrc:  sipRtcpSrc,
 		SipRtcpSink: sipRtcpSink,
 
 		SipRtpAppSrc:     app.SrcFromElement(sipRtpSrc),
@@ -238,9 +234,7 @@ func buildSipToWebRTCChain(log logger.Logger, sipPayloadType int) (*SipToWebrtc,
 func (stw *SipToWebrtc) Add(p *gst.Pipeline) error {
 	if err := p.AddMany(
 		stw.RtpBin,
-
 		stw.SipRtpSrc,
-		// rptbin
 		stw.H264Depay,
 		stw.H264Parse,
 		stw.AvdecH264,
@@ -254,9 +248,7 @@ func (stw *SipToWebrtc) Add(p *gst.Pipeline) error {
 		stw.RtpVp8Pay,
 		stw.OutQueue,
 		stw.WebrtcRtpSink,
-
 		stw.SipRtcpSrc,
-		// rtpbin
 		stw.SipRtcpSink,
 	); err != nil {
 		return fmt.Errorf("failed to add sip to webrtc chain to pipeline: %w", err)
@@ -275,25 +267,23 @@ func (stw *SipToWebrtc) Link(p *gst.Pipeline) error {
 	}
 
 	if _, err := stw.RtpBin.Connect("pad-added", func(rtpbin *gst.Element, pad *gst.Pad) {
-		stw.log.Debugw("RTPBIN PAD ADDED", "pad", pad.GetName())
 		padName := pad.GetName()
 		if !strings.HasPrefix(padName, "recv_rtp_src_") {
 			return
 		}
 		var sessionID, ssrc, payloadType uint32
 		if _, err := fmt.Sscanf(padName, "recv_rtp_src_%d_%d_%d", &sessionID, &ssrc, &payloadType); err != nil {
-			stw.log.Warnw("Invalid RTP pad format", err, "pad", padName)
+			stw.log.Warnw("invalid RTP pad format", err, "pad", padName)
 			return
 		}
-		stw.log.Infow("RTP pad added", "pad", padName, "sessionID", sessionID, "ssrc", ssrc, "payloadType", payloadType)
+		stw.log.Debugw("rtpbin pad added", "ssrc", ssrc, "pt", payloadType)
 		if err := pipeline.LinkPad(
 			pad,
 			stw.H264Depay.GetStaticPad("sink"),
 		); err != nil {
-			stw.log.Errorw("Failed to link rtpbin pad to depayloader", err)
+			stw.log.Errorw("failed to link rtpbin to depayloader", err)
 			return
 		}
-		stw.log.Infow("Linked RTP pad", "pad", padName)
 	}); err != nil {
 		return fmt.Errorf("failed to connect to rtpbin pad-added signal: %w", err)
 	}
@@ -338,9 +328,7 @@ func (stw *SipToWebrtc) Link(p *gst.Pipeline) error {
 func (stw *SipToWebrtc) Close(pipeline *gst.Pipeline) error {
 	if err := pipeline.RemoveMany(
 		stw.RtpBin,
-
 		stw.SipRtpSrc,
-		// rptbin
 		stw.H264Depay,
 		stw.H264Parse,
 		stw.AvdecH264,
@@ -354,9 +342,7 @@ func (stw *SipToWebrtc) Close(pipeline *gst.Pipeline) error {
 		stw.RtpVp8Pay,
 		stw.OutQueue,
 		stw.WebrtcRtpSink,
-
 		stw.SipRtcpSrc,
-		// rtpbin
 		stw.SipRtcpSink,
 	); err != nil {
 		return fmt.Errorf("failed to remove sip to webrtc chain from pipeline: %w", err)

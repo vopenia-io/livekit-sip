@@ -85,13 +85,11 @@ func (cm *CameraManager) WebrtcTrackInput(ti *TrackInput, sid string, ssrc uint3
 	defer cm.mu.Unlock()
 
 	if cm.status != VideoStatusStarted {
-		cm.log.Warnw("video manager not started, cannot add WebRTC track input", nil, "status", cm.status)
+		cm.log.Debugw("video manager not started", "status", cm.status)
 		return
 	}
 
-	cm.log.Infow("WebRTC video track subscribed - connecting WebRTC→SIP pipeline",
-		"hasRtpIn", ti.RtpIn != nil,
-		"hasRtcpIn", ti.RtcpIn != nil)
+	cm.log.Debugw("camera.webrtc.track_input", "sid", sid, "ssrc", ssrc)
 
 	s, err := cm.pipeline.(*camera_pipeline.CameraPipeline).AddWebRTCSourceToSelector(ssrc)
 	if err != nil {

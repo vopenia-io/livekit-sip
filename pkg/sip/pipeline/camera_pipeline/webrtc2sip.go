@@ -25,11 +25,9 @@ type WebrtcToSip struct {
 
 	RtpBin *gst.Element
 
-	RtpFunnel *gst.Element
-	//rtpbin
+	RtpFunnel     *gst.Element
 	InputSelector *gst.Element
-	// Vp8Depay      *gst.Element
-	Vp8Dec       *gst.Element
+	Vp8Dec        *gst.Element
 	VideoConvert *gst.Element
 	VideoRate    *gst.Element
 	RateFilter   *gst.Element
@@ -41,8 +39,7 @@ type WebrtcToSip struct {
 	OutQueue     *gst.Element
 	SipRtpSink   *gst.Element
 
-	RtcpFunnel *gst.Element
-	//rtpbin
+	RtcpFunnel     *gst.Element
 	WebrtcRtcpSink *gst.Element
 
 	SipRtpAppSink     *app.Sink
@@ -98,7 +95,7 @@ func buildSelectorToSipChain(log logger.Logger, sipOutPayloadType int) (*WebrtcT
 	}
 
 	videoscale, err := gst.NewElementWithProperties("videoscale", map[string]interface{}{
-		"add-borders": true, // Add black bars for aspect ratio preservation
+		"add-borders": true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create webrtc videoscale: %w", err)
@@ -181,11 +178,9 @@ func buildSelectorToSipChain(log logger.Logger, sipOutPayloadType int) (*WebrtcT
 
 		RtpBin: rtpbin,
 
-		RtpFunnel: rtpfunnel,
-		// rtpbin
+		RtpFunnel:     rtpfunnel,
 		InputSelector: inputSelector,
-		// Vp8Depay:      vp8depay,
-		Vp8Dec:       vp8dec,
+		Vp8Dec:        vp8dec,
 		VideoConvert: videoconvert,
 		VideoRate:    videorate,
 		RateFilter:   ratefilter,
@@ -197,8 +192,7 @@ func buildSelectorToSipChain(log logger.Logger, sipOutPayloadType int) (*WebrtcT
 		OutQueue:     outQueue,
 		SipRtpSink:   sipRtpSink,
 
-		RtcpFunnel: rtcpFunnel,
-		// rtpbin
+		RtcpFunnel:     rtcpFunnel,
 		WebrtcRtcpSink: webrtcRtcpSink,
 
 		SipRtpAppSink:     app.SinkFromElement(sipRtpSink),
@@ -210,11 +204,8 @@ func buildSelectorToSipChain(log logger.Logger, sipOutPayloadType int) (*WebrtcT
 func (wts *WebrtcToSip) Add(pipeline *gst.Pipeline) error {
 	if err := pipeline.AddMany(
 		wts.RtpBin,
-
 		wts.RtpFunnel,
-		// rtpbin
 		wts.InputSelector,
-		// wts.Vp8Depay,
 		wts.Vp8Dec,
 		wts.VideoConvert,
 		wts.VideoRate,
@@ -226,9 +217,7 @@ func (wts *WebrtcToSip) Add(pipeline *gst.Pipeline) error {
 		wts.RtpH264Pay,
 		wts.OutQueue,
 		wts.SipRtpSink,
-
 		wts.RtcpFunnel,
-		// rtpbin
 		wts.WebrtcRtcpSink,
 	); err != nil {
 		return fmt.Errorf("failed to add SelectorToSip elements to pipeline: %w", err)
@@ -243,7 +232,7 @@ func (wts *WebrtcToSip) Link(p *gst.Pipeline) error {
 		if !ok {
 			return nil
 		}
-		wts.log.Debugw("RTPBIN requested PT map", "pt", pt, "caps", caps)
+		wts.log.Debugw("rtpbin pt-map", "pt", pt)
 		return gst.NewCapsFromString(caps)
 	}); err != nil {
 		return fmt.Errorf("failed to connect to rtpbin request-pt-map signal: %w", err)
@@ -257,32 +246,30 @@ func (wts *WebrtcToSip) Link(p *gst.Pipeline) error {
 	}
 
 	if _, err := wts.RtpBin.Connect("pad-added", func(rtpbin *gst.Element, pad *gst.Pad) {
-		wts.log.Debugw("RTPBIN PAD ADDED", "pad", pad.GetName())
 		padName := pad.GetName()
 		if !strings.HasPrefix(padName, "recv_rtp_src_") {
 			return
 		}
 		var sessionID, ssrc, payloadType uint32
 		if _, err := fmt.Sscanf(padName, "recv_rtp_src_%d_%d_%d", &sessionID, &ssrc, &payloadType); err != nil {
-			wts.log.Warnw("Invalid RTP pad format", err, "pad", padName)
+			wts.log.Warnw("invalid RTP pad format", err, "pad", padName)
 			return
 		}
-		wts.log.Infow("RTP pad added", "pad", padName, "sessionID", sessionID, "ssrc", ssrc, "payloadType", payloadType)
+		wts.log.Debugw("rtpbin pad added", "ssrc", ssrc, "pt", payloadType)
 
 		wts.mu.Lock()
 		defer wts.mu.Unlock()
 
 		track, ok := wts.WebrtcTracks[ssrc]
 		if !ok {
-			wts.log.Warnw("No WebRTC track found for SSRC", nil, "ssrc", ssrc)
+			wts.log.Warnw("no track for SSRC", nil, "ssrc", ssrc)
 			return
 		}
 
 		if err := track.LinkParent(wts, pad); err != nil {
-			wts.log.Errorw("Failed to link RTP pad to WebRTC track", err, "pad", padName, "ssrc", ssrc)
+			wts.log.Errorw("failed to link pad to track", err, "ssrc", ssrc)
 			return
 		}
-		wts.log.Infow("Linked RTP pad", "pad", padName)
 	}); err != nil {
 		return fmt.Errorf("failed to connect to rtpbin pad-added signal: %w", err)
 	}
@@ -337,11 +324,8 @@ func (wts *WebrtcToSip) Close(pipeline *gst.Pipeline) error {
 
 	pipeline.RemoveMany(
 		wts.RtpBin,
-
 		wts.RtpFunnel,
-		// rtpbin
 		wts.InputSelector,
-		// wts.Vp8Depay,
 		wts.Vp8Dec,
 		wts.VideoConvert,
 		wts.VideoRate,
@@ -353,9 +337,7 @@ func (wts *WebrtcToSip) Close(pipeline *gst.Pipeline) error {
 		wts.RtpH264Pay,
 		wts.OutQueue,
 		wts.SipRtpSink,
-
 		wts.RtcpFunnel,
-		// rtpbin
 		wts.WebrtcRtcpSink,
 	)
 	return nil

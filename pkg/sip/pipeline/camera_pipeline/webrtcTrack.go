@@ -15,8 +15,7 @@ type WebrtcTrack struct {
 
 	SSRC uint32
 
-	RtpSrc *gst.Element
-	// rtpbin
+	RtpSrc   *gst.Element
 	Vp8Depay *gst.Element
 	RtpQueue *gst.Element
 
@@ -79,8 +78,7 @@ func buildWebrtcTrack(log logger.Logger, parent *WebrtcToSip, ssrc uint32) (*Web
 
 		SSRC: ssrc,
 
-		RtpSrc: rtpSrc,
-		// rtpbin
+		RtpSrc:   rtpSrc,
 		Vp8Depay: vp8depay,
 		RtpQueue: rtpQueue,
 
@@ -106,13 +104,6 @@ func (wt *WebrtcTrack) Add(pipeline *gst.Pipeline) error {
 
 // Link implements GstChain.
 func (wt *WebrtcTrack) Link(p *gst.Pipeline) error {
-	// if err := gst.ElementLinkMany(
-	// 	wt.RtpSrc,
-	// 	wt.RtpQueue,
-	// ); err != nil {
-	// 	return fmt.Errorf("failed to link webrtc track rtp elements: %w", err)
-	// }
-
 	wt.RtpPad = wt.parent.RtpFunnel.GetRequestPad("sink_%u")
 	if err := pipeline.LinkPad(
 		wt.RtpSrc.GetStaticPad("src"),
@@ -127,13 +118,6 @@ func (wt *WebrtcTrack) Link(p *gst.Pipeline) error {
 	); err != nil {
 		return fmt.Errorf("failed to link webrtc track rtp elements: %w", err)
 	}
-
-	// if err := gst.ElementLinkMany(
-	// 	wt.RtcpSrc,
-	// 	wt.RtcpQueue,
-	// ); err != nil {
-	// 	return fmt.Errorf("failed to link webrtc track rtcp elements: %w", err)
-	// }
 
 	wt.RtcpPad = wt.parent.RtcpFunnel.GetRequestPad("sink_%u")
 	if err := pipeline.LinkPad(

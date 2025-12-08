@@ -36,9 +36,7 @@ func NewVirtualClient(log logger.Logger, userID uint16) *VirtualClient {
 		floorStates: make(map[uint16]*FloorState),
 	}
 
-	log.Debugw("BFCP virtual client created",
-		"userID", userID,
-	)
+	log.Debugw("bfcp.virtual.created", "userID", userID)
 
 	return c
 }
@@ -65,11 +63,7 @@ func (c *VirtualClient) RequestFloor(floorID uint16) uint16 {
 	state.RequestID = requestID
 	state.Pending = true
 
-	c.log.Infow("BFCP virtual client requesting floor",
-		"userID", c.userID,
-		"floorID", floorID,
-		"requestID", requestID,
-	)
+	c.log.Debugw("bfcp.virtual.floor_request", "floorID", floorID, "requestID", requestID)
 
 	return requestID
 }
@@ -84,11 +78,7 @@ func (c *VirtualClient) ReleaseFloor(floorID uint16) {
 		return
 	}
 
-	c.log.Infow("BFCP virtual client releasing floor",
-		"userID", c.userID,
-		"floorID", floorID,
-		"hadFloor", state.HasFloor,
-	)
+	c.log.Debugw("bfcp.virtual.floor_release", "floorID", floorID)
 
 	state.HasFloor = false
 	state.Pending = false
@@ -109,12 +99,7 @@ func (c *VirtualClient) SetFloorGranted(floorID uint16, granted bool) {
 	state.HasFloor = granted
 	state.Pending = false
 
-	c.log.Infow("BFCP virtual client floor state updated",
-		"userID", c.userID,
-		"floorID", floorID,
-		"granted", granted,
-		"requestID", state.RequestID,
-	)
+	c.log.Debugw("bfcp.virtual.floor_state", "floorID", floorID, "granted", granted)
 }
 
 // HasFloor returns true if the virtual client currently holds the specified floor.
@@ -184,10 +169,7 @@ func (c *VirtualClient) ReleaseAllFloors() {
 
 	for floorID, state := range c.floorStates {
 		if state.HasFloor {
-			c.log.Infow("BFCP virtual client releasing floor (cleanup)",
-				"userID", c.userID,
-				"floorID", floorID,
-			)
+			c.log.Debugw("bfcp.virtual.floor_release_cleanup", "floorID", floorID)
 		}
 		state.HasFloor = false
 		state.Pending = false
