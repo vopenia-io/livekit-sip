@@ -80,7 +80,7 @@ func NewManager(log logger.Logger, cfg *Config) (*Manager, error) {
 
 	serverCfg := bfcp.DefaultServerConfig(cfg.ListenAddr, cfg.ConferenceID)
 	serverCfg.AutoGrant = cfg.AutoGrant
-	serverCfg.EnableLogging = true
+	serverCfg.Logger = log
 
 	m.server = bfcp.NewServer(serverCfg)
 
