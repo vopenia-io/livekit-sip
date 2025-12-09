@@ -913,12 +913,6 @@ func (c *inboundCall) handleInvite(ctx context.Context, tid traceid.ID, req *sip
 		return errors.Wrap(err, "failed joining room")
 	}
 
-	if err := c.medias.Start(); err != nil {
-		c.log().Errorw("Cannot start media orchestrator", err)
-		c.close(true, callDropped, "media-start-failed")
-		return errors.Wrap(err, "starting media orchestrator failed")
-	}
-
 	// Publish our own track.
 	if err := c.publishTrack(); err != nil {
 		c.log().Errorw("Cannot publish track", err)
@@ -1009,6 +1003,7 @@ func (c *inboundCall) runMediaConn(tid traceid.ID, offerData []byte, enc livekit
 		return nil, err
 	}
 	c.medias = orchestrator
+	c.lkRoom.(*Room).SetCallbacks(orchestrator)
 
 	mp, err := NewMediaPort(tid, c.log(), c.mon, opts, RoomSampleRate)
 	if err != nil {

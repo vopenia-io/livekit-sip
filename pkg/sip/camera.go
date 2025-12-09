@@ -37,13 +37,13 @@ func (cm *CameraManager) CreateVideoPipeline(opt *MediaOptions) (SipPipeline, er
 	return pipeline, nil
 }
 
-func (cm *CameraManager) WebrtcTrackInput(ti *TrackInput, sid string, ssrc uint32) {
+func (cm *CameraManager) WebrtcTrackInput(ti *TrackInput, sid string, ssrc uint32) error {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
 	if cm.status != VideoStatusStarted {
-		cm.log.Warnw("video manager not started, cannot add WebRTC track input", nil, "status", cm.status)
-		return
+		cm.log.Errorw("video manager not started, cannot add WebRTC track input", nil, "status", cm.status)
+		return fmt.Errorf("video manager not started")
 	}
 
 	cm.log.Infow("WebRTC video track subscribed - connecting WebRTC→SIP pipeline",
@@ -53,7 +53,7 @@ func (cm *CameraManager) WebrtcTrackInput(ti *TrackInput, sid string, ssrc uint3
 	s, err := cm.pipeline.(*camera_pipeline.CameraPipeline).AddWebRTCSourceToSelector(ssrc)
 	if err != nil {
 		cm.log.Errorw("failed to add WebRTC source to selector", err)
-		return
+		return fmt.Errorf("failed to add WebRTC source to selector: %w", err)
 	}
 
 	cm.ssrcs[sid] = ssrc
@@ -61,31 +61,32 @@ func (cm *CameraManager) WebrtcTrackInput(ti *TrackInput, sid string, ssrc uint3
 	rtpMi, err := NewMediaInput(cm.ctx, s.RtpAppSrc, ti.RtpIn)
 	if err != nil {
 		cm.log.Errorw("failed to create WebRTC RTP media input", err)
-		return
+		return fmt.Errorf("failed to create WebRTC RTP media input: %w", err)
 	}
 	if err := cm.io.AddInputs(rtpMi); err != nil {
 		cm.log.Errorw("failed to add WebRTC RTP media input", err)
-		return
+		return fmt.Errorf("failed to add WebRTC RTP media input: %w", err)
 	}
 
 	rtcpMi, err := NewMediaInput(cm.ctx, s.RtcpAppSrc, ti.RtcpIn)
 	if err != nil {
 		cm.log.Errorw("failed to create WebRTC RTCP media input", err)
-		return
+		return fmt.Errorf("failed to create WebRTC RTCP media input: %w", err)
 	}
 	if err := cm.io.AddInputs(rtcpMi); err != nil {
 		cm.log.Errorw("failed to add WebRTC RTCP media input", err)
-		return
+		return fmt.Errorf("failed to add WebRTC RTCP media input: %w", err)
 	}
+	return nil
 }
 
-func (cm *CameraManager) WebrtcTrackOutput(to *TrackOutput) {
+func (cm *CameraManager) WebrtcTrackOutput(to *TrackOutput) error {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
 	if cm.status != VideoStatusStarted {
-		cm.log.Warnw("video manager not started, cannot add WebRTC track output", nil, "status", cm.status)
-		return
+		cm.log.Errorw("video manager not started, cannot add WebRTC track output", nil, "status", cm.status)
+		return fmt.Errorf("video manager not started")
 	}
 
 	cm.log.Infow("WebRTC video track published - connecting SIP→WebRTC pipeline",
@@ -97,23 +98,24 @@ func (cm *CameraManager) WebrtcTrackOutput(to *TrackOutput) {
 	rtpMo, err := NewMediaOutput(cm.ctx, to.RtpOut, pipeline.SipToWebrtc.WebrtcRtpAppSink)
 	if err != nil {
 		cm.log.Errorw("failed to create WebRTC RTP media output", err)
-		return
+		return fmt.Errorf("failed to create WebRTC RTP media output: %w", err)
 	}
 	if err := cm.io.AddOutputs(rtpMo); err != nil {
 		cm.log.Errorw("failed to add WebRTC RTP media output", err)
-		return
+		return fmt.Errorf("failed to add WebRTC RTP media output: %w", err)
 	}
 
 	rtcpMo, err := NewMediaOutput(cm.ctx, to.RtcpOut, pipeline.WebrtcToSip.WebrtcRtcpAppSink)
 	if err != nil {
 		cm.log.Errorw("failed to create WebRTC RTCP media output", err)
-		return
+		return fmt.Errorf("failed to create WebRTC RTCP media output: %w", err)
 	}
 	if err := cm.io.AddOutputs(rtcpMo); err != nil {
 		cm.log.Errorw("failed to add WebRTC RTCP media output", err)
-		return
+		return fmt.Errorf("failed to add WebRTC RTCP media output: %w", err)
 	}
 
+	return nil
 }
 
 func (cm *CameraManager) SwitchActiveWebrtcTrack(sid string) error {

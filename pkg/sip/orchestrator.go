@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/frostbyte73/core"
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
 	"github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
@@ -18,8 +19,8 @@ type MediaOrchestrator struct {
 	opts    *MediaOptions
 	log     logger.Logger
 	inbound *sipInbound
-	room    *Room
 	camera  *CameraManager
+	tracks  *TrackManager
 }
 
 func NewMediaOrchestrator(log logger.Logger, ctx context.Context, inbound *sipInbound, room *Room, opts *MediaOptions) (*MediaOrchestrator, error) {
@@ -27,30 +28,16 @@ func NewMediaOrchestrator(log logger.Logger, ctx context.Context, inbound *sipIn
 		log:     log,
 		ctx:     ctx,
 		inbound: inbound,
-		room:    room,
 		opts:    opts,
 	}
+
+	o.tracks = NewTrackManager(log)
 
 	camera, err := NewCameraManager(log.WithComponent("camera"), o.ctx, room, opts)
 	if err != nil {
 		return nil, fmt.Errorf("could not create video manager: %w", err)
 	}
 	o.camera = camera
-	o.room.OnCameraTrack(func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
-		ti := NewTrackInput(track, pub, rp)
-		o.camera.WebrtcTrackInput(ti, rp.SID(), uint32(track.SSRC()))
-	})
-
-	o.room.OnActiveSpeakersChanged(func(p []lksdk.Participant) {
-		if len(p) == 0 {
-			o.log.Debugw("no active speakers found")
-			return
-		}
-		sid := p[0].SID()
-		if err := o.camera.SwitchActiveWebrtcTrack(sid); err != nil {
-			o.log.Warnw("could not switch active webrtc track", err, "sid", sid)
-		}
-	})
 
 	return o, nil
 }
@@ -135,18 +122,79 @@ func (o *MediaOrchestrator) SetupSDP(sdp *sdpv2.SDP) error {
 	return o.setupSDP(sdp)
 }
 
-func (o *MediaOrchestrator) Start() error {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return o.start()
+func NewTrackManager(log logger.Logger) *TrackManager {
+	return &TrackManager{
+		log: log.WithComponent("TrackManager"),
+	}
 }
 
-func (o *MediaOrchestrator) start() error {
-	to, err := o.room.StartCamera()
-	if err != nil {
-		return fmt.Errorf("could not start room camera: %w", err)
-	}
-	o.camera.WebrtcTrackOutput(to)
-	return nil
+type TrackManager struct {
+	ready core.Fuse
+	mu    sync.Mutex
+	log   logger.Logger
+	p     *lksdk.LocalParticipant
 
+	camera *TrackOutput
+}
+
+func (tm *TrackManager) ParticipantReady(p *lksdk.LocalParticipant) error {
+	if tm.ready.IsBroken() {
+		return fmt.Errorf("track manager is already ready")
+	}
+	tm.p = p // can't lock the fuse because other function already lock it while waiting for the participant
+	tm.ready.Break()
+	return nil
+}
+
+func (tm *TrackManager) Camera() (*TrackOutput, error) {
+
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
+	if !tm.ready.IsBroken() {
+		tm.log.Warnw("track manager not ready yet, waiting", nil)
+		<-tm.ready.Watch()
+		tm.log.Infow("track manager is now ready", nil)
+	}
+
+	if tm.camera != nil {
+		return tm.camera, nil
+	}
+
+	to := &TrackOutput{}
+
+	track, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{
+		MimeType: webrtc.MimeTypeVP8,
+	}, "video", "pion")
+	if err != nil {
+		return nil, fmt.Errorf("could not create room camera track: %w", err)
+	}
+	pt, err := tm.p.PublishTrack(track, &lksdk.TrackPublicationOptions{
+		Name: tm.p.Identity(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	tm.log.Infow("published video track", "SID", pt.SID())
+	trackRtcp := &RtcpWriter{
+		pc: tm.p.GetSubscriberPeerConnection(),
+	}
+	to.RtpOut = &CallbackWriteCloser{
+		Writer: track,
+		Callback: func() error {
+			tm.mu.Lock()
+			defer tm.mu.Unlock()
+			tm.log.Infow("unpublishing video track", "SID", pt.SID())
+			tm.camera = nil
+			if err := tm.p.UnpublishTrack(pt.SID()); err != nil {
+				return fmt.Errorf("could not unpublish track: %w", err)
+			}
+			return nil
+		},
+	}
+	to.RtcpOut = &NopWriteCloser{Writer: trackRtcp}
+
+	tm.camera = to
+
+	return to, nil
 }
