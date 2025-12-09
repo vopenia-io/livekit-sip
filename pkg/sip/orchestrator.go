@@ -1,6 +1,8 @@
 package sip
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -12,22 +14,24 @@ import (
 
 type MediaOrchestrator struct {
 	mu      sync.Mutex
+	ctx     context.Context
 	opts    *MediaOptions
 	log     logger.Logger
 	inbound *sipInbound
 	room    *Room
-	camera  *VideoManager
+	camera  *CameraManager
 }
 
-func NewMediaOrchestrator(log logger.Logger, inbound *sipInbound, room *Room, opts *MediaOptions) (*MediaOrchestrator, error) {
+func NewMediaOrchestrator(log logger.Logger, ctx context.Context, inbound *sipInbound, room *Room, opts *MediaOptions) (*MediaOrchestrator, error) {
 	o := &MediaOrchestrator{
 		log:     log,
+		ctx:     ctx,
 		inbound: inbound,
 		room:    room,
 		opts:    opts,
 	}
 
-	camera, err := NewVideoManager(log.WithComponent("camera"), room, opts)
+	camera, err := NewCameraManager(log.WithComponent("camera"), o.ctx, room, opts)
 	if err != nil {
 		return nil, fmt.Errorf("could not create video manager: %w", err)
 	}
@@ -36,6 +40,7 @@ func NewMediaOrchestrator(log logger.Logger, inbound *sipInbound, room *Room, op
 		ti := NewTrackInput(track, pub, rp)
 		o.camera.WebrtcTrackInput(ti, rp.SID(), uint32(track.SSRC()))
 	})
+
 	o.room.OnActiveSpeakersChanged(func(p []lksdk.Participant) {
 		if len(p) == 0 {
 			o.log.Debugw("no active speakers found")
@@ -51,7 +56,7 @@ func NewMediaOrchestrator(log logger.Logger, inbound *sipInbound, room *Room, op
 }
 
 func (o *MediaOrchestrator) Close() error {
-	return nil
+	return errors.Join(o.camera.Close())
 }
 
 func (o *MediaOrchestrator) AnswerSDP(offer *sdpv2.SDP) (*sdpv2.SDP, error) {
@@ -118,19 +123,9 @@ func (o *MediaOrchestrator) OfferSDP() (*sdpv2.SDP, error) {
 }
 
 func (o *MediaOrchestrator) setupSDP(sdp *sdpv2.SDP) error {
-	if err := o.camera.Stop(); err != nil {
-		return fmt.Errorf("could not stop video manager: %w", err)
+	if err := o.camera.Reconcile(sdp.Addr, sdp.Video); err != nil {
+		return fmt.Errorf("could not reconcile video sdp: %w", err)
 	}
-	if err := o.room.StopCamera(); err != nil {
-		return fmt.Errorf("could not stop room camera: %w", err)
-	}
-
-	if sdp.Video != nil && !sdp.Video.Disabled {
-		if err := o.camera.Setup(sdp.Addr, sdp.Video); err != nil {
-			return fmt.Errorf("could not setup video sdp: %w", err)
-		}
-	}
-
 	return nil
 }
 
@@ -147,16 +142,11 @@ func (o *MediaOrchestrator) Start() error {
 }
 
 func (o *MediaOrchestrator) start() error {
-	if o.camera.Status() == VideoStatusReady {
-		if err := o.camera.Start(); err != nil {
-			return fmt.Errorf("could not start video manager: %w", err)
-		}
-		to, err := o.room.StartCamera()
-		if err != nil {
-			return fmt.Errorf("could not start room camera: %w", err)
-		}
-		o.camera.WebrtcTrackOutput(to)
+	to, err := o.room.StartCamera()
+	if err != nil {
+		return fmt.Errorf("could not start room camera: %w", err)
 	}
+	o.camera.WebrtcTrackOutput(to)
 	return nil
 
 }

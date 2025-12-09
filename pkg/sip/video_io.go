@@ -3,7 +3,6 @@ package sip
 import (
 	"errors"
 	"io"
-	"sync"
 	"sync/atomic"
 
 	lksdk "github.com/livekit/server-sdk-go/v2"
@@ -29,108 +28,6 @@ func (c *CallbackWriteCloser) Close() error {
 		err := c.Callback()
 		c.Callback = nil
 		return err
-	}
-	return nil
-}
-
-func NewSwitchWriter() *SwitchWriter {
-	return &SwitchWriter{}
-}
-
-type SwitchWriter struct {
-	w atomic.Pointer[io.WriteCloser]
-}
-
-func (s *SwitchWriter) Write(p []byte) (n int, err error) {
-	w := s.w.Load()
-	if w == nil {
-		return 0, nil
-	}
-	return (*w).Write(p)
-}
-
-func (s *SwitchWriter) Close() error {
-	w := s.w.Load()
-	if w != nil {
-		return (*w).Close()
-	}
-	return nil
-}
-
-func (s *SwitchWriter) Swap(w io.WriteCloser) io.WriteCloser {
-	var old *io.WriteCloser
-	if w == nil {
-		old = s.w.Swap(nil)
-	} else {
-		old = s.w.Swap(&w)
-	}
-	if old != nil {
-		return *old
-	}
-	return nil
-}
-
-func NewSwitchReader() *SwitchReader {
-	sr := &SwitchReader{}
-	sr.b = sync.NewCond(&sr.mu)
-	sr.closed.Store(false)
-	return sr
-}
-
-type SwitchReader struct {
-	r      atomic.Pointer[io.ReadCloser]
-	b      *sync.Cond
-	mu     sync.Mutex
-	closed atomic.Bool
-}
-
-func (s *SwitchReader) Read(p []byte) (n int, err error) {
-	r := s.r.Load()
-	if r == nil {
-		// If closed, return EOF immediately
-		if s.closed.Load() {
-			return 0, io.EOF
-		}
-		// Wait for a reader to be swapped in
-		s.mu.Lock()
-		s.b.Wait()
-		s.mu.Unlock()
-		// Check again if closed after waking up
-		if s.closed.Load() {
-			return 0, io.EOF
-		}
-		return s.Read(p)
-	}
-	return (*r).Read(p)
-}
-
-func (s *SwitchReader) Close() error {
-	// Mark as closed first
-	s.closed.Store(true)
-	// Wake up any blocked readers
-	s.mu.Lock()
-	s.b.Broadcast()
-	s.mu.Unlock()
-	// Close the underlying reader if exists
-	r := s.r.Load()
-	if r != nil {
-		return (*r).Close()
-	}
-	return nil
-}
-
-func (s *SwitchReader) Swap(r io.ReadCloser) io.ReadCloser {
-	var old *io.ReadCloser
-	if r == nil {
-		old = s.r.Swap(nil)
-	} else {
-		old = s.r.Swap(&r)
-		s.mu.Lock()
-		s.b.Broadcast()
-		s.mu.Unlock()
-	}
-	if old != nil {
-		return *old
 	}
 	return nil
 }

@@ -1,4 +1,4 @@
-package pipeline
+package camera_pipeline
 
 import (
 	"fmt"
@@ -7,7 +7,10 @@ import (
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/app"
+	"github.com/livekit/media-sdk/h264"
+	v2 "github.com/livekit/media-sdk/sdp/v2"
 	"github.com/livekit/protocol/logger"
+	"github.com/livekit/sip/pkg/sip/pipeline"
 )
 
 type SipToWebrtc struct {
@@ -40,9 +43,20 @@ type SipToWebrtc struct {
 	SipRtcpAppSink   *app.Sink
 }
 
-var _ GstChain = (*SipToWebrtc)(nil)
+func (stw *SipToWebrtc) Configure(media *v2.SDPMedia) error {
+	if media.Codec.Codec.Info().SDPName != h264.SDPName {
+		return fmt.Errorf("unsupported codec %s for SIP video", media.Codec.Codec.Info().SDPName)
+	}
+	stw.SipRtpSrc.SetProperty("caps", gst.NewCapsFromString(fmt.Sprintf(
+		"application/x-rtp,media=video,encoding-name=H264,payload=%d,clock-rate=90000",
+		media.Codec.PayloadType,
+	)))
+	return nil
+}
 
-func buildSipToWebRTCChain(log logger.Logger, sipPayloadType int) (*SipToWebrtc, error) {
+var _ pipeline.GstChain = (*SipToWebrtc)(nil)
+
+func buildSipToWebRTCChain(log logger.Logger) (*SipToWebrtc, error) {
 	rtpBin, err := gst.NewElementWithProperties("rtpbin", map[string]interface{}{
 		"name": "sip_rtp_bin",
 	})
@@ -57,10 +71,6 @@ func buildSipToWebRTCChain(log logger.Logger, sipPayloadType int) (*SipToWebrtc,
 		"format":       int(3), // GST_FORMAT_TIME; using the same numeric value as your launch string
 		"max-bytes":    uint64(5_000_000),
 		"block":        false,
-		"caps": gst.NewCapsFromString(fmt.Sprintf(
-			"application/x-rtp,media=video,encoding-name=H264,payload=%d,clock-rate=90000",
-			sipPayloadType,
-		)),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create SIP appsrc: %w", err)
@@ -163,6 +173,7 @@ func buildSipToWebRTCChain(log logger.Logger, sipPayloadType int) (*SipToWebrtc,
 		"drop":         false,
 		"max-buffers":  uint(100),
 		"sync":         false,
+		"async":        false,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create SIP appsink: %w", err)
@@ -187,6 +198,7 @@ func buildSipToWebRTCChain(log logger.Logger, sipPayloadType int) (*SipToWebrtc,
 		"drop":         false,
 		"max-buffers":  uint(100),
 		"sync":         false,
+		"async":        false,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create SIP rtcp appsink: %w", err)
@@ -196,7 +208,8 @@ func buildSipToWebRTCChain(log logger.Logger, sipPayloadType int) (*SipToWebrtc,
 		log:    log,
 		RtpBin: rtpBin,
 
-		SipRtpSrc:     sipRtpSrc,
+		SipRtpSrc: sipRtpSrc,
+		// rtpbin
 		Depay:         depay,
 		Parse:         parse,
 		Decoder:       dec,
@@ -210,8 +223,9 @@ func buildSipToWebRTCChain(log logger.Logger, sipPayloadType int) (*SipToWebrtc,
 		RtpVp8Pay:     rtpVp8Pay,
 		WebrtcRtpSink: webrtcRtpSink,
 
+		SipRtcpSrc: sipRtcpSrc,
+		// rtpbin
 		SipRtcpSink: sipRtcpSink,
-		SipRtcpSrc:  sipRtcpSrc,
 
 		SipRtpAppSrc:     app.SrcFromElement(sipRtpSrc),
 		WebrtcRtpAppSink: app.SinkFromElement(webrtcRtpSink),
@@ -221,11 +235,12 @@ func buildSipToWebRTCChain(log logger.Logger, sipPayloadType int) (*SipToWebrtc,
 }
 
 // Add implements GstChain.
-func (stw *SipToWebrtc) Add(pipeline *gst.Pipeline) error {
-	if err := pipeline.AddMany(
+func (stw *SipToWebrtc) Add(p *gst.Pipeline) error {
+	if err := p.AddMany(
 		stw.RtpBin,
 
 		stw.SipRtpSrc,
+		// rptbin
 		stw.Depay,
 		stw.Parse,
 		stw.Decoder,
@@ -240,6 +255,7 @@ func (stw *SipToWebrtc) Add(pipeline *gst.Pipeline) error {
 		stw.WebrtcRtpSink,
 
 		stw.SipRtcpSrc,
+		// rtpbin
 		stw.SipRtcpSink,
 	); err != nil {
 		return fmt.Errorf("failed to add sip to webrtc chain to pipeline: %w", err)
@@ -248,11 +264,11 @@ func (stw *SipToWebrtc) Add(pipeline *gst.Pipeline) error {
 }
 
 // Link implements GstChain.
-func (stw *SipToWebrtc) Link(pipeline *gst.Pipeline) error {
+func (stw *SipToWebrtc) Link(p *gst.Pipeline) error {
 	// link rtp path
-	if err := linkPad(
+	if err := pipeline.LinkPad(
 		stw.SipRtpSrc.GetStaticPad("src"),
-		stw.RtpBin.GetRequestPad("recv_rtp_sink_%u"),
+		stw.RtpBin.GetRequestPad("recv_rtp_sink_0"),
 	); err != nil {
 		return fmt.Errorf("failed to link sip rtp src to rtpbin: %w", err)
 	}
@@ -273,7 +289,7 @@ func (stw *SipToWebrtc) Link(pipeline *gst.Pipeline) error {
 			return
 		}
 		stw.log.Infow("RTP pad added", "pad", padName, "sessionID", sessionID, "ssrc", ssrc, "payloadType", payloadType)
-		if err := linkPad(
+		if err := pipeline.LinkPad(
 			pad,
 			stw.Depay.GetStaticPad("sink"),
 		); err != nil {
@@ -304,15 +320,15 @@ func (stw *SipToWebrtc) Link(pipeline *gst.Pipeline) error {
 	}
 
 	// link rtcp path
-	if err := linkPad(
+	if err := pipeline.LinkPad(
 		stw.SipRtcpSrc.GetStaticPad("src"),
-		stw.RtpBin.GetRequestPad("recv_rtcp_sink_%u"),
+		stw.RtpBin.GetRequestPad("recv_rtcp_sink_0"),
 	); err != nil {
 		return fmt.Errorf("failed to link sip rtcp src to rtpbin: %w", err)
 	}
 
-	if err := linkPad(
-		stw.RtpBin.GetRequestPad("send_rtcp_src_%u"),
+	if err := pipeline.LinkPad(
+		stw.RtpBin.GetRequestPad("send_rtcp_src_0"),
 		stw.SipRtcpSink.GetStaticPad("sink"),
 	); err != nil {
 		return fmt.Errorf("failed to link rtpbin rtcp src to sip rtcp sink: %w", err)
@@ -327,6 +343,7 @@ func (stw *SipToWebrtc) Close(pipeline *gst.Pipeline) error {
 		stw.RtpBin,
 
 		stw.SipRtpSrc,
+		// rptbin
 		stw.Depay,
 		stw.Parse,
 		stw.Decoder,
@@ -340,8 +357,9 @@ func (stw *SipToWebrtc) Close(pipeline *gst.Pipeline) error {
 		stw.RtpVp8Pay,
 		stw.WebrtcRtpSink,
 
-		stw.SipRtcpSink,
 		stw.SipRtcpSrc,
+		// rtpbin
+		stw.SipRtcpSink,
 	); err != nil {
 		return fmt.Errorf("failed to remove sip to webrtc chain from pipeline: %w", err)
 	}

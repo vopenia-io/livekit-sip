@@ -1003,7 +1003,7 @@ func (c *inboundCall) runMediaConn(tid traceid.ID, offerData []byte, enc livekit
 		NoInputResample:     !RoomResample,
 	}
 
-	orchestrator, err := NewMediaOrchestrator(c.log(), c.cc, c.lkRoom.(*Room), opts)
+	orchestrator, err := NewMediaOrchestrator(c.log(), c.ctx, c.cc, c.lkRoom.(*Room), opts)
 	if err != nil {
 		c.log().Errorw("Cannot create media orchestrator", err)
 		return nil, err
