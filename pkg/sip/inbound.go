@@ -644,12 +644,13 @@ type inboundCall struct {
 	lkRoom      RoomInterface   // LiveKit room; only active after correct pin is entered
 	callDur     func() time.Duration
 	joinDur     func() time.Duration
-	forwardDTMF atomic.Bool
-	done        atomic.Bool
-	started     core.Fuse
-	stats       Stats
-	jitterBuf   bool
-	projectID   string
+	forwardDTMF      atomic.Bool
+	done             atomic.Bool
+	started          core.Fuse
+	stats            Stats
+	jitterBuf        bool
+	projectID        string
+	pendingAnswerSDP []byte // SDP answer to use when accepting call during room switch
 }
 
 func (s *Server) newInboundCall(
@@ -893,6 +894,8 @@ func (c *inboundCall) handleInvite(ctx context.Context, tid traceid.ID, req *sip
 		if err != nil {
 			return err // already sent a response
 		}
+		// Store SDP for potential use by switchRoom if it's called before acceptCall
+		c.pendingAnswerSDP = answerData
 	}
 	p := &disp.Room.Participant
 	p.Attributes = HeadersToAttrs(p.Attributes, disp.HeadersToAttributes, disp.IncludeHeaders, c.cc, nil)
@@ -933,8 +936,11 @@ func (c *inboundCall) handleInvite(ctx context.Context, tid traceid.ID, req *sip
 		if ok, err := c.waitSubscribe(ctx, disp.RingingTimeout); !ok {
 			return err // already sent a response. Could be success if caller hung up
 		}
-		if ok, err := acceptCall(answerData); !ok {
-			return err // already sent a response. Could be success if caller hung up
+		// Skip acceptCall if already accepted by switchRoom
+		if !c.started.IsBroken() {
+			if ok, err := acceptCall(answerData); !ok {
+				return err // already sent a response. Could be success if caller hung up
+			}
 		}
 	}
 
@@ -948,6 +954,7 @@ func (c *inboundCall) handleInvite(ctx context.Context, tid traceid.ID, req *sip
 		}
 	})
 
+	c.pendingAnswerSDP = nil // Clear after use
 	c.started.Break()
 
 	// Wait for the caller to terminate the call. Send regular keep alives
@@ -985,7 +992,7 @@ func (c *inboundCall) handleInvite(ctx context.Context, tid traceid.ID, req *sip
 
 func (c *inboundCall) runMediaConn(tid traceid.ID, offerData []byte, enc livekit.SIPMediaEncryption, conf *config.Config, features []livekit.SIPFeature) (answerData []byte, _ error) {
 	c.mon.SDPSize(len(offerData), true)
-	c.log().Debugw("SDP offer", "sdp", string(offerData))
+	c.log().Infow("SDP offer received", "sdp", string(offerData))
 	e, err := sdpEncryption(enc)
 	if err != nil {
 		c.log().Errorw("Cannot parse encryption", err)
@@ -1127,7 +1134,14 @@ func (c *inboundCall) runMediaConn(tid traceid.ID, offerData []byte, enc livekit
 	// Store audio info for re-INVITE (critical for preserving audio when adding screenshare)
 	orchestrator.SetAudioForReInvite(offer.Audio.Codec, uint16(c.media.Port()))
 
-	mc, err := answer.V1MediaConfig(netip.AddrPortFrom(offer.Addr, offer.Audio.Port))
+	remoteAddr := netip.AddrPortFrom(offer.Addr, offer.Audio.Port)
+	c.log().Infow("SDP negotiation complete",
+		"remoteRTPAddr", remoteAddr.String(),
+		"localRTPPort", c.media.Port(),
+		"audioCodec", offer.Audio.Codec.Name,
+	)
+
+	mc, err := answer.V1MediaConfig(remoteAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -1144,7 +1158,7 @@ func (c *inboundCall) runMediaConn(tid traceid.ID, offerData []byte, enc livekit
 	}
 
 	c.mon.SDPSize(len(answerData), false)
-	c.log().Debugw("SDP answer", "sdp", string(answerData))
+	c.log().Infow("SDP answer generated", "sdp", string(answerData))
 
 	mconf.Processor = c.s.handler.GetMediaProcessor(features)
 	if err = c.media.SetConfig(mconf); err != nil {
@@ -1210,14 +1224,25 @@ func (c *inboundCall) waitSubscribe(ctx context.Context, timeout time.Duration) 
 		c.closeWithHangup()
 		return false, nil
 	case <-c.lkRoom.Closed():
+		// Check if call was accepted during room switch - if so, don't close
+		if c.started.IsBroken() {
+			return true, nil
+		}
 		c.closeWithHangup()
 		return false, psrpc.NewErrorf(psrpc.Canceled, "room closed")
 	case <-c.media.Timeout():
 		return false, c.mediaTimeout()
 	case <-timer.C:
+		// Check if call was accepted during room switch - if so, don't timeout
+		if c.started.IsBroken() {
+			return true, nil
+		}
 		c.close(false, callDropped, "cannot-subscribe")
 		return false, psrpc.NewErrorf(psrpc.DeadlineExceeded, "room subscription timed out")
 	case <-c.lkRoom.Subscribed():
+		return true, nil
+	case <-c.started.Watch():
+		// Call was accepted by switchRoom, exit early
 		return true, nil
 	}
 }
@@ -1572,6 +1597,21 @@ func (c *inboundCall) switchRoom(ctx context.Context, targetRoomName string, dia
 	defer func() {
 		c.state.EndTransfer(ctx, tID, retErr)
 	}()
+
+	// If call hasn't been accepted yet (still ringing), accept it now before switching rooms.
+	// This happens when switchRoom is called while waitSubscribe is still waiting.
+	if !c.started.IsBroken() && c.pendingAnswerSDP != nil {
+		c.log().Infow("Accepting call during room switch")
+		if err := c.cc.Accept(ctx, c.pendingAnswerSDP, nil); err != nil {
+			c.log().Errorw("Cannot accept call during room switch", err)
+			return psrpc.NewErrorf(psrpc.Internal, "failed to accept call: %v", err)
+		}
+		c.media.EnableTimeout(true)
+		c.media.EnableOut()
+		c.setStatus(CallActive)
+		c.pendingAnswerSDP = nil
+		c.started.Break()
+	}
 
 	// Optionally play dial tone during switch
 	var rcancel context.CancelFunc

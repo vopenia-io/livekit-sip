@@ -91,7 +91,6 @@ func NewManager(log logger.Logger, cfg *Config) (*Manager, error) {
 	// Create BFCP server config
 	serverCfg := bfcp.DefaultServerConfig(cfg.ListenAddr, cfg.ConferenceID)
 	serverCfg.AutoGrant = cfg.AutoGrant
-	serverCfg.EnableLogging = true
 
 	m.server = bfcp.NewServer(serverCfg)
 
