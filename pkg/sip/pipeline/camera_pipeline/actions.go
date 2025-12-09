@@ -75,13 +75,11 @@ func (gp *CameraPipeline) switchWebRTCSelectorSource(ssrc uint32) error {
 	activeProp, err := sel.GetProperty("active-pad")
 	if err == nil || activeProp != nil {
 		activePad, ok := activeProp.(*gst.Pad)
-		if !ok || activePad.GetParentElement() == nil {
-			return fmt.Errorf("active pad from selector is invalid")
-		}
-
-		if activePad.GetName() == selPad.GetName() {
-			gp.Log.Debugw("WebRTC selector source is already set to ssrc", "ssrc", ssrc)
-			return nil
+		if ok && activePad.GetParentElement() != nil {
+			if activePad.GetName() == selPad.GetName() {
+				gp.Log.Debugw("WebRTC selector source is already set to ssrc", "ssrc", ssrc)
+				return nil
+			}
 		}
 	}
 
@@ -245,24 +243,7 @@ func (gp *CameraPipeline) setupAutoSwitching() error {
 	}); err != nil {
 		return fmt.Errorf("failed to connect notify::active-pad signal to selector: %w", err)
 	}
-
-	// go func() {
-	// 	defer gp.Log.Infow("Exiting active source monitor goroutine")
-	// 	ticker := time.NewTicker(3 * time.Second)
-	// 	defer ticker.Stop()
-	// 	for {
-	// 		select {
-	// 		case <-ticker.C:
-	// 			gp.Log.Debugw("Periodic check to ensure active source in WebRTC selector")
-	// 			if err := quickSwitch(); err != nil {
-	// 				gp.Log.Errorw("Failed to ensure active source during periodic check", err)
-	// 			}
-	// 		case <-gp.BasePipeline.CloseCH():
-	// 			gp.Log.Infow("Pipeline closed, stopping active source monitor")
-	// 			return
-	// 		}
-	// 	}
-	// }()
+	
 	return nil
 }
 

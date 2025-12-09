@@ -352,6 +352,20 @@ func (r *Room) Connect(conf *config.Config, rconf RoomConfig) error {
 					r.log.Warnw("no track subscribed callback set", nil)
 				}
 			},
+			OnTrackUnsubscribed: func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
+				r.log.Debugw("track unsubscribed", "kind", pub.Kind(), "participant", rp.Identity(), "pID", rp.SID(), "trackID", pub.SID(), "trackName", pub.Name())
+				if pub.Kind() == lksdk.TrackKindAudio && pub.Source() == livekit.TrackSource_MICROPHONE {
+					return // nothing to do
+				}
+				cb := r.callbackHandler.Load()
+				if cb != nil {
+					if err := (*cb).WebrtcTrackUnsubscribed(track, pub, rp, conf); err != nil {
+						r.log.Errorw("track unsubscribed callback error", err)
+					}
+				} else {
+					r.log.Warnw("no track unsubscribed callback set", nil)
+				}
+			},
 			OnDataPacket: func(data lksdk.DataPacket, params lksdk.DataReceiveParams) {
 				switch data := data.(type) {
 				case *livekit.SipDTMF:

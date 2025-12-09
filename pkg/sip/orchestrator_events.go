@@ -39,8 +39,20 @@ func (o *MediaOrchestrator) WebrtcTrackSubscribed(track *webrtc.TrackRemote, pub
 	return nil
 }
 
+func (o *MediaOrchestrator) cameraTrackUnsubscribed(_ *webrtc.TrackRemote, _ *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant, _ *config.Config) error {
+	return o.camera.RemoveWebrtcTrackInput(rp.SID())
+}
+
 func (o *MediaOrchestrator) WebrtcTrackUnsubscribed(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant, conf *config.Config) error {
-	o.log.Warnw("WebrtcTrackUnsubscribed not implemented", nil)
+	log := o.log.WithValues("participant", rp.Identity(), "pID", rp.SID(), "trackID", pub.SID(), "trackName", pub.Name())
+	switch pub.Kind() {
+	case lksdk.TrackKindVideo:
+		switch pub.Source() {
+		case livekit.TrackSource_CAMERA:
+			return o.cameraTrackUnsubscribed(track, pub, rp, conf)
+		}
+	}
+	log.Warnw("unsupported track kind for unsubscription", fmt.Errorf("kind=%s", pub.Kind()))
 	return nil
 }
 

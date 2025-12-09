@@ -80,6 +80,24 @@ func (cm *CameraManager) WebrtcTrackInput(ti *TrackInput, sid string, ssrc uint3
 	return nil
 }
 
+func (cm *CameraManager) RemoveWebrtcTrackInput(sid string) error {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	ssrc, ok := cm.ssrcs[sid]
+	if !ok {
+		return fmt.Errorf("no SSRC found for sid %s", sid)
+	}
+	cm.log.Debugw("removing WebRTC video track input", "sid", sid, "ssrc", ssrc)
+
+	if err := cm.pipeline.(*camera_pipeline.CameraPipeline).RemoveWebRTCSourceFromSelector(ssrc); err != nil {
+		return fmt.Errorf("failed to remove WebRTC source from selector: %w", err)
+	}
+
+	delete(cm.ssrcs, sid)
+	return nil
+}
+
 func (cm *CameraManager) WebrtcTrackOutput(to *TrackOutput) error {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
