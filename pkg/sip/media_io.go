@@ -85,7 +85,7 @@ func (m *MediaIO) AddInputs(inputs ...*MediaInput) error {
 	m.Inputs = append(m.Inputs, inputs...)
 
 	if len(errs) > 0 {
-		return fmt.Errorf("failed to add media input: %w", errs)
+		return fmt.Errorf("failed to add media input: %v", errs)
 	}
 	return nil
 }
@@ -116,7 +116,7 @@ func (m *MediaIO) AddOutputs(outputs ...*MediaOutput) error {
 	m.Outputs = append(m.Outputs, outputs...)
 
 	if len(errs) > 0 {
-		return fmt.Errorf("failed to add media output: %w", errs)
+		return fmt.Errorf("failed to add media output: %v", errs)
 	}
 	return nil
 }
@@ -187,7 +187,7 @@ func (m *MediaIO) Start() error {
 	wg.Wait()
 
 	if len(errs) > 0 {
-		return fmt.Errorf("failed to start media IO: %w", errs)
+		return fmt.Errorf("failed to start media IO: %v", errs)
 	}
 
 	m.running = true
@@ -226,7 +226,7 @@ func (m *MediaIO) Stop() error {
 	wg.Wait()
 
 	if len(errs) > 0 {
-		return fmt.Errorf("failed to stop media IO: %w", errs)
+		return fmt.Errorf("failed to stop media IO: %v", errs)
 	}
 
 	m.running = false
