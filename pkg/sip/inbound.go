@@ -997,14 +997,6 @@ func (c *inboundCall) runMediaConn(tid traceid.ID, offerData []byte, enc livekit
 		NoInputResample:     !RoomResample,
 	}
 
-	orchestrator, err := NewMediaOrchestrator(c.log(), c.ctx, c.cc, c.lkRoom.(*Room), opts)
-	if err != nil {
-		c.log().Errorw("Cannot create media orchestrator", err)
-		return nil, err
-	}
-	c.medias = orchestrator
-	c.lkRoom.(*Room).SetCallbacks(orchestrator)
-
 	mp, err := NewMediaPort(tid, c.log(), c.mon, opts, RoomSampleRate)
 	if err != nil {
 		return nil, err
@@ -1014,15 +1006,19 @@ func (c *inboundCall) runMediaConn(tid traceid.ID, offerData []byte, enc livekit
 	c.media.DisableOut()         // disabled until we send 200
 	c.media.SetDTMFAudio(conf.AudioDTMF)
 
+	audioinfo := NewAudioInfo(c.media)
+
+	orchestrator, err := NewMediaOrchestrator(c.log(), c.ctx, c.cc, c.lkRoom.(*Room), audioinfo, opts)
+	if err != nil {
+		c.log().Errorw("Cannot create media orchestrator", err)
+		return nil, err
+	}
+	c.medias = orchestrator
+	c.lkRoom.(*Room).SetCallbacks(orchestrator)
+
 	offer, err := sdpv2.NewSDP(offerData)
 	if err != nil {
 		c.log().Errorw("Cannot parse SDP offer", err)
-		return nil, err
-	}
-
-	answer, err := c.medias.AnswerSDP(offer)
-	if err != nil {
-		c.log().Errorw("Cannot create SDP answer", err)
 		return nil, err
 	}
 
@@ -1031,23 +1027,24 @@ func (c *inboundCall) runMediaConn(tid traceid.ID, offerData []byte, enc livekit
 		return nil, sdp.ErrNoCommonMedia
 	}
 
-	if err := offer.Audio.SelectCodec(); err != nil {
-		c.log().Errorw("Cannot select audio codec from offer", err)
-		return nil, sdp.ErrNoCommonMedia
+	answer, err := c.medias.AnswerSDP(offer)
+	if err != nil {
+		c.log().Errorw("Cannot create SDP answer", err)
+		return nil, err
 	}
 
-	answer, err = answer.Builder().SetAudio(func(b *sdpv2.SDPMediaBuilder) (*sdpv2.SDPMedia, error) {
-		return b.
-			AddCodec(func(_ *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
-				return offer.Audio.Codec, nil
-			}, true).
-			SetRTPPort(uint16(c.media.Port())).
-			Build()
-	}).Build()
-	if err != nil {
-		c.log().Errorw("Cannot configure audio in SDP answer", err)
-		return nil, SDPError{Err: err}
-	}
+	// answer, err = answer.Builder().SetAudio(func(b *sdpv2.SDPMediaBuilder) (*sdpv2.SDPMedia, error) {
+	// 	return b.
+	// 		AddCodec(func(_ *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
+	// 			return offer.Audio.Codec, nil
+	// 		}, true).
+	// 		SetRTPPort(uint16(c.media.Port())).
+	// 		Build()
+	// }).Build()
+	// if err != nil {
+	// 	c.log().Errorw("Cannot configure audio in SDP answer", err)
+	// 	return nil, SDPError{Err: err}
+	// }
 
 	mc, err := answer.V1MediaConfig(netip.AddrPortFrom(offer.Addr, offer.Audio.Port))
 	if err != nil {

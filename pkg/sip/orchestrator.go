@@ -1,9 +1,11 @@
 package sip
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 
 	"github.com/frostbyte73/core"
@@ -13,22 +15,38 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
-type MediaOrchestrator struct {
-	mu      sync.Mutex
-	ctx     context.Context
-	opts    *MediaOptions
-	log     logger.Logger
-	inbound *sipInbound
-	camera  *CameraManager
-	tracks  *TrackManager
+const (
+	ScreenshareMSTreamID = 2
+)
+
+type AudioInfo interface {
+	Port() uint16
+	Codec() *sdpv2.Codec
+	AvailableCodecs() []*sdpv2.Codec
+	SetMedia(media *sdpv2.SDPMedia)
 }
 
-func NewMediaOrchestrator(log logger.Logger, ctx context.Context, inbound *sipInbound, room *Room, opts *MediaOptions) (*MediaOrchestrator, error) {
+type MediaOrchestrator struct {
+	mu        sync.Mutex
+	ctx       context.Context
+	opts      *MediaOptions
+	log       logger.Logger
+	inbound   *sipInbound
+	audioinfo AudioInfo
+	camera    *CameraManager
+	tracks    *TrackManager
+	bfcp      *BFCPManager
+
+	sdp *sdpv2.SDP
+}
+
+func NewMediaOrchestrator(log logger.Logger, ctx context.Context, inbound *sipInbound, room *Room, audioinfo AudioInfo, opts *MediaOptions) (*MediaOrchestrator, error) {
 	o := &MediaOrchestrator{
-		log:     log,
-		ctx:     ctx,
-		inbound: inbound,
-		opts:    opts,
+		log:       log,
+		ctx:       ctx,
+		inbound:   inbound,
+		audioinfo: audioinfo,
+		opts:      opts,
 	}
 
 	o.tracks = NewTrackManager(log)
@@ -39,16 +57,59 @@ func NewMediaOrchestrator(log logger.Logger, ctx context.Context, inbound *sipIn
 	}
 	o.camera = camera
 
+	o.bfcp = NewBFCPManager(o.ctx, log, opts, inbound)
+
+	go func() {
+		scanner := bufio.NewScanner(os.Stdin)
+		for scanner.Scan() {
+			switch scanner.Text() {
+			case "r":
+				o.log.Infow("restarting")
+				o.AnswerSDP(o.sdp)
+			}
+		}
+	}()
+
 	return o, nil
 }
 
+// func (o *MediaOrchestrator) Reinvite() error {
+
+// 	offer, err := o.offerSDP(true, true, true)
+
+// 	// reinvite
+// 	r := sip.NewRequest(sip.INVITE, o.inbound.To())
+// 	callID := sip.CallIDHeader(o.inbound.SIPCallID())
+// 	r.AppendHeader(&callID)
+// 	r.AppendHeader(o.inbound.to)
+// 	r.AppendHeader(o.inbound.from)
+// 	r.AppendHeader(o.inbound.contact)
+
+// 	b.inbound.Transaction()
+// 	return nil
+// }
+
 func (o *MediaOrchestrator) Close() error {
-	return errors.Join(o.camera.Close())
+	return errors.Join(
+		o.camera.Close(),
+		o.bfcp.Close(),
+	)
 }
 
 func (o *MediaOrchestrator) AnswerSDP(offer *sdpv2.SDP) (*sdpv2.SDP, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	o.sdp = offer // TODO: remove after testing
+
+	if offer.Audio == nil {
+		return nil, fmt.Errorf("no audio in offer")
+	}
+
+	if err := offer.Audio.SelectCodec(); err != nil {
+		return nil, fmt.Errorf("could not select audio codec: %w", err)
+	}
+
+	o.audioinfo.SetMedia(offer.Audio)
 
 	if offer.Video != nil {
 		if err := offer.Video.SelectCodec(); err != nil {
@@ -60,7 +121,7 @@ func (o *MediaOrchestrator) AnswerSDP(offer *sdpv2.SDP) (*sdpv2.SDP, error) {
 		return nil, fmt.Errorf("could not setup sdp: %w", err)
 	}
 
-	answer, err := o.offerSDP(offer.Video != nil)
+	answer, err := o.offerSDP(offer.Video != nil, offer.BFCP != nil, false)
 	if err != nil {
 		return nil, fmt.Errorf("could not create answer sdp: %w", err)
 	}
@@ -68,10 +129,44 @@ func (o *MediaOrchestrator) AnswerSDP(offer *sdpv2.SDP) (*sdpv2.SDP, error) {
 	return answer, nil
 }
 
-func (o *MediaOrchestrator) offerSDP(camera bool) (*sdpv2.SDP, error) {
+func (o *MediaOrchestrator) offerSDP(camera bool, bfcp bool, screenshare bool) (*sdpv2.SDP, error) {
 	builder := (&sdpv2.SDP{}).Builder()
 
 	builder.SetAddress(o.opts.IP)
+
+	// audio is required anyway
+	builder.SetAudio(func(b *sdpv2.SDPMediaBuilder) (*sdpv2.SDPMedia, error) {
+		codec := o.audioinfo.Codec()
+		if codec == nil {
+			for _, c := range o.audioinfo.AvailableCodecs() {
+				b.AddCodec(func(_ *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
+					return c, nil
+				}, false)
+			}
+		} else {
+			b.AddCodec(func(_ *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
+				return codec, nil
+			}, true)
+		}
+		return b.
+			SetRTPPort(uint16(o.audioinfo.Port())).
+			Build()
+	}).Build()
+
+	if bfcp {
+		builder.SetBFCP(func(b *sdpv2.SDPBfcpBuilder) (*sdpv2.SDPBfcp, error) {
+			return b.
+				SetPort(o.bfcp.Port()).
+				SetConnection(sdpv2.BfcpConnectionNew).
+				SetProto(sdpv2.BfcpProtoTCP).
+				SetFloorCtrl(sdpv2.BfcpFloorCtrlServer).
+				SetSetup(sdpv2.BfcpSetupPassive).
+				SetConfID(o.bfcp.config.ConferenceID).
+				SetUserID(1).
+				SetMStreamID(ScreenshareMSTreamID).
+				Build()
+		})
+	}
 
 	if camera {
 		builder.SetVideo(func(b *sdpv2.SDPMediaBuilder) (*sdpv2.SDPMedia, error) {
@@ -106,7 +201,7 @@ func (o *MediaOrchestrator) offerSDP(camera bool) (*sdpv2.SDP, error) {
 func (o *MediaOrchestrator) OfferSDP() (*sdpv2.SDP, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	return o.offerSDP(true)
+	return o.offerSDP(true, true, true)
 }
 
 func (o *MediaOrchestrator) setupSDP(sdp *sdpv2.SDP) error {
