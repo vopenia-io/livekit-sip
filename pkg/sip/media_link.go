@@ -48,7 +48,7 @@ func (m *MediaLink) Stop(timeout time.Duration) error {
 
 func (m *MediaLink) Start() error {
 	if m.running.Swap(true) {
-		return errors.New("media link already running")
+		return nil
 	}
 	go func() {
 		buf := make([]byte, 1500)
@@ -70,6 +70,12 @@ func (m *MediaLink) Start() error {
 			n, err = m.Src.Read(buf)
 			if err != nil {
 				return
+			}
+
+			select {
+			case <-m.ctx.Done():
+				return
+			default:
 			}
 
 			_, err = m.Dst.Write(buf[:n])
