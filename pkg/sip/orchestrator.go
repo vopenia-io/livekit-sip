@@ -1,18 +1,13 @@
 package sip
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 
-	"github.com/frostbyte73/core"
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
 	"github.com/livekit/protocol/logger"
-	lksdk "github.com/livekit/server-sdk-go/v2"
-	"github.com/pion/webrtc/v4"
 )
 
 const (
@@ -51,7 +46,7 @@ func NewMediaOrchestrator(log logger.Logger, ctx context.Context, inbound *sipIn
 
 	o.tracks = NewTrackManager(log)
 
-	camera, err := NewCameraManager(log.WithComponent("camera"), o.ctx, room, opts)
+	camera, err := NewCameraManager(log.WithComponent("camera"), o.ctx, room, opts, o.tracks)
 	if err != nil {
 		return nil, fmt.Errorf("could not create video manager: %w", err)
 	}
@@ -59,35 +54,8 @@ func NewMediaOrchestrator(log logger.Logger, ctx context.Context, inbound *sipIn
 
 	o.bfcp = NewBFCPManager(o.ctx, log, opts, inbound)
 
-	go func() {
-		scanner := bufio.NewScanner(os.Stdin)
-		for scanner.Scan() {
-			switch scanner.Text() {
-			case "r":
-				o.log.Infow("restarting")
-				o.AnswerSDP(o.sdp)
-			}
-		}
-	}()
-
 	return o, nil
 }
-
-// func (o *MediaOrchestrator) Reinvite() error {
-
-// 	offer, err := o.offerSDP(true, true, true)
-
-// 	// reinvite
-// 	r := sip.NewRequest(sip.INVITE, o.inbound.To())
-// 	callID := sip.CallIDHeader(o.inbound.SIPCallID())
-// 	r.AppendHeader(&callID)
-// 	r.AppendHeader(o.inbound.to)
-// 	r.AppendHeader(o.inbound.from)
-// 	r.AppendHeader(o.inbound.contact)
-
-// 	b.inbound.Transaction()
-// 	return nil
-// }
 
 func (o *MediaOrchestrator) Close() error {
 	return errors.Join(
@@ -101,6 +69,7 @@ func (o *MediaOrchestrator) AnswerSDP(offer *sdpv2.SDP) (*sdpv2.SDP, error) {
 	defer o.mu.Unlock()
 	o.sdp = offer // TODO: remove after testing
 
+	o.log.Debugw("answering sdp", "offer", offer)
 	if offer.Audio == nil {
 		return nil, fmt.Errorf("no audio in offer")
 	}
@@ -108,6 +77,7 @@ func (o *MediaOrchestrator) AnswerSDP(offer *sdpv2.SDP) (*sdpv2.SDP, error) {
 	if err := offer.Audio.SelectCodec(); err != nil {
 		return nil, fmt.Errorf("could not select audio codec: %w", err)
 	}
+	o.log.Debugw("selected audio codec", "codec", offer.Audio.Codec)
 
 	o.audioinfo.SetMedia(offer.Audio)
 
@@ -115,13 +85,16 @@ func (o *MediaOrchestrator) AnswerSDP(offer *sdpv2.SDP) (*sdpv2.SDP, error) {
 		if err := offer.Video.SelectCodec(); err != nil {
 			return nil, fmt.Errorf("could not select video codec: %w", err)
 		}
+		o.log.Debugw("selected video codec", "codec", offer.Video.Codec)
 	}
 
 	if err := o.setupSDP(offer); err != nil {
+		o.log.Errorw("could not setup sdp", err)
 		return nil, fmt.Errorf("could not setup sdp: %w", err)
 	}
+	o.log.Debugw("setup sdp complete")
 
-	answer, err := o.offerSDP(offer.Video != nil, offer.BFCP != nil, false)
+	answer, err := o.offerSDP(offer.Video != nil, offer.BFCP != nil, (offer.Screenshare != nil || (offer.Video != nil && offer.BFCP != nil)))
 	if err != nil {
 		return nil, fmt.Errorf("could not create answer sdp: %w", err)
 	}
@@ -154,18 +127,20 @@ func (o *MediaOrchestrator) offerSDP(camera bool, bfcp bool, screenshare bool) (
 	}).Build()
 
 	if bfcp {
-		builder.SetBFCP(func(b *sdpv2.SDPBfcpBuilder) (*sdpv2.SDPBfcp, error) {
-			return b.
-				SetPort(o.bfcp.Port()).
-				SetConnection(sdpv2.BfcpConnectionNew).
-				SetProto(sdpv2.BfcpProtoTCP).
-				SetFloorCtrl(sdpv2.BfcpFloorCtrlServer).
-				SetSetup(sdpv2.BfcpSetupPassive).
-				SetConfID(o.bfcp.config.ConferenceID).
-				SetUserID(1).
-				SetMStreamID(ScreenshareMSTreamID).
-				Build()
-		})
+		if screenshare {
+			builder.SetBFCP(func(b *sdpv2.SDPBfcpBuilder) (*sdpv2.SDPBfcp, error) {
+				return b.
+					SetPort(o.bfcp.Port()).
+					SetConnection(sdpv2.BfcpConnectionNew).
+					SetProto(sdpv2.BfcpProtoTCP).
+					SetFloorCtrl(sdpv2.BfcpFloorCtrlServer).
+					SetSetup(sdpv2.BfcpSetupPassive).
+					SetConfID(o.bfcp.config.ConferenceID).
+					SetUserID(1).
+					SetMStreamID(ScreenshareMSTreamID).
+					Build()
+			})
+		}
 	}
 
 	if camera {
@@ -194,6 +169,7 @@ func (o *MediaOrchestrator) offerSDP(camera bool, bfcp bool, screenshare bool) (
 	if err != nil {
 		return nil, fmt.Errorf("could create a new sdp: %w", err)
 	}
+	o.log.Debugw("created offer sdp", "offer", offer)
 
 	return offer, nil
 }
@@ -205,7 +181,11 @@ func (o *MediaOrchestrator) OfferSDP() (*sdpv2.SDP, error) {
 }
 
 func (o *MediaOrchestrator) setupSDP(sdp *sdpv2.SDP) error {
-	if err := o.camera.Reconcile(sdp.Addr, sdp.Video); err != nil {
+	o.log.Debugw("setting up sdp", "sdp", sdp)
+
+	o.log.Debugw("reconciling camera")
+	if _, err := o.camera.Reconcile(sdp.Addr, sdp.Video); err != nil {
+		o.log.Errorw("could not reconcile video sdp", err)
 		return fmt.Errorf("could not reconcile video sdp: %w", err)
 	}
 	return nil
@@ -215,81 +195,4 @@ func (o *MediaOrchestrator) SetupSDP(sdp *sdpv2.SDP) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return o.setupSDP(sdp)
-}
-
-func NewTrackManager(log logger.Logger) *TrackManager {
-	return &TrackManager{
-		log: log.WithComponent("TrackManager"),
-	}
-}
-
-type TrackManager struct {
-	ready core.Fuse
-	mu    sync.Mutex
-	log   logger.Logger
-	p     *lksdk.LocalParticipant
-
-	camera *TrackOutput
-}
-
-func (tm *TrackManager) ParticipantReady(p *lksdk.LocalParticipant) error {
-	if tm.ready.IsBroken() {
-		return fmt.Errorf("track manager is already ready")
-	}
-	tm.p = p // can't lock the fuse because other function already lock it while waiting for the participant
-	tm.ready.Break()
-	return nil
-}
-
-func (tm *TrackManager) Camera() (*TrackOutput, error) {
-
-	tm.mu.Lock()
-	defer tm.mu.Unlock()
-
-	if !tm.ready.IsBroken() {
-		tm.log.Warnw("track manager not ready yet, waiting", nil)
-		<-tm.ready.Watch()
-		tm.log.Infow("track manager is now ready", nil)
-	}
-
-	if tm.camera != nil {
-		return tm.camera, nil
-	}
-
-	to := &TrackOutput{}
-
-	track, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{
-		MimeType: webrtc.MimeTypeVP8,
-	}, "video", "pion")
-	if err != nil {
-		return nil, fmt.Errorf("could not create room camera track: %w", err)
-	}
-	pt, err := tm.p.PublishTrack(track, &lksdk.TrackPublicationOptions{
-		Name: tm.p.Identity(),
-	})
-	if err != nil {
-		return nil, err
-	}
-	tm.log.Infow("published video track", "SID", pt.SID())
-	trackRtcp := &RtcpWriter{
-		pc: tm.p.GetSubscriberPeerConnection(),
-	}
-	to.RtpOut = &CallbackWriteCloser{
-		Writer: track,
-		Callback: func() error {
-			tm.mu.Lock()
-			defer tm.mu.Unlock()
-			tm.log.Infow("unpublishing video track", "SID", pt.SID())
-			tm.camera = nil
-			if err := tm.p.UnpublishTrack(pt.SID()); err != nil {
-				return fmt.Errorf("could not unpublish track: %w", err)
-			}
-			return nil
-		},
-	}
-	to.RtcpOut = &NopWriteCloser{Writer: trackRtcp}
-
-	tm.camera = to
-
-	return to, nil
 }

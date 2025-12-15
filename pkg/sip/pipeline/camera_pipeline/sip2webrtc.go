@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/app"
 	"github.com/livekit/media-sdk/h264"
@@ -273,11 +272,7 @@ func (stw *SipToWebrtc) Link(p *gst.Pipeline) error {
 		return fmt.Errorf("failed to link sip rtp src to rtpbin: %w", err)
 	}
 
-	var (
-		hnd glib.SignalHandle
-		err error
-	)
-	if hnd, err = stw.RtpBin.Connect("pad-added", func(rtpbin *gst.Element, pad *gst.Pad) {
+	if _, err := stw.RtpBin.Connect("pad-added", func(rtpbin *gst.Element, pad *gst.Pad) {
 		stw.log.Debugw("RTPBIN PAD ADDED", "pad", pad.GetName())
 		padName := pad.GetName()
 		if !strings.HasPrefix(padName, "recv_rtp_src_") {
@@ -297,7 +292,6 @@ func (stw *SipToWebrtc) Link(p *gst.Pipeline) error {
 			return
 		}
 		stw.log.Infow("Linked RTP pad", "pad", padName)
-		stw.RtpBin.HandlerDisconnect(hnd)
 	}); err != nil {
 		return fmt.Errorf("failed to connect to rtpbin pad-added signal: %w", err)
 	}

@@ -86,7 +86,12 @@ func (p *BasePipeline) close() error {
 	}
 	p.closed.Break()
 
-	return p.Pipeline.SetState(gst.StateNull)
+	err := p.Pipeline.SetState(gst.StateNull)
+	time.Sleep(100 * time.Millisecond) // give some time to settle
+	if err != nil {
+		return fmt.Errorf("failed to set pipeline to null state: %w", err)
+	}
+	return nil
 }
 
 func (p *BasePipeline) Close() error {

@@ -3,6 +3,7 @@ package pipeline
 import (
 	"fmt"
 
+	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 )
 
@@ -41,9 +42,13 @@ func CastErr[T any](v any, err error) (T, error) {
 }
 
 func ValidatePad(pad *gst.Pad) error {
-	if pad == nil {
+	if pad == nil || pad.Instance() == nil || pad.GstObject() == nil || pad.Unsafe() == nil {
 		return fmt.Errorf("pad is nil")
 	}
+	if pad.IsA(glib.TYPE_INVALID) {
+		return fmt.Errorf("pad is not a valid gst.Pad")
+	}
+
 	parent := pad.GetParentElement()
 	if parent == nil {
 		return fmt.Errorf("pad's parent element is nil")

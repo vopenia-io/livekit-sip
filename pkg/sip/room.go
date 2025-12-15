@@ -191,8 +191,8 @@ type RoomConfig struct {
 }
 
 type RoomCallbacks interface {
-	WebrtcTrackSubscribed(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant, conf *config.Config) error
-	WebrtcTrackUnsubscribed(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant, conf *config.Config) error
+	WebrtcTrackSubscribed(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) error
+	WebrtcTrackUnsubscribed(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) error
 	ActiveParticipantChanged(p []lksdk.Participant) error
 	LocalParticipantReady(p *lksdk.LocalParticipant) error
 }
@@ -345,7 +345,7 @@ func (r *Room) Connect(conf *config.Config, rconf RoomConfig) error {
 				}
 				cb := r.callbackHandler.Load()
 				if cb != nil {
-					if err := (*cb).WebrtcTrackSubscribed(track, pub, rp, conf); err != nil {
+					if err := (*cb).WebrtcTrackSubscribed(track, pub, rp); err != nil {
 						r.log.Errorw("track subscribed callback error", err)
 					}
 				} else {
@@ -359,7 +359,7 @@ func (r *Room) Connect(conf *config.Config, rconf RoomConfig) error {
 				}
 				cb := r.callbackHandler.Load()
 				if cb != nil {
-					if err := (*cb).WebrtcTrackUnsubscribed(track, pub, rp, conf); err != nil {
+					if err := (*cb).WebrtcTrackUnsubscribed(track, pub, rp); err != nil {
 						r.log.Errorw("track unsubscribed callback error", err)
 					}
 				} else {

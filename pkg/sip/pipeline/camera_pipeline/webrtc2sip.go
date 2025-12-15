@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/app"
@@ -281,14 +280,14 @@ func (wts *WebrtcToSip) Link(p *gst.Pipeline) error {
 			wts.log.Errorw("Failed to link RTP pad to WebRTC track", err, "pad", padName, "ssrc", ssrc)
 			return
 		}
-		pad.Connect("unlinked", func(_ interface{}) {
-			wts.log.Infow("RTP pad unlinked", "pad", padName, "ssrc", ssrc)
-			// wts.mu.Lock()
-			// defer wts.mu.Unlock()
-			if err := track.Close(p); err != nil {
-				wts.log.Errorw("Failed to close WebRTC track on pad unlink", err, "ssrc", ssrc)
-			}
-		})
+		// pad.Connect("unlinked", func(_ interface{}) {
+		// 	wts.log.Infow("RTP pad unlinked", "pad", padName, "ssrc", ssrc)
+		// 	// wts.mu.Lock()
+		// 	// defer wts.mu.Unlock()
+		// 	if err := track.Close(p); err != nil {
+		// 		wts.log.Errorw("Failed to close WebRTC track on pad unlink", err, "ssrc", ssrc)
+		// 	}
+		// })
 		wts.log.Infow("Linked RTP pad", "pad", padName)
 	}); err != nil {
 		return fmt.Errorf("failed to connect to rtpbin pad-added signal: %w", err)
@@ -338,8 +337,6 @@ func (wts *WebrtcToSip) Close(pipeline *gst.Pipeline) error {
 	if len(errs) > 0 {
 		return fmt.Errorf("errors closing SelectorToSip: %v", errs)
 	}
-
-	time.Sleep(100 * time.Millisecond) // webrtc tracks need time to unlink
 
 	pipeline.RemoveMany(
 		wts.RtpBin,

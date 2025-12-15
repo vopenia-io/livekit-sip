@@ -3,19 +3,26 @@ package sip
 import (
 	"context"
 	"fmt"
+	"net/netip"
+	"time"
 
+	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/sip/pkg/sip/pipeline/camera_pipeline"
 )
 
 type CameraManager struct {
 	*VideoManager
-	ssrcs map[string]uint32
+	ssrcs         map[string]uint32
+	tm            *TrackManager
+	cameraRtpOut  *MediaOutput
+	cameraRtcpOut *MediaOutput
 }
 
-func NewCameraManager(log logger.Logger, ctx context.Context, room *Room, opts *MediaOptions) (*CameraManager, error) {
+func NewCameraManager(log logger.Logger, ctx context.Context, room *Room, opts *MediaOptions, tm *TrackManager) (*CameraManager, error) {
 	cm := &CameraManager{
 		ssrcs: make(map[string]uint32),
+		tm:    tm,
 	}
 
 	vm, err := NewVideoManager(log, ctx, opts, cm)
@@ -25,6 +32,64 @@ func NewCameraManager(log logger.Logger, ctx context.Context, room *Room, opts *
 	cm.VideoManager = vm
 
 	return cm, nil
+}
+
+func (cm *CameraManager) publishCameraTrack() error {
+	if cm.status != VideoStatusStarted {
+		cm.log.Errorw("video manager not started, cannot publish camera track", nil, "status", cm.status)
+		return nil
+	}
+
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	if cm.cameraRtpOut != nil {
+		cm.io.RemoveOutput(cm.cameraRtpOut)
+		cm.log.Debugw("removed existing camera RTP output from media IO")
+		cm.cameraRtpOut = nil
+	}
+
+	if cm.cameraRtcpOut != nil {
+		cm.io.RemoveOutput(cm.cameraRtcpOut)
+		cm.log.Debugw("removed existing camera RTCP output from media IO")
+		cm.cameraRtcpOut = nil
+	}
+
+	to, err := cm.tm.Camera()
+	if err != nil {
+		return fmt.Errorf("could not get camera track output: %w", err)
+	}
+
+	if err := cm.webrtcTrackOutput(to); err != nil {
+		return fmt.Errorf("could not set webrtc track output: %w", err)
+	}
+
+	return nil
+}
+
+func (cm *CameraManager) Reconcile(remote netip.Addr, media *sdpv2.SDPMedia) (ReconcileStatus, error) {
+	rs, err := cm.VideoManager.Reconcile(remote, media)
+	if err != nil {
+		return rs, err
+	}
+
+	go func() {
+
+		if rs == ReconcileStatusUpdated {
+			if err := cm.RecoverTracks(); err != nil {
+				cm.log.Errorw("failed to recover camera tracks", err)
+				return
+			}
+		}
+
+		if rs == ReconcileStatusCreated {
+			if err := cm.publishCameraTrack(); err != nil {
+				cm.log.Errorw("failed to publish camera track", err)
+				return
+			}
+		}
+	}()
+	return rs, nil
 }
 
 func (cm *CameraManager) CreateVideoPipeline(opt *MediaOptions) (SipPipeline, error) {
@@ -98,15 +163,7 @@ func (cm *CameraManager) RemoveWebrtcTrackInput(sid string) error {
 	return nil
 }
 
-func (cm *CameraManager) WebrtcTrackOutput(to *TrackOutput) error {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-
-	if cm.status != VideoStatusStarted {
-		cm.log.Errorw("video manager not started, cannot add WebRTC track output", nil, "status", cm.status)
-		return fmt.Errorf("video manager not started")
-	}
-
+func (cm *CameraManager) webrtcTrackOutput(to *TrackOutput) error {
 	cm.log.Infow("WebRTC video track published - connecting SIP→WebRTC pipeline",
 		"hasRtpOut", to.RtpOut != nil,
 		"hasRtcpOut", to.RtcpOut != nil)
@@ -148,6 +205,29 @@ func (cm *CameraManager) SwitchActiveWebrtcTrack(sid string) error {
 
 	if err := cm.pipeline.(*camera_pipeline.CameraPipeline).SwitchWebRTCSelectorSource(ssrc); err != nil {
 		return fmt.Errorf("failed to switch WebRTC selector source: %w", err)
+	}
+
+	return nil
+}
+
+func (cm *CameraManager) RecoverTracks() error {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	if cm.status != VideoStatusStarted {
+		return nil
+	}
+
+	time.Sleep(1 * time.Second) // wait a bit to ensure pipeline is ready
+
+	cm.log.Infow("recovering camera tracks after video reconnection")
+	tracks := cm.tm.CameraTracks.Tracks()
+	for sid, track := range tracks {
+		// if track.pub.IsSubscribed() {
+		// 	continue
+		// }
+		cm.log.Infow("recovering camera track", "sid", sid, "isSubscribed", track.pub.IsSubscribed())
+		track.pub.SetSubscribed(true)
 	}
 
 	return nil

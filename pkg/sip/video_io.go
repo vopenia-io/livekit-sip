@@ -25,23 +25,49 @@ type CallbackWriteCloser struct {
 }
 
 func (c *CallbackWriteCloser) Close() error {
+	var err error
 	if c.Callback != nil {
-		err := c.Callback()
+		err = c.Callback()
 		c.Callback = nil
-		return err
 	}
-	return nil
+
+	if closer, ok := c.Writer.(io.Closer); ok {
+		err = errors.Join(err, closer.Close())
+	}
+
+	return err
 }
 
-func NewTrackAdapter(track *webrtc.TrackRemote) *TrackAdapter {
+type CallbackReadCloser struct {
+	io.Reader
+	Callback func() error
+}
+
+func (c *CallbackReadCloser) Close() error {
+	var err error
+	if c.Callback != nil {
+		err = c.Callback()
+		c.Callback = nil
+	}
+
+	if closer, ok := c.Reader.(io.Closer); ok {
+		err = errors.Join(err, closer.Close())
+	}
+
+	return err
+}
+
+func NewTrackAdapter(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication) *TrackAdapter {
 	ta := &TrackAdapter{
 		TrackRemote: track,
+		pub:         pub,
 	}
 	return ta
 }
 
 type TrackAdapter struct {
 	*webrtc.TrackRemote
+	pub *lksdk.RemoteTrackPublication
 }
 
 func (t *TrackAdapter) Read(p []byte) (n int, err error) {
@@ -50,10 +76,10 @@ func (t *TrackAdapter) Read(p []byte) (n int, err error) {
 }
 
 func (t *TrackAdapter) Close() error {
-	if err := t.TrackRemote.SetReadDeadline(time.Now()); err != nil {
-		return err
-	}
-	return nil
+	var err error
+	err = t.TrackRemote.SetReadDeadline(time.Now())
+	err = errors.Join(err, t.pub.SetSubscribed(false))
+	return err
 }
 
 type RtcpWriter struct {
@@ -127,12 +153,13 @@ func (r *RtcpReader) SetReadDeadline(t time.Time) error {
 }
 
 func (r *RtcpReader) Close() error {
+	r.pub.OnRTCP(nil)
 	return errors.Join(r.pipeWriter.Close(), r.pipeReader.Close())
 }
 
 func NewTrackInput(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) *TrackInput {
 	ti := &TrackInput{
-		RtpIn:  NewTrackAdapter(track),
+		RtpIn:  NewTrackAdapter(track, pub),
 		RtcpIn: NewRtcpReader(pub, rp),
 	}
 	return ti

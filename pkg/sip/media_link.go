@@ -3,6 +3,7 @@ package sip
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"sync/atomic"
 	"time"
@@ -11,13 +12,13 @@ import (
 type MediaLink struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
-	Dst     io.Writer
-	Src     io.Reader
+	Dst     io.WriteCloser
+	Src     io.ReadCloser
 	running atomic.Bool
 	ch      chan error
 }
 
-func NewMediaLink(ctx context.Context, dst io.Writer, src io.Reader) *MediaLink {
+func NewMediaLink(ctx context.Context, dst io.WriteCloser, src io.ReadCloser) *MediaLink {
 	cctx, cancel := context.WithCancel(ctx)
 	return &MediaLink{
 		ctx:    cctx,
@@ -28,22 +29,36 @@ func NewMediaLink(ctx context.Context, dst io.Writer, src io.Reader) *MediaLink 
 	}
 }
 
-func (m *MediaLink) Stop(timeout time.Duration) error {
+func (m *MediaLink) stop() error {
 	if !m.running.Swap(false) {
 		return nil
 	}
 	m.cancel()
 
-	t := time.After(timeout)
+	t := time.After(time.Second * 5)
 	select {
 	case err, ok := <-m.ch:
 		if !ok {
+			return nil
+		}
+		if err == io.EOF {
 			return nil
 		}
 		return err
 	case <-t:
 		return errors.New("timeout waiting for media link to stop")
 	}
+}
+
+func (m *MediaLink) Close() error {
+	if err := m.Src.Close(); err != nil {
+		return fmt.Errorf("failed to close media link source: %w", err)
+	}
+	if err := m.Dst.Close(); err != nil {
+		return fmt.Errorf("failed to close media link destination: %w", err)
+	}
+
+	return m.stop()
 }
 
 func (m *MediaLink) Start() error {

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"time"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
@@ -117,10 +118,8 @@ func (v *VideoManager) Close() error {
 		return fmt.Errorf("video manager already closed")
 	}
 	v.log.Debugw("closing video manager")
-	if v.pipeline != nil {
-		if err := v.pipeline.Close(); err != nil {
-			return fmt.Errorf("failed to set GStreamer pipeline to null: %w", err)
-		}
+	if err := v.stop(); err != nil {
+		return fmt.Errorf("failed to stop video manager: %w", err)
 	}
 	if err := v.rtpConn.Close(); err != nil {
 		return fmt.Errorf("failed to close RTP connection: %w", err)
@@ -128,6 +127,7 @@ func (v *VideoManager) Close() error {
 	if err := v.rtcpConn.Close(); err != nil {
 		return fmt.Errorf("failed to close RTCP connection: %w", err)
 	}
+	v.status = VideoStatusClosed
 	return nil
 }
 
@@ -210,56 +210,28 @@ func (v *VideoManager) mediaOK(newMedia *sdpv2.SDPMedia) bool {
 	return true
 }
 
-func (v *VideoManager) resetIO() error {
-	if err := v.io.Stop(); err != nil {
-		return fmt.Errorf("failed to stop media IO: %w", err)
-	}
-	if v.RtpIn != nil {
-		if err := v.io.RemoveInput(v.RtpIn); err != nil {
-			return fmt.Errorf("failed to remove RTP media input: %w", err)
-		}
-		if err := v.RtpIn.Dst.(*GstWriter).Close(); err != nil {
-			v.log.Warnw("failed to close RTP GstWriter", err)
-		}
-		v.RtpIn = nil
-	}
-	if v.RtcpIn != nil {
-		if err := v.io.RemoveInput(v.RtcpIn); err != nil {
-			return fmt.Errorf("failed to remove RTCP media input: %w", err)
-		}
-		if err := v.RtcpIn.Dst.(*GstWriter).Close(); err != nil {
-			v.log.Warnw("failed to close RTCP GstWriter", err)
-		}
-		v.RtcpIn = nil
-	}
-	if v.RtpOut != nil {
-		if err := v.io.RemoveOutput(v.RtpOut); err != nil {
-			return fmt.Errorf("failed to remove RTP media output: %w", err)
-		}
-		if err := v.RtpOut.Src.(*GstReader).Close(); err != nil {
-			v.log.Warnw("failed to close RTP GstReader", err)
-		}
-		v.RtpOut = nil
-	}
-	if v.RtcpOut != nil {
-		if err := v.io.RemoveOutput(v.RtcpOut); err != nil {
-			return fmt.Errorf("failed to remove RTCP media output: %w", err)
-		}
-		if err := v.RtcpOut.Src.(*GstReader).Close(); err != nil {
-			v.log.Warnw("failed to close RTCP GstReader", err)
-		}
-		v.RtcpOut = nil
-	}
-	return nil
+type NoCloseConn struct {
+	net.Conn
+}
+
+func (n *NoCloseConn) Close() error {
+	return n.SetDeadline(time.Now())
 }
 
 func (v *VideoManager) setupIO(remote netip.Addr, media *sdpv2.SDPMedia) error {
+	if err := v.rtpConn.SetDeadline(time.Time{}); err != nil {
+		return fmt.Errorf("failed to clear RTP conn deadline: %w", err)
+	}
+	if err := v.rtcpConn.SetDeadline(time.Time{}); err != nil {
+		return fmt.Errorf("failed to clear RTCP conn deadline: %w", err)
+	}
+
 	if media.Direction.IsRecv() {
 		rtpSource := v.pipeline.RtpSrc()
 		if rtpSource == nil {
 			return fmt.Errorf("RTP source is nil")
 		}
-		mi, err := NewMediaInput(v.ctx, rtpSource, v.rtpConn)
+		mi, err := NewMediaInput(v.ctx, rtpSource, &NoCloseConn{v.rtpConn})
 		if err != nil {
 			return fmt.Errorf("failed to create RTP media input: %w", err)
 		}
@@ -272,7 +244,7 @@ func (v *VideoManager) setupIO(remote netip.Addr, media *sdpv2.SDPMedia) error {
 		if rtcpSource == nil {
 			v.log.Warnw("RTCP source isn't configured", nil)
 		} else {
-			mi, err := NewMediaInput(v.ctx, rtcpSource, v.rtcpConn)
+			mi, err := NewMediaInput(v.ctx, rtcpSource, &NoCloseConn{v.rtcpConn})
 			if err != nil {
 				return fmt.Errorf("failed to create RTCP media input: %w", err)
 			}
@@ -291,7 +263,7 @@ func (v *VideoManager) setupIO(remote netip.Addr, media *sdpv2.SDPMedia) error {
 		if rtpSink == nil {
 			return fmt.Errorf("RTP sink is nil")
 		}
-		mo, err := NewMediaOutput(v.ctx, v.rtpConn, rtpSink)
+		mo, err := NewMediaOutput(v.ctx, &NoCloseConn{v.rtpConn}, rtpSink)
 		if err != nil {
 			return fmt.Errorf("failed to create RTP media output: %w", err)
 		}
@@ -304,7 +276,7 @@ func (v *VideoManager) setupIO(remote netip.Addr, media *sdpv2.SDPMedia) error {
 		if rtcpSink == nil {
 			v.log.Warnw("RTCP sink isn't configured", nil)
 		} else {
-			mo, err := NewMediaOutput(v.ctx, v.rtcpConn, rtcpSink)
+			mo, err := NewMediaOutput(v.ctx, &NoCloseConn{v.rtcpConn}, rtcpSink)
 			if err != nil {
 				return fmt.Errorf("failed to create RTCP media output: %w", err)
 			}
@@ -325,46 +297,51 @@ func (v *VideoManager) setupIO(remote netip.Addr, media *sdpv2.SDPMedia) error {
 	return nil
 }
 
-func (v *VideoManager) Reconcile(remote netip.Addr, media *sdpv2.SDPMedia) error {
+type ReconcileStatus int
+
+const (
+	ReconcileStatusUnchanged ReconcileStatus = iota
+	ReconcileStatusCreated
+	ReconcileStatusUpdated
+	ReconcileStatusStopped
+)
+
+func (v *VideoManager) Reconcile(remote netip.Addr, media *sdpv2.SDPMedia) (ReconcileStatus, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
 	if v.status == VideoStatusClosed {
-		return fmt.Errorf("video manager is closed")
+		return ReconcileStatusUnchanged, fmt.Errorf("video manager is closed")
 	}
 
-	if v.mediaOK(media) {
-		v.log.Debugw("video media unchanged, no reconciliation needed", "oldMedia", v.Media, "newMedia", media)
-		v.Media = media
-		return nil
-	}
+	// if v.mediaOK(media) {
+	// 	v.log.Debugw("video media unchanged, no reconciliation needed", "oldMedia", v.Media, "newMedia", media)
+	// 	v.Media = media
+	// 	return nil
+	// }
 
 	if !isMedia(media) {
 		v.log.Debugw("video media disabled, stopping video manager", "media", media)
 		v.Media = nil
-		return v.stop()
+		return ReconcileStatusStopped, v.stop()
 	}
 
-	if err := v.ensurePipeline(); err != nil {
-		return fmt.Errorf("failed to ensure GStreamer pipeline: %w", err)
-	}
+	rs := ReconcileStatusUpdated
 
-	if err := v.pipeline.SetState(gst.StatePaused); err != nil {
-		return fmt.Errorf("failed to set GStreamer pipeline to paused: %w", err)
-	}
-
-	if err := v.resetIO(); err != nil {
-		return fmt.Errorf("failed to reset media IO: %w", err)
+	if init, err := v.resetPipeline(); err != nil {
+		return ReconcileStatusUnchanged, fmt.Errorf("failed to reset GStreamer pipeline: %w", err)
+	} else if init {
+		rs = ReconcileStatusCreated
 	}
 
 	v.log.Infow("video setup", "remote", remote.String(), "rtp_port", v.RtpPort(), "rtcp_port", v.RtcpPort(), "codec", media.Codec, "direction", media.Direction)
 
 	if err := v.pipeline.Configure(media); err != nil {
-		return fmt.Errorf("failed to configure GStreamer pipeline: %w", err)
+		return rs, fmt.Errorf("failed to configure GStreamer pipeline: %w", err)
 	}
 
 	if err := v.setupIO(remote, media); err != nil {
-		return fmt.Errorf("failed to setup media IO: %w", err)
+		return rs, fmt.Errorf("failed to setup media IO: %w", err)
 	}
 
 	v.Media = media
@@ -372,43 +349,60 @@ func (v *VideoManager) Reconcile(remote netip.Addr, media *sdpv2.SDPMedia) error
 
 	v.log.Debugw("starting video pipeline")
 	if err := v.pipeline.SetState(gst.StatePlaying); err != nil {
-		return fmt.Errorf("failed to set GStreamer pipeline to playing: %w", err)
+		return rs, fmt.Errorf("failed to set GStreamer pipeline to playing: %w", err)
 	}
 
-	return nil
+	return rs, nil
 }
 
-func (v *VideoManager) ensurePipeline() error {
+func (v *VideoManager) resetPipeline() (bool, error) {
+	init := true
+	v.log.Debugw("resetting video pipeline")
 	if v.pipeline != nil {
-		return nil
+		init = false
+		v.log.Debugw("closing existing GStreamer pipeline")
+		if err := v.pipeline.Close(); err != nil {
+			v.log.Errorw("failed to close GStreamer pipeline, going to leak it", err)
+		}
+		v.log.Debugw("closing existing media IO")
+		if err := v.io.Close(); err != nil {
+			v.log.Errorw("failed to close media IO, going to leak it", err)
+		}
+		v.pipeline = nil
+		v.log.Debugw("existing GStreamer pipeline closed")
 	}
 
+	v.log.Debugw("creating new GStreamer pipeline")
 	pipeline, err := v.factory.CreateVideoPipeline(v.opts)
 	if err != nil {
-		return fmt.Errorf("failed to create GStreamer pipeline: %w", err)
+		return init, fmt.Errorf("failed to create GStreamer pipeline: %w", err)
 	}
 	v.pipeline = pipeline
+	v.log.Debugw("new GStreamer pipeline created")
 
-	return nil
+	return init, nil
 }
 
 func (v *VideoManager) stop() error {
 	v.log.Debugw("stopping video manager")
 
-	if err := v.resetIO(); err != nil {
-		return fmt.Errorf("failed to reset media IO: %w", err)
+	if v.status == VideoStatusStopped {
+		v.log.Debugw("video manager already stopped")
+		return nil
 	}
 
-	if err := v.io.Stop(); err != nil {
-		return fmt.Errorf("failed to stop media IO: %w", err)
+	if err := v.io.Close(); err != nil {
+		return fmt.Errorf("failed to close media IO: %w", err)
 	}
 
 	v.Media = nil
 
-	if err := v.pipeline.Close(); err != nil {
-		return fmt.Errorf("failed to set GStreamer pipeline to null: %w", err)
+	if v.pipeline == nil {
+		if err := v.pipeline.Close(); err != nil {
+			return fmt.Errorf("failed to set GStreamer pipeline to null: %w", err)
+		}
+		v.pipeline = nil
 	}
-	v.pipeline = nil
 
 	v.status = VideoStatusStopped
 

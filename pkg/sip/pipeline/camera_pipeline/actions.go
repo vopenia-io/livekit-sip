@@ -101,7 +101,6 @@ func (gp *CameraPipeline) switchSelectorPad(wt *WebrtcTrack, pad *gst.Pad) error
 	probe := pad.AddProbe(gst.PadProbeTypeBuffer, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
 		buf := info.GetBuffer()
 		if buf == nil {
-			println("Buffer is nil in pad probe")
 			return gst.PadProbePass
 		}
 
@@ -111,10 +110,8 @@ func (gp *CameraPipeline) switchSelectorPad(wt *WebrtcTrack, pad *gst.Pad) error
 				err = fmt.Errorf("failed to set active pad on input selector: %w", err)
 			}
 			close(done)
-			println("Keyframe received on pad probe")
 			return gst.PadProbeRemove
 		}
-		println("Not a keyframe, continuing to wait...")
 		return gst.PadProbePass
 	})
 
@@ -226,11 +223,13 @@ func (gp *CameraPipeline) setupAutoSwitching() error {
 	}
 
 	if _, err := gp.WebrtcToSip.InputSelector.Connect("pad-removed", func(selector *gst.Element, pad *gst.Pad) {
-		gp.Log.Infow("Pad removed from WebRTC selector, ensuring active source", "pad", pad.GetName())
-		time.Sleep(1 * time.Second) // give some time for the selector to actually remove the pad
-		if err := quickSwitch(); err != nil {
-			gp.Log.Errorw("Failed to ensure active source after pad removed from selector", err)
-		}
+		padName := pad.GetName()
+		gp.Log.Infow("Pad removed from WebRTC selector, ensuring active source", "pad", padName)
+		go func() {
+			if err := quickSwitch(); err != nil {
+				gp.Log.Errorw("Failed to ensure active source after pad removed from selector", err)
+			}
+		}()
 	}); err != nil {
 		return fmt.Errorf("failed to connect pad-removed signal to selector: %w", err)
 	}

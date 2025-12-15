@@ -188,7 +188,7 @@ func (wt *WebrtcTrack) Close(p *gst.Pipeline) error {
 	pipeline.ReleasePad(wt.RtpPad)
 	pipeline.ReleasePad(wt.RtcpPad)
 	pipeline.ReleasePad(wt.RtpSelPad)
-	pipeline.ReleasePad(wt.RtpBinPad)
+	// pipeline.ReleasePad(wt.RtpBinPad)
 
 	p.RemoveMany(
 		wt.RtpSrc,
