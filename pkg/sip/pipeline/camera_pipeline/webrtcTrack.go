@@ -2,9 +2,10 @@ package camera_pipeline
 
 import (
 	"fmt"
+	"io"
+	"runtime/cgo"
 
 	"github.com/go-gst/go-gst/gst"
-	"github.com/go-gst/go-gst/gst/app"
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/sip/pkg/sip/pipeline"
 )
@@ -22,27 +23,31 @@ type WebrtcTrack struct {
 
 	RtcpSrc *gst.Element
 
-	RtpAppSrc  *app.Source
-	RtcpAppSrc *app.Source
-	RtpPad     *gst.Pad
-	RtcpPad    *gst.Pad
-	RtpBinPad  *gst.Pad
-	RtpSelPad  *gst.Pad
+	// RtpAppSrc  *app.Source
+	// RtcpAppSrc *app.Source
+	RtpPad    *gst.Pad
+	RtcpPad   *gst.Pad
+	RtpBinPad *gst.Pad
+	RtpSelPad *gst.Pad
 }
 
 var _ pipeline.GstChain = (*WebrtcTrack)(nil)
 
-func buildWebrtcTrack(log logger.Logger, parent *WebrtcToSip, ssrc uint32) (*WebrtcTrack, error) {
+func buildWebrtcTrack(log logger.Logger, parent *WebrtcToSip, ssrc uint32, rtp, rtcp io.Reader) (*WebrtcTrack, error) {
 	log = log.WithValues("ssrc", ssrc)
 
-	rtpSrc, err := gst.NewElementWithProperties("appsrc", map[string]interface{}{
-		"name":         fmt.Sprintf("webrtc_rtp_in_%d", ssrc),
-		"is-live":      true,
+	rtpHandle := cgo.NewHandle(rtp)
+	defer rtpHandle.Delete()
+
+	rtpSrc, err := gst.NewElementWithProperties("sourcereader", map[string]interface{}{
+		"name":   fmt.Sprintf("webrtc_rtp_in_%d", ssrc),
+		"handle": uint64(rtpHandle),
+		// "is-live":      true,
 		"do-timestamp": true,
-		"format":       int(gst.FormatTime),
-		"max-bytes":    uint64(2_000_000),
-		"block":        false,
-		"caps":         gst.NewCapsFromString(VP8CAPS),
+		// "format":       int(gst.FormatTime),
+		// "max-bytes":    uint64(2_000_000),
+		// "block":        false,
+		"caps": gst.NewCapsFromString(VP8CAPS),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create webrtc rtp appsrc: %w", err)
@@ -60,14 +65,31 @@ func buildWebrtcTrack(log logger.Logger, parent *WebrtcToSip, ssrc uint32) (*Web
 		return nil, fmt.Errorf("failed to create webrtc rtp queue: %w", err)
 	}
 
-	rtcpSrc, err := gst.NewElementWithProperties("appsrc", map[string]interface{}{
-		"name":         fmt.Sprintf("webrtc_rtcp_in_%d", ssrc),
-		"is-live":      true,
+	// rtcpSrc, err := gst.NewElementWithProperties("appsrc", map[string]interface{}{
+	// 	"name":         fmt.Sprintf("webrtc_rtcp_in_%d", ssrc),
+	// 	"is-live":      true,
+	// 	"do-timestamp": true,
+	// 	"format":       int(gst.FormatTime),
+	// 	"max-bytes":    uint64(500_000),
+	// 	"block":        false,
+	// 	"caps":         gst.NewCapsFromString("application/x-rtcp"),
+	// })
+	// if err != nil {
+	// 	return nil, fmt.Errorf("failed to create webrtc rtcp appsrc: %w", err)
+	// }
+
+	rtcpHandle := cgo.NewHandle(rtcp)
+	defer rtcpHandle.Delete()
+
+	rtcpSrc, err := gst.NewElementWithProperties("sourcereader", map[string]interface{}{
+		"name":   fmt.Sprintf("webrtc_rtcp_in_%d", ssrc),
+		"handle": uint64(rtcpHandle),
+		// "is-live":      true,
 		"do-timestamp": true,
-		"format":       int(gst.FormatTime),
-		"max-bytes":    uint64(500_000),
-		"block":        false,
-		"caps":         gst.NewCapsFromString("application/x-rtcp"),
+		// "format":       int(gst.FormatTime),
+		// "max-bytes":    uint64(500_000),
+		// "block":        false,
+		"caps": gst.NewCapsFromString("application/x-rtcp"),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create webrtc rtcp appsrc: %w", err)
@@ -86,8 +108,8 @@ func buildWebrtcTrack(log logger.Logger, parent *WebrtcToSip, ssrc uint32) (*Web
 
 		RtcpSrc: rtcpSrc,
 
-		RtpAppSrc:  app.SrcFromElement(rtpSrc),
-		RtcpAppSrc: app.SrcFromElement(rtcpSrc),
+		// RtpAppSrc:  app.SrcFromElement(rtpSrc),
+		// RtcpAppSrc: app.SrcFromElement(rtcpSrc),
 	}, nil
 }
 

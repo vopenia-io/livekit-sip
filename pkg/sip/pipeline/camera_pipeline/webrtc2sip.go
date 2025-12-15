@@ -2,11 +2,13 @@ package camera_pipeline
 
 import (
 	"fmt"
+	"io"
+	"net"
+	"runtime/cgo"
 	"strings"
 	"sync"
 
 	"github.com/go-gst/go-gst/gst"
-	"github.com/go-gst/go-gst/gst/app"
 	"github.com/livekit/media-sdk/h264"
 	v2 "github.com/livekit/media-sdk/sdp/v2"
 	"github.com/livekit/protocol/logger"
@@ -39,21 +41,18 @@ type WebrtcToSip struct {
 	X264Enc     *gst.Element
 	RtpH264Pay  *gst.Element
 	OutQueue    *gst.Element
-	SipRtpSink  *gst.Element
+	SipRtpOut   *gst.Element
 
 	RtcpFunnel *gst.Element
 	//rtpbin
-	WebrtcRtcpSink *gst.Element
-
-	SipRtpAppSink     *app.Sink
-	WebrtcRtcpAppSink *app.Sink
+	WebrtcRtcpOut *gst.Element
 }
 
 func (wts *WebrtcToSip) Configure(media *v2.SDPMedia) error {
 	if media.Codec.Codec.Info().SDPName != h264.SDPName {
 		return fmt.Errorf("unsupported codec %s for SIP video", media.Codec.Codec.Info().SDPName)
 	}
-	wts.SipRtpSink.SetProperty("caps", gst.NewCapsFromString(fmt.Sprintf(
+	wts.SipRtpOut.SetProperty("caps", gst.NewCapsFromString(fmt.Sprintf(
 		"application/x-rtp,media=video,encoding-name=H264,payload=%d,clock-rate=90000",
 		media.Codec.PayloadType,
 	)))
@@ -62,7 +61,10 @@ func (wts *WebrtcToSip) Configure(media *v2.SDPMedia) error {
 
 var _ pipeline.GstChain = (*WebrtcToSip)(nil)
 
-func buildSelectorToSipChain(log logger.Logger) (*WebrtcToSip, error) {
+func buildSelectorToSipChain(log logger.Logger, rtpConn, rtcpConn net.Conn) (*WebrtcToSip, error) {
+	rtpConnHandle := cgo.NewHandle(rtpConn)
+	defer rtpConnHandle.Delete()
+
 	rtpbin, err := gst.NewElementWithProperties("rtpbin", map[string]interface{}{
 		"autoremove":         true,
 		"do-lost":            true,
@@ -141,16 +143,23 @@ func buildSelectorToSipChain(log logger.Logger) (*WebrtcToSip, error) {
 		return nil, fmt.Errorf("failed to create webrtc rtp h264 payloader: %w", err)
 	}
 
-	sipRtpSink, err := gst.NewElementWithProperties("appsink", map[string]interface{}{
-		"name":         "sip_rtp_out",
-		"emit-signals": false,
-		"drop":         false,
-		"max-buffers":  uint(100),
-		"sync":         false,
-		"async":        false, // Don't wait for preroll - live pipeline
+	// sipRtpSink, err := gst.NewElementWithProperties("appsink", map[string]interface{}{
+	// 	"name":         "sip_rtp_out",
+	// 	"emit-signals": false,
+	// 	"drop":         false,
+	// 	"max-buffers":  uint(100),
+	// 	"sync":         false,
+	// 	"async":        false, // Don't wait for preroll - live pipeline
+	// })
+	// if err != nil {
+	// 	return nil, fmt.Errorf("failed to create webrtc appsink: %w", err)
+	// }
+
+	sipRtpOut, err := gst.NewElementWithProperties("sinkwriter", map[string]interface{}{
+		"handle": uint64(uintptr(rtpConnHandle)),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create webrtc appsink: %w", err)
+		return nil, fmt.Errorf("failed to create webrtc rtp writer: %w", err)
 	}
 
 	rtcpFunnel, err := gst.NewElementWithProperties("funnel", map[string]interface{}{})
@@ -163,17 +172,17 @@ func buildSelectorToSipChain(log logger.Logger) (*WebrtcToSip, error) {
 		return nil, fmt.Errorf("failed to create webrtc rtcp out queue: %w", err)
 	}
 
-	webrtcRtcpSink, err := gst.NewElementWithProperties("appsink", map[string]interface{}{
-		"name":         "webrtc_rtcp_out",
-		"emit-signals": false,
-		"drop":         false,
-		"max-buffers":  uint(100),
-		"sync":         false,
-		"async":        false, // Don't wait for preroll - live pipeline
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create webrtc rtcp appsink: %w", err)
-	}
+	// webrtcRtcpSink, err := gst.NewElementWithProperties("appsink", map[string]interface{}{
+	// 	"name":         "webrtc_rtcp_out",
+	// 	"emit-signals": false,
+	// 	"drop":         false,
+	// 	"max-buffers":  uint(100),
+	// 	"sync":         false,
+	// 	"async":        false, // Don't wait for preroll - live pipeline
+	// })
+	// if err != nil {
+	// 	return nil, fmt.Errorf("failed to create webrtc rtcp appsink: %w", err)
+	// }
 
 	return &WebrtcToSip{
 		log:          log,
@@ -194,14 +203,11 @@ func buildSelectorToSipChain(log logger.Logger) (*WebrtcToSip, error) {
 		X264Enc:     x264enc,
 		RtpH264Pay:  rtph264pay,
 		OutQueue:    outQueue,
-		SipRtpSink:  sipRtpSink,
+		SipRtpOut:   sipRtpOut,
 
 		RtcpFunnel: rtcpFunnel,
 		// rtpbin
-		WebrtcRtcpSink: webrtcRtcpSink,
-
-		SipRtpAppSink:     app.SinkFromElement(sipRtpSink),
-		WebrtcRtcpAppSink: app.SinkFromElement(webrtcRtcpSink),
+		WebrtcRtcpOut: nil,
 	}, nil
 }
 
@@ -223,11 +229,11 @@ func (wts *WebrtcToSip) Add(pipeline *gst.Pipeline) error {
 		wts.X264Enc,
 		wts.RtpH264Pay,
 		wts.OutQueue,
-		wts.SipRtpSink,
+		wts.SipRtpOut,
 
 		wts.RtcpFunnel,
 		// rtpbin
-		wts.WebrtcRtcpSink,
+		// wts.WebrtcRtcpSink,
 	); err != nil {
 		return fmt.Errorf("failed to add SelectorToSip elements to pipeline: %w", err)
 	}
@@ -304,7 +310,7 @@ func (wts *WebrtcToSip) Link(p *gst.Pipeline) error {
 		wts.X264Enc,
 		wts.RtpH264Pay,
 		wts.OutQueue,
-		wts.SipRtpSink,
+		wts.SipRtpOut,
 	); err != nil {
 		return fmt.Errorf("failed to link SelectorToSip video elements: %w", err)
 	}
@@ -316,12 +322,12 @@ func (wts *WebrtcToSip) Link(p *gst.Pipeline) error {
 		return fmt.Errorf("failed to link SelectorToSip rtcp funnel to rtpbin: %w", err)
 	}
 
-	if err := pipeline.LinkPad(
-		wts.RtpBin.GetRequestPad("send_rtcp_src_0"),
-		wts.WebrtcRtcpSink.GetStaticPad("sink"),
-	); err != nil {
-		return fmt.Errorf("failed to link SelectorToSip rtcp rtpbin to webrtc rtcp sink: %w", err)
-	}
+	// if err := pipeline.LinkPad(
+	// 	wts.RtpBin.GetRequestPad("send_rtcp_src_0"),
+	// 	wts.WebrtcRtcpSink.GetStaticPad("sink"),
+	// ); err != nil {
+	// 	return fmt.Errorf("failed to link SelectorToSip rtcp rtpbin to webrtc rtcp sink: %w", err)
+	// }
 
 	return nil
 }
@@ -354,11 +360,52 @@ func (wts *WebrtcToSip) Close(pipeline *gst.Pipeline) error {
 		wts.X264Enc,
 		wts.RtpH264Pay,
 		wts.OutQueue,
-		wts.SipRtpSink,
+		wts.SipRtpOut,
 
 		wts.RtcpFunnel,
 		// rtpbin
-		wts.WebrtcRtcpSink,
+		// wts.WebrtcRtcpSink,
 	)
+	if wts.WebrtcRtcpOut != nil {
+		pipeline.Remove(wts.WebrtcRtcpOut)
+	}
+	return nil
+}
+
+func (wts *WebrtcToSip) WriteRtcpTo(p *gst.Pipeline, w io.Writer) error {
+	if wts.WebrtcRtcpOut != nil {
+		return fmt.Errorf("webrtc rtcp writer already set")
+	}
+
+	handle := cgo.NewHandle(w)
+	defer handle.Delete()
+
+	rtcpWriter, err := gst.NewElementWithProperties("sinkwriter", map[string]interface{}{
+		"handle": uint64(uintptr(handle)),
+		"caps": gst.NewCapsFromString(
+			"application/x-rtcp",
+		),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create webrtc rtp writer: %w", err)
+	}
+
+	wts.WebrtcRtcpOut = rtcpWriter
+
+	if err := p.Add(wts.WebrtcRtcpOut); err != nil {
+		return fmt.Errorf("failed to add webrtc rtcp writer to pipeline: %w", err)
+	}
+
+	if err := pipeline.LinkPad(
+		wts.RtpBin.GetRequestPad("send_rtcp_src_0"),
+		wts.WebrtcRtcpOut.GetStaticPad("sink"),
+	); err != nil {
+		return fmt.Errorf("failed to link rtpbin to webrtc rtcp writer: %w", err)
+	}
+
+	if !wts.WebrtcRtcpOut.SyncStateWithParent() {
+		return fmt.Errorf("failed to sync webrtc rtcp writer state with parent")
+	}
+
 	return nil
 }

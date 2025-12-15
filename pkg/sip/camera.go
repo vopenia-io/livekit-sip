@@ -3,6 +3,7 @@ package sip
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/netip"
 	"time"
 
@@ -13,10 +14,8 @@ import (
 
 type CameraManager struct {
 	*VideoManager
-	ssrcs         map[string]uint32
-	tm            *TrackManager
-	cameraRtpOut  *MediaOutput
-	cameraRtcpOut *MediaOutput
+	ssrcs map[string]uint32
+	tm    *TrackManager
 }
 
 func NewCameraManager(log logger.Logger, ctx context.Context, room *Room, opts *MediaOptions, tm *TrackManager) (*CameraManager, error) {
@@ -43,18 +42,6 @@ func (cm *CameraManager) publishCameraTrack() error {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
-	if cm.cameraRtpOut != nil {
-		cm.io.RemoveOutput(cm.cameraRtpOut)
-		cm.log.Debugw("removed existing camera RTP output from media IO")
-		cm.cameraRtpOut = nil
-	}
-
-	if cm.cameraRtcpOut != nil {
-		cm.io.RemoveOutput(cm.cameraRtcpOut)
-		cm.log.Debugw("removed existing camera RTCP output from media IO")
-		cm.cameraRtcpOut = nil
-	}
-
 	to, err := cm.tm.Camera()
 	if err != nil {
 		return fmt.Errorf("could not get camera track output: %w", err)
@@ -74,7 +61,6 @@ func (cm *CameraManager) Reconcile(remote netip.Addr, media *sdpv2.SDPMedia) (Re
 	}
 
 	go func() {
-
 		if rs == ReconcileStatusUpdated {
 			if err := cm.RecoverTracks(); err != nil {
 				cm.log.Errorw("failed to recover camera tracks", err)
@@ -92,8 +78,8 @@ func (cm *CameraManager) Reconcile(remote netip.Addr, media *sdpv2.SDPMedia) (Re
 	return rs, nil
 }
 
-func (cm *CameraManager) CreateVideoPipeline(opt *MediaOptions) (SipPipeline, error) {
-	pipeline, err := camera_pipeline.New(cm.log)
+func (cm *CameraManager) CreateVideoPipeline(opt *MediaOptions, rtpConn, rtcpConn net.Conn) (SipPipeline, error) {
+	pipeline, err := camera_pipeline.New(cm.log, rtpConn, rtcpConn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create SIP WebRTC pipeline: %w", err)
 	}
@@ -115,33 +101,15 @@ func (cm *CameraManager) WebrtcTrackInput(ti *TrackInput, sid string, ssrc uint3
 		"hasRtpIn", ti.RtpIn != nil,
 		"hasRtcpIn", ti.RtcpIn != nil)
 
-	s, err := cm.pipeline.(*camera_pipeline.CameraPipeline).AddWebRTCSourceToSelector(ssrc)
+	p := cm.pipeline.(*camera_pipeline.CameraPipeline)
+
+	_, err := p.AddWebRTCSourceToSelector(ssrc, ti.RtpIn, ti.RtcpIn)
 	if err != nil {
 		cm.log.Errorw("failed to add WebRTC source to selector", err)
 		return fmt.Errorf("failed to add WebRTC source to selector: %w", err)
 	}
 
 	cm.ssrcs[sid] = ssrc
-
-	rtpMi, err := NewMediaInput(cm.ctx, s.RtpAppSrc, ti.RtpIn)
-	if err != nil {
-		cm.log.Errorw("failed to create WebRTC RTP media input", err)
-		return fmt.Errorf("failed to create WebRTC RTP media input: %w", err)
-	}
-	if err := cm.io.AddInputs(rtpMi); err != nil {
-		cm.log.Errorw("failed to add WebRTC RTP media input", err)
-		return fmt.Errorf("failed to add WebRTC RTP media input: %w", err)
-	}
-
-	rtcpMi, err := NewMediaInput(cm.ctx, s.RtcpAppSrc, ti.RtcpIn)
-	if err != nil {
-		cm.log.Errorw("failed to create WebRTC RTCP media input", err)
-		return fmt.Errorf("failed to create WebRTC RTCP media input: %w", err)
-	}
-	if err := cm.io.AddInputs(rtcpMi); err != nil {
-		cm.log.Errorw("failed to add WebRTC RTCP media input", err)
-		return fmt.Errorf("failed to add WebRTC RTCP media input: %w", err)
-	}
 	return nil
 }
 
@@ -170,25 +138,30 @@ func (cm *CameraManager) webrtcTrackOutput(to *TrackOutput) error {
 
 	pipeline := cm.pipeline.(*camera_pipeline.CameraPipeline)
 
-	rtpMo, err := NewMediaOutput(cm.ctx, to.RtpOut, pipeline.SipToWebrtc.WebrtcRtpAppSink)
-	if err != nil {
-		cm.log.Errorw("failed to create WebRTC RTP media output", err)
-		return fmt.Errorf("failed to create WebRTC RTP media output: %w", err)
-	}
-	if err := cm.io.AddOutputs(rtpMo); err != nil {
-		cm.log.Errorw("failed to add WebRTC RTP media output", err)
-		return fmt.Errorf("failed to add WebRTC RTP media output: %w", err)
+	if err := pipeline.WriteToWebRTC(to.RtpOut, to.RtcpOut); err != nil {
+		cm.log.Errorw("failed to write SIP RTP to WebRTC", err)
+		return fmt.Errorf("failed to write SIP RTP to WebRTC: %w", err)
 	}
 
-	rtcpMo, err := NewMediaOutput(cm.ctx, to.RtcpOut, pipeline.WebrtcToSip.WebrtcRtcpAppSink)
-	if err != nil {
-		cm.log.Errorw("failed to create WebRTC RTCP media output", err)
-		return fmt.Errorf("failed to create WebRTC RTCP media output: %w", err)
-	}
-	if err := cm.io.AddOutputs(rtcpMo); err != nil {
-		cm.log.Errorw("failed to add WebRTC RTCP media output", err)
-		return fmt.Errorf("failed to add WebRTC RTCP media output: %w", err)
-	}
+	// rtpMo, err := NewMediaOutput(cm.ctx, to.RtpOut, pipeline.SipToWebrtc.WebrtcRtpAppSink)
+	// if err != nil {
+	// 	cm.log.Errorw("failed to create WebRTC RTP media output", err)
+	// 	return fmt.Errorf("failed to create WebRTC RTP media output: %w", err)
+	// }
+	// if err := cm.io.AddOutputs(rtpMo); err != nil {
+	// 	cm.log.Errorw("failed to add WebRTC RTP media output", err)
+	// 	return fmt.Errorf("failed to add WebRTC RTP media output: %w", err)
+	// }
+
+	// rtcpMo, err := NewMediaOutput(cm.ctx, to.RtcpOut, pipeline.WebrtcToSip.WebrtcRtcpAppSink)
+	// if err != nil {
+	// 	cm.log.Errorw("failed to create WebRTC RTCP media output", err)
+	// 	return fmt.Errorf("failed to create WebRTC RTCP media output: %w", err)
+	// }
+	// if err := cm.io.AddOutputs(rtcpMo); err != nil {
+	// 	cm.log.Errorw("failed to add WebRTC RTCP media output", err)
+	// 	return fmt.Errorf("failed to add WebRTC RTCP media output: %w", err)
+	// }
 
 	return nil
 }

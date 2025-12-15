@@ -2,8 +2,8 @@ package camera_pipeline
 
 import (
 	"fmt"
+	"net"
 
-	"github.com/go-gst/go-gst/gst/app"
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/sip/pkg/sip/pipeline"
@@ -16,7 +16,7 @@ type CameraPipeline struct {
 	WebrtcToSip *WebrtcToSip
 }
 
-func New(log logger.Logger) (*CameraPipeline, error) {
+func New(log logger.Logger, rtpConn, rtcpConn net.Conn) (*CameraPipeline, error) {
 	cp := &CameraPipeline{}
 
 	p, err := pipeline.New(log)
@@ -26,12 +26,12 @@ func New(log logger.Logger) (*CameraPipeline, error) {
 
 	cp.BasePipeline = p
 
-	cp.SipToWebrtc, err = pipeline.CastErr[*SipToWebrtc](cp.AddChain(buildSipToWebRTCChain(log.WithComponent("sip_to_webrtc"))))
+	cp.SipToWebrtc, err = pipeline.CastErr[*SipToWebrtc](cp.AddChain(buildSipToWebRTCChain(log.WithComponent("sip_to_webrtc"), rtpConn, rtcpConn)))
 	if err != nil {
 		return nil, err
 	}
 
-	cp.WebrtcToSip, err = pipeline.CastErr[*WebrtcToSip](cp.AddChain(buildSelectorToSipChain(log.WithComponent("selector_to_sip"))))
+	cp.WebrtcToSip, err = pipeline.CastErr[*WebrtcToSip](cp.AddChain(buildSelectorToSipChain(log.WithComponent("selector_to_sip"), rtpConn, rtcpConn)))
 	if err != nil {
 		return nil, err
 	}
@@ -53,22 +53,25 @@ func (cp *CameraPipeline) Configure(media *sdpv2.SDPMedia) error {
 	return nil
 }
 
-// RtpSink implements sip.SipPipeline.
-func (gp *CameraPipeline) RtpSink() *app.Sink {
-	return gp.WebrtcToSip.SipRtpAppSink
-}
+func (cp *CameraPipeline) Close() error {
+	if err := func() error {
+		cp.Mu.Lock()
+		defer cp.Mu.Unlock()
 
-// RtpSrc implements sip.SipPipeline.
-func (gp *CameraPipeline) RtpSrc() *app.Source {
-	return gp.SipToWebrtc.SipRtpAppSrc
-}
+		if cp.Closed() {
+			return nil
+		}
 
-// RtcpSink implements sip.SipPipeline.
-func (gp *CameraPipeline) RtcpSink() *app.Sink {
-	return gp.SipToWebrtc.SipRtcpAppSink
-}
+		if err := cp.SipToWebrtc.Close(cp.Pipeline); err != nil {
+			return fmt.Errorf("failed to close SIP to WebRTC chain: %w", err)
+		}
+		if err := cp.WebrtcToSip.Close(cp.Pipeline); err != nil {
+			return fmt.Errorf("failed to close WebRTC to SIP chain: %w", err)
+		}
 
-// RtcpSrc implements sip.SipPipeline.
-func (gp *CameraPipeline) RtcpSrc() *app.Source {
-	return gp.SipToWebrtc.SipRtcpAppSrc
+		return nil
+	}(); err != nil {
+		return err
+	}
+	return cp.BasePipeline.Close()
 }

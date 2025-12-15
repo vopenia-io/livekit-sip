@@ -2,6 +2,7 @@ package camera_pipeline
 
 import (
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
@@ -9,7 +10,7 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline"
 )
 
-func (gp *CameraPipeline) AddWebRTCSourceToSelector(ssrc uint32) (*WebrtcTrack, error) {
+func (gp *CameraPipeline) AddWebRTCSourceToSelector(ssrc uint32, rtp, rtcp io.Reader) (*WebrtcTrack, error) {
 	gp.Mu.Lock()
 	defer gp.Mu.Unlock()
 
@@ -30,7 +31,7 @@ func (gp *CameraPipeline) AddWebRTCSourceToSelector(ssrc uint32) (*WebrtcTrack, 
 	}
 
 	gp.Log.Infow("Adding WebRTC source to selector", "ssrc", ssrc, "state", state.String())
-	webRTCToSelector, err := pipeline.CastErr[*WebrtcTrack](gp.AddChain(buildWebrtcTrack(gp.Log.WithComponent("webrtc_to_selector"), gp.WebrtcToSip, ssrc)))
+	webRTCToSelector, err := pipeline.CastErr[*WebrtcTrack](gp.AddChain(buildWebrtcTrack(gp.Log.WithComponent("webrtc_to_selector"), gp.WebrtcToSip, ssrc, rtp, rtcp)))
 	if err != nil {
 		gp.Log.Errorw("Error building WebRTC to selector chain", err)
 		return nil, err
@@ -242,7 +243,7 @@ func (gp *CameraPipeline) setupAutoSwitching() error {
 	}); err != nil {
 		return fmt.Errorf("failed to connect notify::active-pad signal to selector: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -318,6 +319,29 @@ func (gp *CameraPipeline) RequestKeyframe(wt *WebrtcTrack) error {
 
 	if !wt.RtpBinPad.SendEvent(event) {
 		return fmt.Errorf("failed to send force key unit event to webrtc source")
+	}
+
+	return nil
+}
+
+func (gp *CameraPipeline) WriteToWebRTC(rtp, rtcp io.Writer) error {
+	gp.Mu.Lock()
+	defer gp.Mu.Unlock()
+
+	if gp.Closed() {
+		return fmt.Errorf("pipeline is closed")
+	}
+
+	if err := gp.SipToWebrtc.WriteRtpTo(gp.Pipeline, rtp); err != nil {
+		return fmt.Errorf("failed to write RTP to WebRTC: %w", err)
+	}
+
+	if err := gp.WebrtcToSip.WriteRtcpTo(gp.Pipeline, rtcp); err != nil {
+		return fmt.Errorf("failed to write RTCP to WebRTC: %w", err)
+	}
+
+	if err := gp.Pipeline.SetState(gst.StatePlaying); err != nil {
+		return fmt.Errorf("failed to set pipeline to playing state: %w", err)
 	}
 
 	return nil
