@@ -1586,24 +1586,20 @@ func (c *inboundCall) transferCall(ctx context.Context, transferTo string, heade
 
 }
 
-// switchRoom performs an internal room-to-room transfer without SIP REFER.
-// This is useful when the SIP provider doesn't support REFER (like IPPI).
-// It disconnects from the current LiveKit room and reconnects to the target room
-// while keeping the SIP call active.
+// switchRoom transfers the call to a different LiveKit room without SIP REFER.
 func (c *inboundCall) switchRoom(ctx context.Context, targetRoomName string, dialtone bool) (retErr error) {
-	c.log().Infow("switching room internally", "targetRoom", targetRoomName)
+	c.log().Infow("switching room", "targetRoom", targetRoomName)
 
 	tID := c.state.StartTransfer(ctx, targetRoomName)
 	defer func() {
 		c.state.EndTransfer(ctx, tID, retErr)
 	}()
 
-	// If call hasn't been accepted yet (still ringing), accept it now before switching rooms.
-	// This happens when switchRoom is called while waitSubscribe is still waiting.
+	// Accept call if still ringing
 	if !c.started.IsBroken() && c.pendingAnswerSDP != nil {
-		c.log().Infow("Accepting call during room switch")
+		c.log().Infow("accepting call during room switch")
 		if err := c.cc.Accept(ctx, c.pendingAnswerSDP, nil); err != nil {
-			c.log().Errorw("Cannot accept call during room switch", err)
+			c.log().Errorw("cannot accept call during room switch", err)
 			return psrpc.NewErrorf(psrpc.Internal, "failed to accept call: %v", err)
 		}
 		c.media.EnableTimeout(true)
@@ -1613,7 +1609,7 @@ func (c *inboundCall) switchRoom(ctx context.Context, targetRoomName string, dia
 		c.started.Break()
 	}
 
-	// Optionally play dial tone during switch
+	// Play dial tone during switch
 	var rcancel context.CancelFunc
 	if dialtone && c.started.IsBroken() && !c.done.Load() {
 		const ringVolume = math.MaxInt16 / 2
@@ -1634,16 +1630,12 @@ func (c *inboundCall) switchRoom(ctx context.Context, targetRoomName string, dia
 		}
 	}()
 
-	// Get the old room to disconnect
 	oldRoom := c.lkRoom.Room()
 	if oldRoom == nil {
 		return psrpc.NewErrorf(psrpc.Internal, "not connected to any room")
 	}
-
-	// Get participant info from old room
 	oldParticipant := c.lkRoom.Participant()
 
-	// Create new room config for target room
 	newRconf := RoomConfig{
 		RoomName: targetRoomName,
 		Participant: ParticipantConfig{
@@ -1653,17 +1645,13 @@ func (c *inboundCall) switchRoom(ctx context.Context, targetRoomName string, dia
 		},
 	}
 
-	// Create a new Room instance for the target room
 	newLkRoom := c.s.getRoom(c.log(), &c.stats.Room)
-
-	// Connect to the new room first (before disconnecting old)
 	err := newLkRoom.Connect(c.s.conf, newRconf)
 	if err != nil {
 		c.log().Errorw("failed to connect to target room", err, "targetRoom", targetRoomName)
 		return psrpc.NewErrorf(psrpc.Internal, "failed to connect to target room: %v", err)
 	}
 
-	// Publish audio track in the new room
 	local, err := newLkRoom.NewParticipantTrack(RoomSampleRate)
 	if err != nil {
 		_ = newLkRoom.Close()
@@ -1671,16 +1659,23 @@ func (c *inboundCall) switchRoom(ctx context.Context, targetRoomName string, dia
 		return psrpc.NewErrorf(psrpc.Internal, "failed to publish track: %v", err)
 	}
 
-	// Swap the room - redirect audio to new room
+	// Disconnect old room (don't close writer - it's shared with MediaPort)
 	oldLkRoom := c.lkRoom
-	c.lkRoom = newLkRoom
-	c.media.WriteAudioTo(local)
+	_ = oldLkRoom.SwapOutput(nil)
+	oldLkRoom.SetDTMFOutput(nil)
 
-	// Enable subscription in new room
+	c.lkRoom = newLkRoom
+
+	// Connect audio: SIP → Room and Room → SIP
+	c.media.WriteAudioTo(local)
+	if w := newLkRoom.SwapOutput(c.media.GetAudioWriter()); w != nil {
+		_ = w.Close()
+	}
+	newLkRoom.SetDTMFOutput(c.media)
+
 	newLkRoom.Subscribe()
 
-	// Disconnect from old room
-	// Set switching flag to prevent OnDisconnected from triggering call close
+	// Close old room
 	oldLkRoom.SetSwitching(true)
 	_ = oldLkRoom.CloseWithReason(livekit.DisconnectReason_CLIENT_INITIATED)
 
