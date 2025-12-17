@@ -22,6 +22,10 @@ func (p *BasePipeline) debug() (string, string, gst.State, error) {
 	p.Mu.Lock()
 	defer p.Mu.Unlock()
 
+	if p.Pipeline == nil {
+		return "", "", gst.StateNull, ErrPipielineNotRunning
+	}
+
 	state := p.Pipeline.GetCurrentState()
 	if state == gst.StateNull {
 		return "", "", state, ErrPipielineNotRunning
@@ -39,7 +43,13 @@ func (p *BasePipeline) debug() (string, string, gst.State, error) {
 }
 
 func (p *BasePipeline) Monitor() {
+	p.Mu.Lock()
+	if p.Pipeline == nil {
+		p.Mu.Unlock()
+		return
+	}
 	name := p.Pipeline.GetName()
+	p.Mu.Unlock()
 
 	logFile, err := os.Create(fmt.Sprintf("%s_pipeline_debug.log", name))
 	if err != nil {

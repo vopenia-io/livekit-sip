@@ -41,6 +41,14 @@ type SipToWebrtc struct {
 	WebrtcRtpAppSink *app.Sink
 	SipRtcpAppSrc    *app.Source
 	SipRtcpAppSink   *app.Sink
+
+	// Signal handlers for cleanup
+	rtpBinPadAddedHandle glib.SignalHandle
+
+	// Request pads for cleanup
+	recvRtpSinkPad  *gst.Pad
+	recvRtcpSinkPad *gst.Pad
+	sendRtcpSrcPad  *gst.Pad
 }
 
 func (stw *SipToWebrtc) Configure(media *v2.SDPMedia) error {
@@ -265,19 +273,18 @@ func (stw *SipToWebrtc) Add(p *gst.Pipeline) error {
 
 // Link implements GstChain.
 func (stw *SipToWebrtc) Link(p *gst.Pipeline) error {
-	// link rtp path
+	// link rtp path - store request pad for cleanup
+	stw.recvRtpSinkPad = stw.RtpBin.GetRequestPad("recv_rtp_sink_0")
 	if err := pipeline.LinkPad(
 		stw.SipRtpSrc.GetStaticPad("src"),
-		stw.RtpBin.GetRequestPad("recv_rtp_sink_0"),
+		stw.recvRtpSinkPad,
 	); err != nil {
 		return fmt.Errorf("failed to link sip rtp src to rtpbin: %w", err)
 	}
 
-	var (
-		hnd glib.SignalHandle
-		err error
-	)
-	if hnd, err = stw.RtpBin.Connect("pad-added", func(rtpbin *gst.Element, pad *gst.Pad) {
+	var err error
+	// Store the signal handle for cleanup
+	stw.rtpBinPadAddedHandle, err = stw.RtpBin.Connect("pad-added", func(rtpbin *gst.Element, pad *gst.Pad) {
 		stw.log.Debugw("RTPBIN PAD ADDED", "pad", pad.GetName())
 		padName := pad.GetName()
 		if !strings.HasPrefix(padName, "recv_rtp_src_") {
@@ -297,8 +304,8 @@ func (stw *SipToWebrtc) Link(p *gst.Pipeline) error {
 			return
 		}
 		stw.log.Infow("Linked RTP pad", "pad", padName)
-		stw.RtpBin.HandlerDisconnect(hnd)
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("failed to connect to rtpbin pad-added signal: %w", err)
 	}
 
@@ -319,16 +326,18 @@ func (stw *SipToWebrtc) Link(p *gst.Pipeline) error {
 		return fmt.Errorf("failed to link sip to webrtc rtp path: %w", err)
 	}
 
-	// link rtcp path
+	// link rtcp path - store request pads for cleanup
+	stw.recvRtcpSinkPad = stw.RtpBin.GetRequestPad("recv_rtcp_sink_0")
 	if err := pipeline.LinkPad(
 		stw.SipRtcpSrc.GetStaticPad("src"),
-		stw.RtpBin.GetRequestPad("recv_rtcp_sink_0"),
+		stw.recvRtcpSinkPad,
 	); err != nil {
 		return fmt.Errorf("failed to link sip rtcp src to rtpbin: %w", err)
 	}
 
+	stw.sendRtcpSrcPad = stw.RtpBin.GetRequestPad("send_rtcp_src_0")
 	if err := pipeline.LinkPad(
-		stw.RtpBin.GetRequestPad("send_rtcp_src_0"),
+		stw.sendRtcpSrcPad,
 		stw.SipRtcpSink.GetStaticPad("sink"),
 	); err != nil {
 		return fmt.Errorf("failed to link rtpbin rtcp src to sip rtcp sink: %w", err)
@@ -338,12 +347,22 @@ func (stw *SipToWebrtc) Link(p *gst.Pipeline) error {
 }
 
 // Close implements GstChain.
-func (stw *SipToWebrtc) Close(pipeline *gst.Pipeline) error {
-	if err := pipeline.RemoveMany(
-		stw.RtpBin,
+func (stw *SipToWebrtc) Close(p *gst.Pipeline) error {
+	// 1. Disconnect signal handlers first (prevents callbacks during cleanup)
+	pipeline.DisconnectSignal(stw.RtpBin, stw.rtpBinPadAddedHandle)
+	stw.rtpBinPadAddedHandle = 0
 
+	// 2. Release ALL request pads from rtpbin (including internal ghost/proxy pads)
+	// This must happen while rtpbin is still in a valid state
+	pipeline.ReleaseAllRequestPads(stw.RtpBin)
+	stw.recvRtpSinkPad = nil
+	stw.recvRtcpSinkPad = nil
+	stw.sendRtcpSrcPad = nil
+
+	// 4. Define elements to clean up
+	elements := []*gst.Element{
+		stw.RtpBin,
 		stw.SipRtpSrc,
-		// rptbin
 		stw.Depay,
 		stw.Parse,
 		stw.Decoder,
@@ -356,12 +375,48 @@ func (stw *SipToWebrtc) Close(pipeline *gst.Pipeline) error {
 		stw.Vp8Enc,
 		stw.RtpVp8Pay,
 		stw.WebrtcRtpSink,
-
 		stw.SipRtcpSrc,
-		// rtpbin
 		stw.SipRtcpSink,
-	); err != nil {
-		return fmt.Errorf("failed to remove sip to webrtc chain from pipeline: %w", err)
 	}
+
+	// 5. Set elements to NULL state before removal
+	for _, elem := range elements {
+		if elem != nil {
+			elem.SetState(gst.StateNull)
+		}
+	}
+
+	// 6. Remove elements from pipeline
+	if p != nil {
+		if err := p.RemoveMany(elements...); err != nil {
+			stw.log.Warnw("failed to remove sip to webrtc chain from pipeline", err)
+		}
+	}
+
+	// 7. Unref each element to release the Go-side reference
+	pipeline.UnrefElements(elements...)
+
+	// 8. Nil out struct fields to release Go references
+	stw.RtpBin = nil
+	stw.SipRtpSrc = nil
+	stw.Depay = nil
+	stw.Parse = nil
+	stw.Decoder = nil
+	stw.VideoConvert = nil
+	stw.VideoScale = nil
+	stw.ResFilter = nil
+	stw.VideoConvert2 = nil
+	stw.VideoRate = nil
+	stw.FpsFilter = nil
+	stw.Vp8Enc = nil
+	stw.RtpVp8Pay = nil
+	stw.WebrtcRtpSink = nil
+	stw.SipRtcpSrc = nil
+	stw.SipRtcpSink = nil
+	stw.SipRtpAppSrc = nil
+	stw.WebrtcRtpAppSink = nil
+	stw.SipRtcpAppSrc = nil
+	stw.SipRtcpAppSink = nil
+
 	return nil
 }

@@ -28,6 +28,9 @@ type WebrtcTrack struct {
 	RtcpPad    *gst.Pad
 	RtpBinPad  *gst.Pad
 	RtpSelPad  *gst.Pad
+
+	// Closed flag to prevent double-cleanup
+	closed bool
 }
 
 var _ pipeline.GstChain = (*WebrtcTrack)(nil)
@@ -185,22 +188,80 @@ func (wt *WebrtcTrack) sync() error {
 
 // Close implements GstChain.
 func (wt *WebrtcTrack) Close(p *gst.Pipeline) error {
+	// 1. Check/set closed flag to prevent double-cleanup
+	if wt.closed {
+		return nil
+	}
+	wt.closed = true
+
+	// 2. Unlink and release request pads BEFORE setting elements to NULL
+	// RtpPad is a request pad on RtpFunnel
+	if wt.RtpPad != nil {
+		wt.RtpPad.SetActive(false)
+		peer := wt.RtpPad.GetPeer()
+		if peer != nil {
+			peer.Unlink(wt.RtpPad)
+		}
+	}
+	// RtcpPad is a request pad on RtcpFunnel
+	if wt.RtcpPad != nil {
+		wt.RtcpPad.SetActive(false)
+		peer := wt.RtcpPad.GetPeer()
+		if peer != nil {
+			peer.Unlink(wt.RtcpPad)
+		}
+	}
+	// RtpSelPad is a request pad on InputSelector
+	if wt.RtpSelPad != nil {
+		wt.RtpSelPad.SetActive(false)
+		peer := wt.RtpSelPad.GetPeer()
+		if peer != nil {
+			peer.Unlink(wt.RtpSelPad)
+		}
+	}
+
+	// 3. Release all request pads (while parent elements still valid)
 	pipeline.ReleasePad(wt.RtpPad)
 	pipeline.ReleasePad(wt.RtcpPad)
 	pipeline.ReleasePad(wt.RtpSelPad)
-	pipeline.ReleasePad(wt.RtpBinPad)
+	wt.RtpPad = nil
+	wt.RtcpPad = nil
+	wt.RtpSelPad = nil
+	wt.RtpBinPad = nil // Dynamic pad from rtpbin, not a request pad
 
-	p.RemoveMany(
+	// 4. Define elements to clean up
+	elements := []*gst.Element{
 		wt.RtpSrc,
 		wt.Vp8Depay,
 		wt.RtpQueue,
 		wt.RtcpSrc,
-	)
+	}
+
+	// 5. Set elements to NULL state before removal
+	for _, elem := range elements {
+		if elem != nil {
+			elem.SetState(gst.StateNull)
+		}
+	}
+
+	// 6. Remove elements from pipeline
+	if p != nil {
+		if err := p.RemoveMany(elements...); err != nil {
+			wt.log.Warnw("failed to remove webrtc track elements from pipeline", err, "ssrc", wt.SSRC)
+		}
+	}
+
+	// 7. Unref each element
+	pipeline.UnrefElements(elements...)
+
+	// 8. Nil out struct fields
+	wt.RtpSrc = nil
+	wt.Vp8Depay = nil
+	wt.RtpQueue = nil
+	wt.RtcpSrc = nil
+	wt.RtpAppSrc = nil
+	wt.RtcpAppSrc = nil
 
 	wt.log.Infow("Closed webrtc track", "ssrc", wt.SSRC)
-	wt.parent.mu.Lock()
-	defer wt.parent.mu.Unlock()
-	delete(wt.parent.WebrtcTracks, wt.SSRC)
-	wt.log.Infow("Removed webrtc track from parent", "ssrc", wt.SSRC)
 	return nil
 }

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
+	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/app"
 	"github.com/livekit/media-sdk/h264"
@@ -48,6 +48,15 @@ type WebrtcToSip struct {
 
 	SipRtpAppSink     *app.Sink
 	WebrtcRtcpAppSink *app.Sink
+
+	// Signal handlers for cleanup
+	rtpBinPtMapHandle    glib.SignalHandle
+	rtpBinPadAddedHandle glib.SignalHandle
+
+	// Request pads for cleanup
+	recvRtpSinkPad  *gst.Pad
+	recvRtcpSinkPad *gst.Pad
+	sendRtcpSrcPad  *gst.Pad
 }
 
 func (wts *WebrtcToSip) Configure(media *v2.SDPMedia) error {
@@ -237,25 +246,32 @@ func (wts *WebrtcToSip) Add(pipeline *gst.Pipeline) error {
 
 // Link implements GstChain.
 func (wts *WebrtcToSip) Link(p *gst.Pipeline) error {
-	if _, err := wts.RtpBin.Connect("request-pt-map", func(self *gst.Element, session uint, pt uint) *gst.Caps {
+	var err error
+
+	// Store signal handle for cleanup
+	wts.rtpBinPtMapHandle, err = wts.RtpBin.Connect("request-pt-map", func(self *gst.Element, session uint, pt uint) *gst.Caps {
 		caps, ok := webrtcCaps[pt]
 		if !ok {
 			return nil
 		}
 		wts.log.Debugw("RTPBIN requested PT map", "pt", pt, "caps", caps)
 		return gst.NewCapsFromString(caps)
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("failed to connect to rtpbin request-pt-map signal: %w", err)
 	}
 
+	// Store request pad for cleanup
+	wts.recvRtpSinkPad = wts.RtpBin.GetRequestPad("recv_rtp_sink_0")
 	if err := pipeline.LinkPad(
 		wts.RtpFunnel.GetStaticPad("src"),
-		wts.RtpBin.GetRequestPad("recv_rtp_sink_0"),
+		wts.recvRtpSinkPad,
 	); err != nil {
 		return fmt.Errorf("failed to link WebrtcToSip rtp funnel to rtpbin: %w", err)
 	}
 
-	if _, err := wts.RtpBin.Connect("pad-added", func(rtpbin *gst.Element, pad *gst.Pad) {
+	// Store signal handle for cleanup
+	wts.rtpBinPadAddedHandle, err = wts.RtpBin.Connect("pad-added", func(rtpbin *gst.Element, pad *gst.Pad) {
 		wts.log.Debugw("RTPBIN PAD ADDED", "pad", pad.GetName())
 		padName := pad.GetName()
 		if !strings.HasPrefix(padName, "recv_rtp_src_") {
@@ -290,7 +306,8 @@ func (wts *WebrtcToSip) Link(p *gst.Pipeline) error {
 			}
 		})
 		wts.log.Infow("Linked RTP pad", "pad", padName)
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("failed to connect to rtpbin pad-added signal: %w", err)
 	}
 
@@ -310,15 +327,18 @@ func (wts *WebrtcToSip) Link(p *gst.Pipeline) error {
 		return fmt.Errorf("failed to link SelectorToSip video elements: %w", err)
 	}
 
+	// Store request pads for cleanup
+	wts.recvRtcpSinkPad = wts.RtpBin.GetRequestPad("recv_rtcp_sink_0")
 	if err := pipeline.LinkPad(
 		wts.RtcpFunnel.GetStaticPad("src"),
-		wts.RtpBin.GetRequestPad("recv_rtcp_sink_0"),
+		wts.recvRtcpSinkPad,
 	); err != nil {
 		return fmt.Errorf("failed to link SelectorToSip rtcp funnel to rtpbin: %w", err)
 	}
 
+	wts.sendRtcpSrcPad = wts.RtpBin.GetRequestPad("send_rtcp_src_0")
 	if err := pipeline.LinkPad(
-		wts.RtpBin.GetRequestPad("send_rtcp_src_0"),
+		wts.sendRtcpSrcPad,
 		wts.WebrtcRtcpSink.GetStaticPad("sink"),
 	); err != nil {
 		return fmt.Errorf("failed to link SelectorToSip rtcp rtpbin to webrtc rtcp sink: %w", err)
@@ -328,26 +348,39 @@ func (wts *WebrtcToSip) Link(p *gst.Pipeline) error {
 }
 
 // Close implements GstChain.
-func (wts *WebrtcToSip) Close(pipeline *gst.Pipeline) error {
-	var errs []error
-	for _, track := range wts.WebrtcTracks {
-		if err := track.Close(pipeline); err != nil {
-			errs = append(errs, fmt.Errorf("failed to close webrtc to selector: %w", err))
+func (wts *WebrtcToSip) Close(p *gst.Pipeline) error {
+	wts.mu.Lock()
+	defer wts.mu.Unlock()
+
+	// 1. Close all WebrtcTracks first (releases their funnel/selector request pads)
+	for ssrc, track := range wts.WebrtcTracks {
+		if err := track.Close(p); err != nil {
+			wts.log.Warnw("failed to close webrtc track", err, "ssrc", ssrc)
 		}
 	}
-	if len(errs) > 0 {
-		return fmt.Errorf("errors closing SelectorToSip: %v", errs)
-	}
+	wts.WebrtcTracks = nil
 
-	time.Sleep(100 * time.Millisecond) // webrtc tracks need time to unlink
+	// 2. Disconnect signal handlers (prevents callbacks during cleanup)
+	pipeline.DisconnectSignal(wts.RtpBin, wts.rtpBinPtMapHandle)
+	pipeline.DisconnectSignal(wts.RtpBin, wts.rtpBinPadAddedHandle)
+	wts.rtpBinPtMapHandle = 0
+	wts.rtpBinPadAddedHandle = 0
 
-	pipeline.RemoveMany(
+	// 3. Release ALL request pads from rtpbin, funnel, and selector
+	// This must happen while elements are still in a valid state
+	pipeline.ReleaseAllRequestPads(wts.RtpBin)
+	pipeline.ReleaseAllRequestPads(wts.RtpFunnel)
+	pipeline.ReleaseAllRequestPads(wts.RtcpFunnel)
+	pipeline.ReleaseAllRequestPads(wts.InputSelector)
+	wts.recvRtpSinkPad = nil
+	wts.recvRtcpSinkPad = nil
+	wts.sendRtcpSrcPad = nil
+
+	// 5. Define elements to clean up
+	elements := []*gst.Element{
 		wts.RtpBin,
-
 		wts.RtpFunnel,
-		// rtpbin
 		wts.InputSelector,
-		// wts.Vp8Depay,
 		wts.Vp8Dec,
 		wts.VideoRate,
 		wts.RateFilter,
@@ -358,10 +391,45 @@ func (wts *WebrtcToSip) Close(pipeline *gst.Pipeline) error {
 		wts.RtpH264Pay,
 		wts.OutQueue,
 		wts.SipRtpSink,
-
 		wts.RtcpFunnel,
-		// rtpbin
 		wts.WebrtcRtcpSink,
-	)
+	}
+
+	// 6. Set elements to NULL state before removal
+	for _, elem := range elements {
+		if elem != nil {
+			elem.SetState(gst.StateNull)
+		}
+	}
+
+	// 7. Remove elements from pipeline
+	if p != nil {
+		if err := p.RemoveMany(elements...); err != nil {
+			wts.log.Warnw("failed to remove webrtc to sip chain from pipeline", err)
+		}
+	}
+
+	// 8. Unref each element
+	pipeline.UnrefElements(elements...)
+
+	// 9. Nil out struct fields
+	wts.RtpBin = nil
+	wts.RtpFunnel = nil
+	wts.InputSelector = nil
+	wts.Vp8Dec = nil
+	wts.VideoRate = nil
+	wts.RateFilter = nil
+	wts.VideoScale = nil
+	wts.ScaleFilter = nil
+	wts.Queue = nil
+	wts.X264Enc = nil
+	wts.RtpH264Pay = nil
+	wts.OutQueue = nil
+	wts.SipRtpSink = nil
+	wts.RtcpFunnel = nil
+	wts.WebrtcRtcpSink = nil
+	wts.SipRtpAppSink = nil
+	wts.WebrtcRtcpAppSink = nil
+
 	return nil
 }

@@ -86,7 +86,16 @@ func (p *BasePipeline) close() error {
 	}
 	p.closed.Break()
 
-	return p.Pipeline.SetState(gst.StateNull)
+	if p.Pipeline != nil {
+		if err := p.Pipeline.SetState(gst.StateNull); err != nil {
+			p.Log.Warnw("failed to set pipeline to NULL state", err)
+		}
+		// Unref the pipeline to release Go-side reference
+		p.Pipeline.Unref()
+		p.Pipeline = nil
+	}
+
+	return nil
 }
 
 func (p *BasePipeline) Close() error {
@@ -98,6 +107,12 @@ func (p *BasePipeline) Close() error {
 
 func (p *BasePipeline) Closed() bool {
 	return p.closed.IsBroken()
+}
+
+// MarkClosed marks the pipeline as closed without performing cleanup.
+// Used by embedded pipelines that override Close() to signal the monitor goroutine.
+func (p *BasePipeline) MarkClosed() {
+	p.closed.Break()
 }
 
 func New(log logger.Logger) (*BasePipeline, error) {

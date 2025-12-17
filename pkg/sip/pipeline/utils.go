@@ -3,6 +3,7 @@ package pipeline
 import (
 	"fmt"
 
+	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 )
 
@@ -49,4 +50,54 @@ func ValidatePad(pad *gst.Pad) error {
 		return fmt.Errorf("pad's parent element is nil")
 	}
 	return nil
+}
+
+// UnrefElement safely unrefs an element if it's not nil
+func UnrefElement(elem *gst.Element) {
+	if elem != nil {
+		elem.Unref()
+	}
+}
+
+// UnrefElements safely unrefs multiple elements
+func UnrefElements(elems ...*gst.Element) {
+	for _, elem := range elems {
+		UnrefElement(elem)
+	}
+}
+
+// DisconnectSignal safely disconnects a signal handler from an element
+func DisconnectSignal(elem *gst.Element, handle glib.SignalHandle) {
+	if elem != nil && handle != 0 {
+		elem.HandlerDisconnect(handle)
+	}
+}
+
+// ReleaseAllRequestPads releases all request pads from an element.
+// This is useful for elements like rtpbin that create internal ghost/proxy pads.
+func ReleaseAllRequestPads(elem *gst.Element) {
+	if elem == nil {
+		return
+	}
+	pads, err := elem.GetPads()
+	if err != nil {
+		return
+	}
+	for _, pad := range pads {
+		// Only release request pads (not static pads)
+		// Request pads have templates with GST_PAD_REQUEST presence
+		tmpl := pad.GetPadTemplate()
+		if tmpl != nil && tmpl.Presence() == gst.PadPresenceRequest {
+			// Deactivate and unlink first
+			pad.SetActive(false)
+			if peer := pad.GetPeer(); peer != nil {
+				if pad.GetDirection() == gst.PadDirectionSource {
+					pad.Unlink(peer)
+				} else {
+					peer.Unlink(pad)
+				}
+			}
+			elem.ReleaseRequestPad(pad)
+		}
+	}
 }

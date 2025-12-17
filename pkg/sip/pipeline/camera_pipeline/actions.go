@@ -216,34 +216,40 @@ func (gp *CameraPipeline) setupAutoSwitching() error {
 		return nil
 	}
 
-	if _, err := gp.WebrtcToSip.InputSelector.Connect("pad-added", func(selector *gst.Element, pad *gst.Pad) {
+	var err error
+
+	// Store signal handles for cleanup
+	gp.inputSelectorPadAddedHandle, err = gp.WebrtcToSip.InputSelector.Connect("pad-added", func(selector *gst.Element, pad *gst.Pad) {
 		gp.Log.Infow("New pad added to WebRTC selector, ensuring active source", "pad", pad.GetName())
 		if err := quickSwitch(); err != nil {
 			gp.Log.Errorw("Failed to ensure active source after new pad added to selector", err)
 		}
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("failed to connect pad-added signal to selector: %w", err)
 	}
 
-	if _, err := gp.WebrtcToSip.InputSelector.Connect("pad-removed", func(selector *gst.Element, pad *gst.Pad) {
+	gp.inputSelectorPadRemovedHandle, err = gp.WebrtcToSip.InputSelector.Connect("pad-removed", func(selector *gst.Element, pad *gst.Pad) {
 		gp.Log.Infow("Pad removed from WebRTC selector, ensuring active source", "pad", pad.GetName())
 		time.Sleep(1 * time.Second) // give some time for the selector to actually remove the pad
 		if err := quickSwitch(); err != nil {
 			gp.Log.Errorw("Failed to ensure active source after pad removed from selector", err)
 		}
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("failed to connect pad-removed signal to selector: %w", err)
 	}
 
-	if _, err := gp.WebrtcToSip.InputSelector.Connect("notify::active-pad", func(selector *gst.Element) {
+	gp.inputSelectorActivePadHandle, err = gp.WebrtcToSip.InputSelector.Connect("notify::active-pad", func(selector *gst.Element) {
 		gp.Log.Infow("WebRTC selector active pad changed")
 		if err := quickSwitch(); err != nil {
 			gp.Log.Errorw("Failed to ensure active source after selector active pad changed", err)
 		}
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("failed to connect notify::active-pad signal to selector: %w", err)
 	}
-	
+
 	return nil
 }
 

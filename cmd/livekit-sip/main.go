@@ -19,8 +19,11 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
+	"time"
 
+	"github.com/go-gst/go-gst/gst"
 	"github.com/urfave/cli/v3"
 
 	"github.com/livekit/protocol/logger"
@@ -61,6 +64,14 @@ func main() {
 	if err := cmd.Run(context.Background(), os.Args); err != nil {
 		fmt.Println(err)
 	}
+
+	// Force GC to release Go references before GStreamer deinit
+	runtime.GC()
+	// Wait for finalizers to complete before GStreamer shutdown
+	time.Sleep(500 * time.Millisecond)
+	runtime.GC()
+	// Deinit GStreamer - this triggers the leak tracer report
+	gst.Deinit()
 }
 
 func runService(_ context.Context, c *cli.Command) error {
