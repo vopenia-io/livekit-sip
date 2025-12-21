@@ -28,6 +28,9 @@ type WebrtcTrack struct {
 	RtpQueue *gst.Element
 
 	WebrtcRtcpIn *gst.Element
+
+	// InputSelectorSinkPad is the sink pad on the InputSelector that this track is linked to
+	InputSelectorSinkPad *gst.Pad
 }
 
 var _ pipeline.GstChain = (*WebrtcTrack)(nil)
@@ -119,9 +122,10 @@ func (wt *WebrtcTrack) LinkParent(rtpbinPad *gst.Pad) error {
 		return fmt.Errorf("failed to link webrtc track rtp elements: %w", err)
 	}
 
+	wt.InputSelectorSinkPad = wt.parent.InputSelector.GetRequestPad("sink_%u")
 	if err := pipeline.LinkPad(
 		wt.RtpQueue.GetStaticPad("src"),
-		wt.parent.InputSelector.GetRequestPad("sink_%u"),
+		wt.InputSelectorSinkPad,
 	); err != nil {
 		return fmt.Errorf("failed to link webrtc rtp queue to input selector: %w", err)
 	}

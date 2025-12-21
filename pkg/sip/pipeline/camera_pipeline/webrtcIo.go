@@ -153,6 +153,13 @@ func (wio *WebrtcIo) Link() error {
 			return
 		}
 		wio.log.Infow("Linked RTP pad", "pad", padName)
+
+		// Switch input selector to this track now that it's linked
+		if err := wio.InputSelector.SetProperty("active-pad", track.InputSelectorSinkPad); err != nil {
+			wio.log.Errorw("Failed to switch input selector to track", err, "ssrc", ssrc)
+			return
+		}
+		wio.log.Infow("Switched input selector to track", "ssrc", ssrc)
 	})); err != nil {
 		return fmt.Errorf("failed to connect to rtpbin pad-added signal: %w", err)
 	}

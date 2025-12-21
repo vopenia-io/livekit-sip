@@ -57,10 +57,18 @@ func (cp *CameraPipeline) checkReady() error {
 }
 
 func (cp *CameraPipeline) SipIO(rtp, rtcp net.Conn, pt uint8) error {
+	// Set the payload type first so the request-pt-map callback can provide correct caps
+	cp.SipIo.SetPayloadType(pt)
+
 	rtpHandle := cgo.NewHandle(rtp)
 	defer rtpHandle.Delete()
 	rtcpHandle := cgo.NewHandle(rtcp)
 	defer rtcpHandle.Delete()
+
+	// Configure rtph264pay to use the correct payload type for SIP
+	if err := cp.WebrtcToSip.RtpH264Pay.SetProperty("pt", uint(pt)); err != nil {
+		return fmt.Errorf("failed to set rtph264pay payload type (pt: %d): %w", pt, err)
+	}
 
 	if err := cp.SipRtpIn.SetProperty("caps",
 		gst.NewCapsFromString(fmt.Sprintf(
@@ -145,9 +153,8 @@ func (cp *CameraPipeline) AddWebrtcTrack(ssrc uint32, rtp, rtcp io.ReadCloser) (
 		return nil, fmt.Errorf("failed to link webrtc track chain: %w", err)
 	}
 
-	if err := cp.DirtySwitchWebrtcInput(ssrc); err != nil {
-		return nil, fmt.Errorf("failed to switch webrtc input to ssrc %d: %w", ssrc, err)
-	}
+	// Note: Input selector switch happens in the pad-added callback in webrtcIo.go
+	// after LinkParent is called and the sink pad is available
 
 	return track, nil
 }
@@ -185,9 +192,12 @@ func (cp *CameraPipeline) DirtySwitchWebrtcInput(ssrc uint32) error {
 		return fmt.Errorf("webrtc track with ssrc %d not found", ssrc)
 	}
 
-	if err := cp.WebrtcIo.InputSelector.SetProperty("active-pad",
-		track.RtpQueue.GetStaticPad("src"),
-	); err != nil {
+	// Use the stored sink pad from when the track was linked to InputSelector
+	if track.InputSelectorSinkPad == nil {
+		return fmt.Errorf("input selector sink pad not yet available for ssrc %d", ssrc)
+	}
+
+	if err := cp.WebrtcIo.InputSelector.SetProperty("active-pad", track.InputSelectorSinkPad); err != nil {
 		return fmt.Errorf("failed to switch webrtc input to ssrc %d: %w", ssrc, err)
 	}
 

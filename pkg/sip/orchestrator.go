@@ -323,8 +323,7 @@ func (o *MediaOrchestrator) offerSDP(camera bool, bfcp bool, screenshare bool) (
 					return codec, nil
 				}, true)
 			}
-			b.SetDisabled(o.camera.Status() >= VideoStatusReady)
-			// b.SetDisabled(false)
+			b.SetDisabled(o.camera.Status() < VideoStatusReady)
 			b.SetRTPPort(uint16(o.camera.RtpPort()))
 			b.SetRTCPPort(uint16(o.camera.RtcpPort()))
 			b.SetDirection(o.camera.Direction())

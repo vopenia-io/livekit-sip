@@ -139,7 +139,13 @@ func (s *SourceReader) SetProperty(self *glib.Object, id uint, value *glib.Value
 		s.settings.caps = caps.Copy()
 		s.self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Element caps set to: %v", caps))
 		if s.self != nil {
-			s.self.GetStaticPad("src").MarkReconfigure()
+			srcPad := s.self.GetStaticPad("src")
+			// Store caps as a sticky event - this ensures caps are sent before any data
+			capsEvent := gst.NewCapsEvent(caps)
+			if ret := srcPad.StoreStickyEvent(capsEvent); ret != gst.FlowOK {
+				s.self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to store caps sticky event: %v", ret))
+			}
+			srcPad.MarkReconfigure()
 		}
 	}
 }

@@ -28,6 +28,9 @@ type SipIo struct {
 	SipRtcpIn  *gst.Element
 	SipRtpOut  *gst.Element
 	SipRtcpOut *gst.Element
+
+	// payloadType is the RTP payload type for H264 video, set when SipIO is called
+	payloadType uint8
 }
 
 var _ pipeline.GstChain = (*SipIo)(nil)
@@ -92,8 +95,30 @@ func (sio *SipIo) Add() error {
 	)
 }
 
+// SetPayloadType stores the H264 payload type for the request-pt-map callback
+func (sio *SipIo) SetPayloadType(pt uint8) {
+	sio.payloadType = pt
+}
+
 // Link implements [pipeline.GstChain].
 func (sio *SipIo) Link() error {
+	// pt map - provide caps to rtpbin when requested
+	if _, err := sio.SipRtpBin.Connect("request-pt-map", event.RegisterCallback(context.TODO(), sio.pipeline.loop, func(self *gst.Element, session uint, pt uint) *gst.Caps {
+		if sio.payloadType == 0 {
+			sio.log.Warnw("request-pt-map called but payload type not yet set", nil, "pt", pt)
+			return nil
+		}
+		if pt != uint(sio.payloadType) {
+			sio.log.Warnw("request-pt-map called with unexpected payload type", nil, "expected", sio.payloadType, "got", pt)
+			return nil
+		}
+		caps := fmt.Sprintf("application/x-rtp,media=video,encoding-name=H264,payload=%d,clock-rate=90000", pt)
+		sio.log.Debugw("SIP RTPBIN requested PT map", "pt", pt, "caps", caps)
+		return gst.NewCapsFromString(caps)
+	})); err != nil {
+		return fmt.Errorf("failed to connect to sip rtpbin request-pt-map signal: %w", err)
+	}
+
 	// link rtp in
 	if _, err := sio.SipRtpBin.Connect("pad-added", event.RegisterCallback(context.TODO(), sio.pipeline.loop, func(rtpbin *gst.Element, pad *gst.Pad) {
 		sio.log.Debugw("RTPBIN PAD ADDED", "pad", pad.GetName())
