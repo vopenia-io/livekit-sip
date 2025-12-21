@@ -327,6 +327,7 @@ func (v *VideoManager) stop() error {
 			return fmt.Errorf("failed to set GStreamer pipeline to null: %w", err)
 		}
 		v.pipeline = nil
+		time.Sleep(100 * time.Millisecond)
 		runtime.GC()
 		time.Sleep(100 * time.Millisecond)
 		runtime.GC()

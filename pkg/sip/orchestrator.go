@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"runtime"
 	"sync"
+	"time"
 
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
 	"github.com/livekit/protocol/logger"
@@ -26,8 +29,8 @@ type AudioInfo interface {
 }
 
 type dispatchOperation struct {
-	fn   func()
-	done chan struct{}
+	fn   func() error
+	done chan error
 }
 
 type MediaState int
@@ -60,6 +63,7 @@ func (ms MediaState) String() string {
 
 type MediaOrchestrator struct {
 	ctx     context.Context
+	cancel  context.CancelFunc
 	log     logger.Logger
 	opts    *MediaOptions
 	inbound *sipInbound
@@ -77,8 +81,10 @@ type MediaOrchestrator struct {
 }
 
 func NewMediaOrchestrator(log logger.Logger, ctx context.Context, inbound *sipInbound, room *Room, audioinfo AudioInfo, opts *MediaOptions) (*MediaOrchestrator, error) {
+	ctx, cancel := context.WithCancel(ctx)
 	o := &MediaOrchestrator{
 		ctx:        ctx,
+		cancel:     cancel,
 		log:        log,
 		opts:       opts,
 		inbound:    inbound,
@@ -90,12 +96,13 @@ func NewMediaOrchestrator(log logger.Logger, ctx context.Context, inbound *sipIn
 	o.wg.Add(1)
 	go o.dispatchLoop()
 
-	var err error
-	o.dispatch(func() {
-		err = o.init(room)
-	})
+	if err := o.dispatch(func() error {
+		return o.init(room)
+	}); err != nil {
+		return nil, err
+	}
 
-	return o, err
+	return o, nil
 }
 
 func (o *MediaOrchestrator) init(room *Room) error {
@@ -127,20 +134,61 @@ func (o *MediaOrchestrator) okStates(allowed ...MediaState) error {
 	return fmt.Errorf("invalid state: %s, expected one of %v: %w", o.state, allowed, ErrWrongState)
 }
 
-func (o *MediaOrchestrator) dispatch(fn func()) {
-	done := make(chan struct{})
+const DispatchTimeout = 20 * time.Second
+
+var dispatchLog *os.File
+
+func init() {
+	var err error
+	dispatchLog, err = os.OpenFile("media_orchestrator_dispatch.log.ans", os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		panic(fmt.Sprintf("could not open media orchestrator dispatch log file: %v", err))
+	}
+}
+
+const colorRed = "\033[0;31m"
+const colorGreen = "\033[0;32m"
+const colorNone = "\033[0m"
+
+func (o *MediaOrchestrator) dispatch(fn func() error) error {
+	fmt.Fprintf(dispatchLog, "%s--> dispatching operation %p%s\n", colorGreen, fn, colorNone)
+	defer fmt.Fprintf(dispatchLog, "%s<-- dispatched operation %p%s\n", colorRed, fn, colorNone)
+	done := make(chan error)
 	op := dispatchOperation{
 		fn:   fn,
 		done: done,
 	}
 
-	o.dispatchCH <- op
-	<-done
+	timeout := time.After(DispatchTimeout)
+
+	select {
+	case o.dispatchCH <- op:
+		break
+	case <-o.ctx.Done():
+		return context.Canceled
+	case <-timeout:
+		o.log.Errorw("media orchestrator dispatch operation timed out", nil, "timeout", DispatchTimeout)
+		return fmt.Errorf("media orchestrator dispatch operation timed out after %v: %w", DispatchTimeout, context.DeadlineExceeded)
+	}
+
+	select {
+	case err := <-done:
+		return err
+	case <-o.ctx.Done():
+		return context.Canceled
+	case <-timeout:
+		o.log.Errorw("media orchestrator dispatch operation timed out", nil, "timeout", DispatchTimeout)
+		return fmt.Errorf("media orchestrator dispatch operation timed out after %v: %w", DispatchTimeout, context.DeadlineExceeded)
+	}
 }
 
 func (o *MediaOrchestrator) dispatchLoop() {
 	defer o.wg.Done()
 	defer o.log.Debugw("media orchestrator dispatch loop exited")
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	mu := sync.Mutex{}
 
 	for {
@@ -155,46 +203,51 @@ func (o *MediaOrchestrator) dispatchLoop() {
 			return
 		case op := <-o.dispatchCH:
 			mu.Lock()
-			op.fn()
-			close(op.done)
+			err := op.fn()
+			op.done <- err
 			mu.Unlock()
 		}
 	}
 }
 
 func (o *MediaOrchestrator) close() error {
-	return errors.Join(
+	err := errors.Join(
 		o.camera.Close(),
 		o.tracks.Close(),
 		o.bfcp.Close(),
 	)
+	o.cancel()
+	return err
 }
 
 func (o *MediaOrchestrator) Close() error {
+	o.cancel()
 	// if o.state == MediaStateStopped {
 	// 	return nil
 	// }
 	// if err := o.okStates(MediaStateFailed, MediaStateOK, MediaStateReady, MediaStateStarted); err != nil {
 	// 	return err
 	// }
-	var err error
-	o.dispatch(func() {
-		err = o.close()
-	})
+	// var err error
+	// err = o.dispatch(func() error {
+	// 	return o.close()
+	// })
 	o.wg.Wait()
-	return err
+	return nil
 }
 
 func (o *MediaOrchestrator) AnswerSDP(offer *sdpv2.SDP) (answer *sdpv2.SDP, err error) {
 	if err := o.okStates(MediaStateFailed, MediaStateOK, MediaStateReady, MediaStateStarted); err != nil {
 		return nil, err
 	}
-	o.dispatch(func() {
+	if err := o.dispatch(func() error {
 		answer, err = o.answerSDP(offer)
-	})
-	return answer, err
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	return answer, nil
 }
-
 func (o *MediaOrchestrator) answerSDP(offer *sdpv2.SDP) (*sdpv2.SDP, error) {
 	o.log.Debugw("answering sdp", "offer", offer)
 	if offer.Audio == nil {
@@ -335,8 +388,10 @@ func (o *MediaOrchestrator) Start() (err error) {
 	if err := o.okStates(MediaStateReady); err != nil {
 		return err
 	}
-	o.dispatch(func() {
-		err = o.start()
-	})
-	return err
+	if err := o.dispatch(func() error {
+		return o.start()
+	}); err != nil {
+		return err
+	}
+	return nil
 }

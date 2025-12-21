@@ -67,9 +67,6 @@ type SourceReader struct {
 func (*SourceReader) New() glib.GoObjectSubclass {
 	CAT.Log(gst.LevelInfo, "Creating new sourcereader instance")
 	sr := &SourceReader{}
-	// runtime.AddCleanup(sr, func(_ string) {
-	// 	println("Cleaning up sourcereader")
-	// }, "")
 	return sr
 }
 
@@ -96,9 +93,9 @@ func (*SourceReader) ClassInit(klass *glib.ObjectClass) {
 }
 
 func (s *SourceReader) Constructed(self *glib.Object) {
-	CAT.Log(gst.LevelDebug, "Constructing")
-
 	s.self = base.ToGstBaseSrc(self)
+
+	s.self.Log(CAT, gst.LevelDebug, "Constructing")
 
 	s.settings = &settings{
 		caps: gst.NewAnyCaps(),
@@ -127,20 +124,20 @@ func (s *SourceReader) SetProperty(self *glib.Object, id uint, value *glib.Value
 	case "caps":
 		val, err := value.GoValue()
 		if err != nil {
-			CAT.Log(gst.LevelError, fmt.Sprintf("Error getting caps property value: %v", err))
+			s.self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting caps property value: %v", err))
 			return
 		}
 		caps, ok := val.(*gst.Caps)
 		if !ok {
-			CAT.Log(gst.LevelError, "Invalid type for caps property")
+			s.self.Log(CAT, gst.LevelError, "Invalid type for caps property")
 			return
 		}
 		if caps == nil {
-			CAT.Log(gst.LevelError, "Nil caps provided")
+			s.self.Log(CAT, gst.LevelError, "Nil caps provided")
 			return
 		}
 		s.settings.caps = caps.Copy()
-		CAT.Log(gst.LevelInfo, fmt.Sprintf("Element caps set to: %v", caps))
+		s.self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Element caps set to: %v", caps))
 		if s.self != nil {
 			s.self.GetStaticPad("src").MarkReconfigure()
 		}
@@ -148,7 +145,7 @@ func (s *SourceReader) SetProperty(self *glib.Object, id uint, value *glib.Value
 }
 
 func (s *SourceReader) GetProperty(self *glib.Object, id uint) *glib.Value {
-	CAT.Log(gst.LevelInfo, "GetProperty called")
+	s.self.Log(CAT, gst.LevelInfo, "GetProperty called")
 	param := properties[id]
 	switch param.Name() {
 	case "caps":
@@ -167,75 +164,83 @@ func (s *SourceReader) GetProperty(self *glib.Object, id uint) *glib.Value {
 }
 
 func (s *SourceReader) SetCaps(self *base.GstBaseSrc, caps *gst.Caps) bool {
-	CAT.Log(gst.LevelDebug, fmt.Sprintf("caps not set to: %s, keepping existing: %s", caps.String(), s.settings.caps.String()))
+	s.self.Log(CAT, gst.LevelDebug, fmt.Sprintf("caps not set to: %s, keepping existing: %s", caps.String(), s.settings.caps.String()))
 	return true
 }
 
 func (s *SourceReader) GetCaps(self *base.GstBaseSrc, filter *gst.Caps) *gst.Caps {
-	caps := s.settings.caps
 	if filter != nil && filter.Instance() != nil && !filter.IsEmpty() && !filter.IsAny() {
-		CAT.Log(gst.LevelDebug, fmt.Sprintf("caps get filter: %s", filter.String()))
-		caps = s.settings.caps.Intersect(filter)
+		s.self.Log(CAT, gst.LevelDebug, fmt.Sprintf("caps get filter: %s", filter.String()))
+		if intersect := s.settings.caps.Intersect(filter); intersect != nil {
+			return intersect
+		}
 	}
-	CAT.Log(gst.LevelDebug, fmt.Sprintf("caps get: %s", caps.String()))
-	return caps.Ref()
+	s.self.Log(CAT, gst.LevelDebug, fmt.Sprintf("caps get: %s", s.settings.caps.String()))
+	return s.settings.caps.Ref()
 }
 
 func (s *SourceReader) Start(self *base.GstBaseSrc) bool {
-	// if s.state.reader == nil {
-	// 	self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "io.Reader is not set", "")
-	// 	return false
-	// }
+	s.self.Log(CAT, gst.LevelInfo, "started")
+	return true
+}
 
-	// self.StartComplete(gst.FlowOK)
+func (s *SourceReader) closeReader() bool {
+	s.self.Log(CAT, gst.LevelInfo, "closeReader")
 
-	self.Log(CAT, gst.LevelInfo, "started")
+	if s.state.closed.Swap(true) {
+		s.self.Log(CAT, gst.LevelWarning, "io.Reader already closed")
+		return true
+	}
+
+	if s.state.reader != nil {
+		if err := s.state.reader.Close(); err != nil {
+			s.self.Log(CAT, gst.LevelError, fmt.Sprintf("Error closing io.Reader: %v", err))
+			s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorRead, "Error closing io.Reader", err.Error())
+			return false
+		}
+	}
 	return true
 }
 
 func (s *SourceReader) Stop(self *base.GstBaseSrc) bool {
-	self.Log(CAT, gst.LevelInfo, "stopped")
-	if err := self.SetState(gst.StateNull); err != nil {
-		CAT.Log(gst.LevelError, fmt.Sprintf("Failed to set state to NULL: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to set state to NULL", err.Error())
+	s.self.Log(CAT, gst.LevelInfo, "stopped")
+
+	if !s.closeReader() {
+		s.self.Log(CAT, gst.LevelError, "Error closing io.Reader")
 		return false
 	}
-	if s.state.closed.Swap(true) {
-		if s.state.reader != nil {
-			s.state.reader.Close()
-		}
-		s.state.reader = nil
-	}
-	// s.state.closed.Store(true)
-	// s.state.reader = nil
 
 	return true
 }
 
 func (s *SourceReader) Fill(self *base.GstBaseSrc, offset uint64, length uint, buffer *gst.Buffer) gst.FlowReturn {
-	CAT.Log(gst.LevelTrace, fmt.Sprintf("Fill called: offset=%d, length=%d", offset, length))
+	s.self.Log(CAT, gst.LevelTrace, fmt.Sprintf("Fill called: offset=%d, length=%d", offset, length))
 
 	if s.state.closed.Load() {
-		CAT.Log(gst.LevelError, "io.Reader is already closed")
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorRead, "io.Reader is already closed", "")
+		s.self.Log(CAT, gst.LevelError, "io.Reader is already closed")
+		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorRead, "io.Reader is already closed", "")
 		return gst.FlowEOS
 	}
 
 	if s.state.reader == nil {
-		CAT.Log(gst.LevelError, "io.Reader is not set")
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "io.Reader is not set", "")
+		s.self.Log(CAT, gst.LevelError, "io.Reader is not set")
+		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "io.Reader is not set", "")
 		return gst.FlowError
 	}
 
 	data := make([]byte, length)
 	n, err := s.state.reader.Read(data)
 	if err != nil {
+		if s.state.closed.Load() {
+			s.self.Log(CAT, gst.LevelInfo, "io.Reader closed during read")
+			return gst.FlowFlushing
+		}
 		if err == io.EOF {
-			CAT.Log(gst.LevelInfo, "reached EOF")
+			s.self.Log(CAT, gst.LevelInfo, "reached EOF")
 			return gst.FlowEOS
 		}
-		CAT.Log(gst.LevelError, fmt.Sprintf("Error reading from io.Reader: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorRead, "Error reading from io.Reader", err.Error())
+		s.self.Log(CAT, gst.LevelError, fmt.Sprintf("Error reading from io.Reader: %v", err))
+		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorRead, "Error reading from io.Reader", err.Error())
 		return gst.FlowError
 	}
 
@@ -243,23 +248,17 @@ func (s *SourceReader) Fill(self *base.GstBaseSrc, offset uint64, length uint, b
 	if uint(n) < length {
 		buffer.SetSize(int64(n))
 	}
-	CAT.Log(gst.LevelTrace, fmt.Sprintf("filled buffer with %d bytes", n))
+	s.self.Log(CAT, gst.LevelTrace, fmt.Sprintf("filled buffer with %d bytes", n))
 
 	return gst.FlowOK
 }
 
-func (s *SourceReader) Unlock(self *base.GstBaseSink) bool {
-	self.Log(CAT, gst.LevelInfo, "unlocked")
+func (s *SourceReader) Unlock(self *base.GstBaseSrc) bool {
+	s.self.Log(CAT, gst.LevelInfo, "unlocked")
 
-	if s.state.closed.Swap(true) {
-		CAT.Log(gst.LevelDebug, "io.Reader already closed")
-		return true
-	}
-
-	if err := s.state.reader.Close(); err != nil {
-		CAT.Log(gst.LevelError, fmt.Sprintf("Error closing io.Reader: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorRead, "Error closing io.Reader", err.Error())
-		return true // TODO: should return false here but true until we handle errors
+	if !s.closeReader() {
+		s.self.Log(CAT, gst.LevelError, "Error closing io.Reader")
+		return false
 	}
 	return true
 }

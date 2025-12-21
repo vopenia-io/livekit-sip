@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -51,6 +52,8 @@ func (loop *EventLoop) Run() {
 		fmt.Println("EventLoop: already running")
 		return
 	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	loop.wg.Add(1)
 	defer loop.wg.Done()
 	for {
