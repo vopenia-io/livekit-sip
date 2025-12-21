@@ -126,6 +126,32 @@ func (sio *SipIo) Link() error {
 		return fmt.Errorf("failed to link sip rtp src to rtpbin: %w", err)
 	}
 
+	// link rtp out
+	if _, err := sio.SipRtpBin.Connect("pad-added", event.RegisterCallback(context.TODO(), sio.pipeline.loop, func(rtpbin *gst.Element, pad *gst.Pad) {
+		sio.log.Debugw("WEBRTC RTPBIN PAD ADDED", "pad", pad.GetName())
+		padName := pad.GetName()
+		if padName != "send_rtp_src_0" {
+			return
+		}
+		if err := pipeline.LinkPad(
+			pad,
+			sio.SipRtpOut.GetStaticPad("sink"),
+		); err != nil {
+			sio.log.Errorw("Failed to link sip rtpbin pad to sinkwriter", err)
+			return
+		}
+		sio.log.Infow("Linked SIP RTP pad", "pad", padName)
+	})); err != nil {
+		return fmt.Errorf("failed to connect to sip rtpbin pad-added signal: %w", err)
+	}
+
+	if err := pipeline.LinkPad(
+		sio.pipeline.WebrtcToSip.RtpH264Pay.GetStaticPad("src"),
+		sio.SipRtpBin.GetRequestPad("send_rtp_sink_0"),
+	); err != nil {
+		return fmt.Errorf("failed to link rtp vp8 payloader to sip rtpbin: %w", err)
+	}
+
 	// link rtcp in
 	if err := pipeline.LinkPad(
 		sio.SipRtcpIn.GetStaticPad("src"),

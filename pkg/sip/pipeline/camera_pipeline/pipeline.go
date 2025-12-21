@@ -109,18 +109,22 @@ func (cp *CameraPipeline) Close() error {
 		if err := cp.SipIo.Close(); err != nil {
 			return fmt.Errorf("failed to close SIP IO: %w", err)
 		}
+		cp.SipIo = nil
 		cp.Log().Debugw("Closing WebRTC IO")
 		if err := cp.WebrtcIo.Close(); err != nil {
 			return fmt.Errorf("failed to close WebRTC IO: %w", err)
 		}
+		cp.WebrtcIo = nil
 		cp.Log().Debugw("Closing SIP to WebRTC chain")
 		if err := cp.SipToWebrtc.Close(); err != nil {
 			return fmt.Errorf("failed to close SIP to WebRTC chain: %w", err)
 		}
+		cp.SipToWebrtc = nil
 		cp.Log().Debugw("Closing WebRTC to SIP chain")
 		if err := cp.WebrtcToSip.Close(); err != nil {
 			return fmt.Errorf("failed to close WebRTC to SIP chain: %w", err)
 		}
+		cp.WebrtcToSip = nil
 	}
 	cp.Log().Infow("Camera pipeline closed")
 

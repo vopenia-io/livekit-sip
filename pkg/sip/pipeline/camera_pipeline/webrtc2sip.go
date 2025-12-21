@@ -119,7 +119,6 @@ func (stw *WebrtcToSip) Link() error {
 		stw.Queue,
 		stw.X264Enc,
 		stw.RtpH264Pay,
-		stw.pipeline.SipRtpOut,
 	); err != nil {
 		return fmt.Errorf("failed to link WebRTC to SIP elements: %w", err)
 	}

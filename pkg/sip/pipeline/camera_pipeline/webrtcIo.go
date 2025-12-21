@@ -228,6 +228,9 @@ func (wio *WebrtcIo) Close() error {
 
 	if err := wio.pipeline.Pipeline().RemoveMany(
 		wio.WebrtcRtpBin,
+		wio.RtpFunnel,
+		wio.InputSelector,
+		wio.RtcpFunnel,
 		wio.WebrtcRtpOut,
 		wio.WebrtcRtcpOut,
 	); err != nil {
