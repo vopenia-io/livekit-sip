@@ -3,8 +3,6 @@ package sip
 import (
 	"errors"
 	"fmt"
-	"sync"
-	"time"
 
 	"github.com/frostbyte73/core"
 	"github.com/livekit/protocol/logger"
@@ -35,9 +33,6 @@ func (t *trackKindManager) TrackSubscribed(
 	pub *lksdk.RemoteTrackPublication,
 	rp *lksdk.RemoteParticipant,
 	then func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) error) error {
-	t.tm.mu.Lock()
-	defer t.tm.mu.Unlock()
-
 	if !t.tm.ready.IsBroken() {
 		t.tm.log.Warnw("track manager not ready yet, waiting", nil)
 		<-t.tm.ready.Watch()
@@ -67,9 +62,6 @@ func (t *trackKindManager) TrackUnsubscribed(
 	pub *lksdk.RemoteTrackPublication,
 	rp *lksdk.RemoteParticipant,
 	then func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) error) error {
-	t.tm.mu.Lock()
-	defer t.tm.mu.Unlock()
-
 	if !t.tm.ready.IsBroken() {
 		t.tm.log.Warnw("track manager not ready yet, waiting", nil)
 		<-t.tm.ready.Watch()
@@ -92,9 +84,6 @@ func (t *trackKindManager) TrackUnsubscribed(
 }
 
 func (t *trackKindManager) Tracks() map[string]remoteTrackInfo {
-	t.tm.mu.Lock()
-	defer t.tm.mu.Unlock()
-
 	if !t.tm.ready.IsBroken() {
 		t.tm.log.Warnw("track manager not ready yet, waiting", nil)
 		<-t.tm.ready.Watch()
@@ -118,7 +107,6 @@ func NewTrackManager(log logger.Logger) *TrackManager {
 
 type TrackManager struct {
 	ready core.Fuse
-	mu    sync.Mutex
 	log   logger.Logger
 	p     *lksdk.LocalParticipant
 
@@ -126,31 +114,32 @@ type TrackManager struct {
 	CameraTracks trackKindManager
 }
 
+func (tm *TrackManager) Participant() *lksdk.LocalParticipant {
+	if !tm.ready.IsBroken() {
+		tm.log.Warnw("track manager not ready yet, waiting", nil)
+		<-tm.ready.Watch()
+		tm.log.Infow("track manager is now ready")
+	}
+	return tm.p
+}
+
 func (tm *TrackManager) ParticipantReady(p *lksdk.LocalParticipant) error {
 	if tm.ready.IsBroken() {
 		return fmt.Errorf("track manager is already ready")
 	}
-	tm.p = p // can't lock the fuse because other function already lock it while waiting for the participant
+	tm.p = p
 	tm.ready.Break()
 	return nil
 }
 
 func (tm *TrackManager) Camera() (*TrackOutput, error) {
-
-	tm.mu.Lock()
-	defer tm.mu.Unlock()
-
-	if !tm.ready.IsBroken() {
-		tm.log.Warnw("track manager not ready yet, waiting", nil)
-		<-tm.ready.Watch()
-		tm.log.Infow("track manager is now ready", nil)
-	}
-
 	if tm.camera != nil {
 		return tm.camera, nil
 	}
 
 	to := &TrackOutput{}
+
+	p := tm.Participant()
 
 	track, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{
 		MimeType: webrtc.MimeTypeVP8,
@@ -158,8 +147,8 @@ func (tm *TrackManager) Camera() (*TrackOutput, error) {
 	if err != nil {
 		return nil, fmt.Errorf("could not create room camera track: %w", err)
 	}
-	pt, err := tm.p.PublishTrack(track, &lksdk.TrackPublicationOptions{
-		Name: tm.p.Identity(),
+	pt, err := p.PublishTrack(track, &lksdk.TrackPublicationOptions{
+		Name: p.Identity(),
 	})
 	if err != nil {
 		return nil, err
@@ -171,14 +160,9 @@ func (tm *TrackManager) Camera() (*TrackOutput, error) {
 	to.RtpOut = &CallbackWriteCloser{
 		Writer: track,
 		Callback: func() error {
-			tm.mu.Lock()
-			defer tm.mu.Unlock()
 			tm.log.Infow("unpublishing video track", "SID", pt.SID())
-			if err := tm.p.UnpublishTrack(pt.SID()); err != nil {
-				return fmt.Errorf("could not unpublish track: %w", err)
-			}
+			pt.CloseTrack()
 			tm.camera = nil
-			time.Sleep(5 * time.Second)
 			return nil
 		},
 	}
@@ -190,9 +174,6 @@ func (tm *TrackManager) Camera() (*TrackOutput, error) {
 }
 
 func (tm *TrackManager) Close() error {
-	tm.mu.Lock()
-	defer tm.mu.Unlock()
-
 	var errs []error
 
 	if tm.camera != nil {

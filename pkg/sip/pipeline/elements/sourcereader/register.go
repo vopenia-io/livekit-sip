@@ -14,7 +14,7 @@ func Register() bool {
 		// The rank of the element
 		gst.RankNone,
 		// The GoElement implementation for the element
-		&sourceReader{},
+		&SourceReader{},
 		// The base subclass this element extends
 		base.ExtendsBaseSrc,
 	)

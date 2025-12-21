@@ -5,6 +5,7 @@ import (
 	"io"
 	"math"
 	"runtime/cgo"
+	"sync/atomic"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
@@ -34,11 +35,19 @@ var properties = []*glib.ParamSpec{
 		gst.TypeCaps,
 		glib.ParameterReadWrite,
 	),
+	glib.NewBoolParam(
+		"has-handle",
+		"has-handle",
+		"check if a handle has been set",
+		false,
+		glib.ParameterReadable,
+	),
 }
 
 // Here we declare a private struct to hold our internal state.
 type state struct {
-	writer io.Writer
+	writer io.WriteCloser
+	closed atomic.Bool
 }
 
 // This is another private struct where we hold the parameter values set on our
@@ -48,6 +57,7 @@ type settings struct {
 }
 
 type sinkWriter struct {
+	self *base.GstBaseSink
 	// The settings for the element
 	settings *settings
 	// The current state of the element
@@ -55,7 +65,8 @@ type sinkWriter struct {
 }
 
 func (*sinkWriter) New() glib.GoObjectSubclass {
-	return &sinkWriter{}
+	s := &sinkWriter{}
+	return s
 }
 
 func (*sinkWriter) ClassInit(klass *glib.ObjectClass) {
@@ -80,6 +91,21 @@ func (*sinkWriter) ClassInit(klass *glib.ObjectClass) {
 	class.InstallProperties(properties)
 }
 
+func (s *sinkWriter) Constructed(self *glib.Object) {
+	CAT.Log(gst.LevelDebug, "Constructing")
+
+	s.self = base.ToGstBaseSink(self)
+
+	s.settings = &settings{
+		caps: gst.NewAnyCaps(),
+	}
+	s.state = &state{
+		writer: nil,
+	}
+
+	s.self.SetSync(false)
+}
+
 func (s *sinkWriter) SetProperty(self *glib.Object, id uint, value *glib.Value) {
 	param := properties[id]
 	switch param.Name() {
@@ -89,7 +115,7 @@ func (s *sinkWriter) SetProperty(self *glib.Object, id uint, value *glib.Value) 
 		h := cgo.Handle(uintptr(val))
 		if h > 0 {
 			obj := h.Value()
-			if w, ok := obj.(io.Writer); ok {
+			if w, ok := obj.(io.WriteCloser); ok {
 				s.state.writer = w
 			}
 		}
@@ -110,6 +136,9 @@ func (s *sinkWriter) SetProperty(self *glib.Object, id uint, value *glib.Value) 
 		}
 		s.settings.caps = caps.Copy()
 		CAT.Log(gst.LevelInfo, fmt.Sprintf("Element caps set to: %v", caps))
+		if s.self != nil {
+			s.self.GetStaticPad("sink").MarkReconfigure()
+		}
 	}
 }
 
@@ -118,30 +147,17 @@ func (s *sinkWriter) GetProperty(self *glib.Object, id uint) *glib.Value {
 	switch param.Name() {
 	case "caps":
 		if s.settings.caps != nil {
-			v, _ := glib.GValue(s.settings.caps.String())
+			v, _ := glib.GValue(s.settings.caps)
 			return v
 		}
-		v, _ := glib.GValue(gst.NewAnyCaps().String())
+		v, _ := glib.GValue(gst.NewAnyCaps())
+		return v
+	case "has-handle":
+		hasHandle := s.state.writer != nil
+		v, _ := glib.GValue(hasHandle)
 		return v
 	}
 	return nil
-}
-
-func (s *sinkWriter) Constructed(self *glib.Object) {
-	CAT.Log(gst.LevelDebug, "Constructing")
-
-	s.settings = &settings{
-		caps: gst.NewAnyCaps(),
-	}
-	s.state = &state{
-		writer: nil,
-	}
-
-	baseSink := base.ToGstBaseSink(self)
-	baseSink.SetSync(false)
-
-	// baseSrc.SetFormat(gst.FormatTime)
-	// baseSrc.SetLive(true)
 }
 
 func (s *sinkWriter) SetCaps(self *base.GstBaseSink, caps *gst.Caps) bool {
@@ -150,42 +166,56 @@ func (s *sinkWriter) SetCaps(self *base.GstBaseSink, caps *gst.Caps) bool {
 }
 
 func (s *sinkWriter) GetCaps(self *base.GstBaseSink, filter *gst.Caps) *gst.Caps {
-	caps := s.settings.caps
 	if filter != nil && filter.Instance() != nil && !filter.IsEmpty() && !filter.IsAny() {
 		CAT.Log(gst.LevelDebug, fmt.Sprintf("caps get filter: %s", filter.String()))
 		if intersect := s.settings.caps.Intersect(filter); intersect != nil {
-			caps = intersect
+			return intersect
 		}
 	}
-	CAT.Log(gst.LevelDebug, fmt.Sprintf("caps get: %s", caps.String()))
-	return caps.Ref()
+	CAT.Log(gst.LevelDebug, fmt.Sprintf("caps get: %s", s.settings.caps.String()))
+	return s.settings.caps.Ref()
 }
 
 func (s *sinkWriter) Start(self *base.GstBaseSink) bool {
-	if s.state.writer == nil {
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "io.Writer is not set", "")
-		return false
-	}
-
 	self.Log(CAT, gst.LevelInfo, "started")
 	return true
 }
 
 func (s *sinkWriter) Stop(self *base.GstBaseSink) bool {
 	self.Log(CAT, gst.LevelInfo, "stopped")
+	if err := self.SetState(gst.StateNull); err != nil {
+		CAT.Log(gst.LevelError, fmt.Sprintf("Failed to set state to NULL: %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to set state to NULL", err.Error())
+		return false
+	}
+	if s.state.closed.Swap(true) {
+		if s.state.writer != nil {
+			s.state.writer.Close()
+		}
+		s.state.writer = nil
+	}
 	return true
 }
 
 func (s *sinkWriter) Render(self *base.GstBaseSink, buffer *gst.Buffer) gst.FlowReturn {
 	CAT.Log(gst.LevelTrace, fmt.Sprintf("Render called: buffer size=%d", buffer.GetSize()))
+	if s.state.closed.Load() {
+		CAT.Log(gst.LevelError, "io.Writer is already closed")
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorWrite, "io.Writer is already closed", "")
+		return gst.FlowEOS
+	}
+
 	if s.state.writer == nil {
 		CAT.Log(gst.LevelError, "io.Writer is not set")
 		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "io.Writer is not set", "")
 		return gst.FlowError
 	}
-
 	n, err := s.state.writer.Write(buffer.Bytes())
 	if err != nil {
+		if err == io.EOF {
+			CAT.Log(gst.LevelInfo, "reached EOF on write")
+			return gst.FlowEOS
+		}
 		CAT.Log(gst.LevelError, fmt.Sprintf("Error writing to io.Writer: %v", err))
 		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorWrite, "Error writing to io.Writer", err.Error())
 		return gst.FlowError
@@ -194,6 +224,20 @@ func (s *sinkWriter) Render(self *base.GstBaseSink, buffer *gst.Buffer) gst.Flow
 		CAT.Log(gst.LevelWarning, fmt.Sprintf("Partial write to io.Writer: wrote %d of %d bytes", n, buffer.GetSize()))
 	}
 
-	CAT.Log(gst.LevelDebug, fmt.Sprintf("wrote %d bytes to io.Writer", n))
+	CAT.Log(gst.LevelTrace, fmt.Sprintf("wrote %d bytes to io.Writer", n))
 	return gst.FlowOK
+}
+
+func (s *sinkWriter) Unlock(self *base.GstBaseSink) bool {
+	self.Log(CAT, gst.LevelInfo, "unlocked")
+	if s.state.closed.Swap(true) {
+		CAT.Log(gst.LevelDebug, "io.Writer already closed")
+		return true
+	}
+	if err := s.state.writer.Close(); err != nil {
+		CAT.Log(gst.LevelError, fmt.Sprintf("Error closing io.Writer: %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorWrite, "Error closing io.Writer", err.Error())
+		return true // TODO: should return false here but true until we handle errors
+	}
+	return true
 }

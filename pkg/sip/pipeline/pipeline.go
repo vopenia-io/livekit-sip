@@ -2,7 +2,7 @@ package pipeline
 
 import (
 	"fmt"
-	"sync"
+	"os"
 	"time"
 
 	"github.com/frostbyte73/core"
@@ -11,42 +11,45 @@ import (
 )
 
 type BasePipeline struct {
-	Log      logger.Logger
-	Mu       sync.Mutex
-	Pipeline *gst.Pipeline
+	log      logger.Logger
+	pipeline *gst.Pipeline
 	closed   core.Fuse
 }
 
 type GstPipeline interface {
+	Pipeline() *gst.Pipeline
+	Log() logger.Logger
 	SetState(state gst.State) error
 	SetStateWait(state gst.State) error
 	Close() error
 	Closed() bool
 }
 
-type GstChain interface {
-	Add(p *gst.Pipeline) error
-	Link(p *gst.Pipeline) error
-	Close(p *gst.Pipeline) error
+type GstChain[T GstPipeline] interface {
+	Create() error
+	Add() error
+	Link() error
+	Close() error
 }
 
-func (p *BasePipeline) CloseCH() <-chan struct{} {
-	return p.closed.Watch()
+func (p *BasePipeline) Log() logger.Logger {
+	return p.log
+}
+
+func (p *BasePipeline) Pipeline() *gst.Pipeline {
+	return p.pipeline
 }
 
 func (p *BasePipeline) SetState(state gst.State) error {
-	p.Mu.Lock()
-	defer p.Mu.Unlock()
-
 	if p.Closed() {
 		return fmt.Errorf("cannot set state on closed pipeline")
 	}
 
 	if state == gst.StateNull {
-		return p.close()
+		return p.Close()
 	}
 
-	if err := p.Pipeline.SetState(state); err != nil {
+	if err := p.Pipeline().SetState(state); err != nil {
 		return fmt.Errorf("failed to set pipeline state: %w", err)
 	}
 
@@ -54,22 +57,19 @@ func (p *BasePipeline) SetState(state gst.State) error {
 }
 
 func (p *BasePipeline) SetStateWait(state gst.State) error {
-	p.Mu.Lock()
-	defer p.Mu.Unlock()
-
 	if p.Closed() {
 		return fmt.Errorf("cannot set state on closed pipeline")
 	}
 
 	if state == gst.StateNull {
-		return p.close()
+		return p.Close()
 	}
 
-	if err := p.Pipeline.SetState(state); err != nil {
+	if err := p.Pipeline().SetState(state); err != nil {
 		return fmt.Errorf("failed to set pipeline state: %w", err)
 	}
 
-	cr, s := p.Pipeline.GetState(state, gst.ClockTime(time.Second*30))
+	cr, s := p.Pipeline().GetState(state, gst.ClockTime(time.Second*30))
 	if cr != gst.StateChangeSuccess {
 		return fmt.Errorf("failed to change pipeline state, wanted %s got %s: %s", state.String(), s.String(), cr.String())
 	}
@@ -80,25 +80,37 @@ func (p *BasePipeline) SetStateWait(state gst.State) error {
 	return nil
 }
 
-func (p *BasePipeline) close() error {
+var pid = os.Getpid()
+
+func (p *BasePipeline) Close() error {
 	if p.Closed() {
+		fmt.Println("Pipeline already closed")
 		return nil
 	}
 	p.closed.Break()
+	fmt.Println("Closing pipeline")
 
-	err := p.Pipeline.SetState(gst.StateNull)
+	fmt.Printf("Setting pipeline to null state (pid %d)\n", pid)
+	err := p.Pipeline().SetState(gst.StateNull)
+	fmt.Printf("Pipeline set to null state, err: %v\n", err)
 	time.Sleep(100 * time.Millisecond) // give some time to settle
 	if err != nil {
+		fmt.Printf("Failed to set pipeline to null state: %v\n", err)
 		return fmt.Errorf("failed to set pipeline to null state: %w", err)
 	}
+
+	// runtime.GC()
+	// time.Sleep(100 * time.Millisecond)
+	// runtime.GC()
+	// time.Sleep(1000 * time.Millisecond)
+
+	// syscall.Kill(pid, syscall.SIGUSR1)
+
+	// time.Sleep(1 * time.Second)
+
+	fmt.Println("Pipeline closed")
+
 	return nil
-}
-
-func (p *BasePipeline) Close() error {
-	p.Mu.Lock()
-	defer p.Mu.Unlock()
-
-	return p.close()
 }
 
 func (p *BasePipeline) Closed() bool {
@@ -112,25 +124,31 @@ func New(log logger.Logger) (*BasePipeline, error) {
 	}
 
 	gp := &BasePipeline{
-		Log:      log,
-		Pipeline: pipeline,
+		log:      log,
+		pipeline: pipeline,
 	}
 
 	return gp, nil
 }
 
-func (p *BasePipeline) AddChain(chain GstChain, err error) (GstChain, error) {
-	if err != nil {
-		return nil, fmt.Errorf("failed to build chain: %w", err)
+func AddChain[T GstPipeline, C GstChain[T]](p T, chain C) (C, error) {
+	var zero C
+
+	p.Log().Debugw("Adding chain to pipeline")
+	if err := chain.Create(); err != nil {
+		return zero, fmt.Errorf("failed to create chain: %w", err)
 	}
 
-	if err := chain.Add(p.Pipeline); err != nil {
-		return nil, fmt.Errorf("failed to add chain to pipeline: %w", err)
+	p.Log().Debugw("Adding chain elements to pipeline")
+	if err := chain.Add(); err != nil {
+		return zero, fmt.Errorf("failed to add chain to pipeline: %w", err)
 	}
 
-	if err := chain.Link(p.Pipeline); err != nil {
-		return nil, fmt.Errorf("failed to link chain in pipeline: %w", err)
+	p.Log().Debugw("Linking chain in pipeline")
+	if err := chain.Link(); err != nil {
+		return zero, fmt.Errorf("failed to link chain in pipeline: %w", err)
 	}
 
+	p.Log().Debugw("Chain added to pipeline")
 	return chain, nil
 }

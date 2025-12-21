@@ -920,6 +920,11 @@ func (c *inboundCall) handleInvite(ctx context.Context, tid traceid.ID, req *sip
 		return errors.Wrap(err, "publishing track to room failed")
 	}
 	c.lkRoom.Subscribe()
+	if err := c.medias.Start(); err != nil {
+		c.log().Errorw("Cannot start media orchestrator", err)
+		c.close(true, callDropped, "media-start-failed")
+		return errors.Wrap(err, "starting media orchestrator failed")
+	}
 	if !pinPrompt {
 		c.log().Infow("Waiting for track subscription(s)")
 		// For dispatches without pin, we first wait for LK participant to become available,
@@ -1229,9 +1234,11 @@ func (c *inboundCall) close(error bool, status CallStatus, reason string) {
 
 	c.closeMedia()
 	if c.medias != nil {
+		log.Debugw("Closing media orchestrator")
 		if err := c.medias.Close(); err != nil {
 			log.Errorw("Cannot close media orchestrator", err)
 		}
+		log.Debugw("Media orchestrator closed")
 	}
 	c.cc.CloseWithStatus(sipCode, sipStatus)
 	if c.callDur != nil {
