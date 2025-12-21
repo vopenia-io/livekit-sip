@@ -23,8 +23,6 @@ type SipToWebrtc struct {
 	pipeline *CameraPipeline
 	log      logger.Logger
 
-	RtpBin *gst.Element
-
 	SipRtpIn *gst.Element // sip
 	// rptbin
 	Depay         *gst.Element
@@ -47,14 +45,9 @@ type SipToWebrtc struct {
 
 var _ pipeline.GstChain[*CameraPipeline] = (*SipToWebrtc)(nil)
 
+// Create implements [pipeline.GstChain].
 func (stw *SipToWebrtc) Create() error {
 	var err error
-	stw.RtpBin, err = gst.NewElementWithProperties("rtpbin", map[string]interface{}{
-		"name": "sip_rtp_bin",
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create SIP rtpbin: %w", err)
-	}
 
 	stw.SipRtpIn, err = gst.NewElementWithProperties("sourcereader", map[string]interface{}{
 		"name":         "sip_rtp_in",
@@ -185,7 +178,6 @@ func (stw *SipToWebrtc) Create() error {
 
 func (stw *SipToWebrtc) Add() error {
 	if err := stw.pipeline.Pipeline().AddMany(
-		stw.RtpBin,
 		stw.SipRtpIn,
 		stw.Depay,
 		stw.Parse,
@@ -211,13 +203,13 @@ func (stw *SipToWebrtc) Link() error {
 	// link rtp path
 	if err := pipeline.LinkPad(
 		stw.SipRtpIn.GetStaticPad("src"),
-		stw.RtpBin.GetRequestPad("recv_rtp_sink_0"),
+		stw.pipeline.SipRtpBin.GetRequestPad("recv_rtp_sink_0"),
 	); err != nil {
 		return fmt.Errorf("failed to link sip rtp src to rtpbin: %w", err)
 	}
 
 	// if _, err := stw.RtpBin.Connect("pad-added", func(rtpbin *gst.Element, pad *gst.Pad) {
-	if _, err := stw.RtpBin.Connect("pad-added", event.RegisterCallback(context.TODO(), stw.pipeline.loop, func(rtpbin *gst.Element, pad *gst.Pad) {
+	if _, err := stw.pipeline.SipRtpBin.Connect("pad-added", event.RegisterCallback(context.TODO(), stw.pipeline.loop, func(rtpbin *gst.Element, pad *gst.Pad) {
 		stw.log.Debugw("RTPBIN PAD ADDED", "pad", pad.GetName())
 		padName := pad.GetName()
 		if !strings.HasPrefix(padName, "recv_rtp_src_0_") {
@@ -253,21 +245,45 @@ func (stw *SipToWebrtc) Link() error {
 		stw.FpsFilter,
 		stw.Vp8Enc,
 		stw.RtpVp8Pay,
-		stw.WebrtcRtpOut,
 	); err != nil {
 		return fmt.Errorf("failed to link sip to webrtc rtp path: %w", err)
+	}
+
+	if _, err := stw.pipeline.WebrtcRtpBin.Connect("pad-added", event.RegisterCallback(context.TODO(), stw.pipeline.loop, func(rtpbin *gst.Element, pad *gst.Pad) {
+		stw.log.Debugw("WEBRTC RTPBIN PAD ADDED", "pad", pad.GetName())
+		padName := pad.GetName()
+		if padName != "send_rtp_src_0" {
+			return
+		}
+		if err := pipeline.LinkPad(
+			pad,
+			stw.WebrtcRtpOut.GetStaticPad("sink"),
+		); err != nil {
+			stw.log.Errorw("Failed to link webrtc rtpbin pad to sinkwriter", err)
+			return
+		}
+		stw.log.Infow("Linked WebRTC RTP pad", "pad", padName)
+	})); err != nil {
+		return fmt.Errorf("failed to connect to webrtc rtpbin pad-added signal: %w", err)
+	}
+
+	if err := pipeline.LinkPad(
+		stw.RtpVp8Pay.GetStaticPad("src"),
+		stw.pipeline.WebrtcRtpBin.GetRequestPad("send_rtp_sink_0"),
+	); err != nil {
+		return fmt.Errorf("failed to link rtp vp8 payloader to webrtc rtpbin: %w", err)
 	}
 
 	// link rtcp path
 	if err := pipeline.LinkPad(
 		stw.SipRtcpIn.GetStaticPad("src"),
-		stw.RtpBin.GetRequestPad("recv_rtcp_sink_0"),
+		stw.pipeline.SipRtpBin.GetRequestPad("recv_rtcp_sink_0"),
 	); err != nil {
 		return fmt.Errorf("failed to link sip rtcp src to rtpbin: %w", err)
 	}
 
 	if err := pipeline.LinkPad(
-		stw.RtpBin.GetRequestPad("send_rtcp_src_0"),
+		stw.pipeline.SipRtpBin.GetRequestPad("send_rtcp_src_0"),
 		stw.SipRtcpOut.GetStaticPad("sink"),
 	); err != nil {
 		return fmt.Errorf("failed to link rtpbin rtcp src to sip rtcp sink: %w", err)
@@ -278,7 +294,6 @@ func (stw *SipToWebrtc) Link() error {
 
 func (stw *SipToWebrtc) Close() error {
 	if err := stw.pipeline.Pipeline().RemoveMany(
-		stw.RtpBin,
 		stw.SipRtpIn,
 		stw.Depay,
 		stw.Parse,

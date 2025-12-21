@@ -12,6 +12,7 @@ import (
 
 type CameraPipeline struct {
 	*pipeline.BasePipeline
+	*RtpBins
 	*SipToWebrtc
 
 	ctx    context.Context
@@ -40,6 +41,13 @@ func New(ctx context.Context, log logger.Logger) (*CameraPipeline, error) {
 	p.Log().Debugw("Starting event loop")
 	go cp.loop.Run()
 
+	p.Log().Debugw("Adding RTP bins")
+	cp.RtpBins, err = pipeline.AddChain(cp, NewRtpBins(log, cp))
+	if err != nil {
+		p.Log().Errorw("Failed to add RTP bins", err)
+		return nil, err
+	}
+
 	p.Log().Debugw("Adding SIP to WebRTC chain")
 	cp.SipToWebrtc, err = pipeline.AddChain(cp, NewSipToWebrtcChain(log, cp))
 	if err != nil {
@@ -65,6 +73,10 @@ func (cp *CameraPipeline) Close() error {
 		fmt.Println("Closing camera pipeline")
 		if err := cp.SipToWebrtc.Close(); err != nil {
 			return fmt.Errorf("failed to close SIP to WebRTC chain: %w", err)
+		}
+
+		if err := cp.RtpBins.Close(); err != nil {
+			return fmt.Errorf("failed to close RTP bins: %w", err)
 		}
 	}
 	fmt.Println("Camera pipeline closed")

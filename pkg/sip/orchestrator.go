@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"runtime"
 	"sync"
 	"time"
 
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
 	"github.com/livekit/protocol/logger"
+	"github.com/livekit/sip/pkg/sip/pipeline"
 )
 
 var (
@@ -136,23 +136,7 @@ func (o *MediaOrchestrator) okStates(allowed ...MediaState) error {
 
 const DispatchTimeout = 20 * time.Second
 
-var dispatchLog *os.File
-
-func init() {
-	var err error
-	dispatchLog, err = os.OpenFile("media_orchestrator_dispatch.log.ans", os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		panic(fmt.Sprintf("could not open media orchestrator dispatch log file: %v", err))
-	}
-}
-
-const colorRed = "\033[0;31m"
-const colorGreen = "\033[0;32m"
-const colorNone = "\033[0m"
-
 func (o *MediaOrchestrator) dispatch(fn func() error) error {
-	fmt.Fprintf(dispatchLog, "%s--> dispatching operation %p%s\n", colorGreen, fn, colorNone)
-	defer fmt.Fprintf(dispatchLog, "%s<-- dispatched operation %p%s\n", colorRed, fn, colorNone)
 	done := make(chan error)
 	op := dispatchOperation{
 		fn:   fn,
@@ -217,22 +201,19 @@ func (o *MediaOrchestrator) close() error {
 		o.bfcp.Close(),
 	)
 	o.cancel()
+
 	return err
 }
 
 func (o *MediaOrchestrator) Close() error {
 	o.cancel()
-	// if o.state == MediaStateStopped {
-	// 	return nil
-	// }
-	// if err := o.okStates(MediaStateFailed, MediaStateOK, MediaStateReady, MediaStateStarted); err != nil {
-	// 	return err
-	// }
-	// var err error
-	// err = o.dispatch(func() error {
-	// 	return o.close()
-	// })
 	o.wg.Wait()
+
+	log := o.log
+	*o = MediaOrchestrator{}
+	pipeline.ForceMemoryRelease()
+	log.Debugw("media orchestrator closed")
+
 	return nil
 }
 
