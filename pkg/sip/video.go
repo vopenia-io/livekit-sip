@@ -226,11 +226,11 @@ func (v *VideoManager) Reconcile(remote netip.Addr, media *sdpv2.SDPMedia) (Reco
 		return ReconcileStatusUnchanged, fmt.Errorf("video manager is closed")
 	}
 
-	// if v.mediaOK(media) {
-	// 	v.log.Debugw("video media unchanged, no reconciliation needed", "oldMedia", v.Media, "newMedia", media)
-	// 	v.Media = media
-	// 	return nil
-	// }
+	if v.mediaOK(media) {
+		v.log.Debugw("video media unchanged, no reconciliation needed", "oldMedia", v.Media, "newMedia", media)
+		v.Media = media
+		return ReconcileStatusUnchanged, nil
+	}
 
 	if !isMedia(media) {
 		v.log.Debugw("video media disabled, stopping video manager", "media", media)

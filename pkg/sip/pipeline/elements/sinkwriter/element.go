@@ -103,7 +103,7 @@ func (s *sinkWriter) Constructed(self *glib.Object) {
 		writer: nil,
 	}
 
-	s.self.SetSync(false)
+	// s.self.SetSync(false)
 }
 
 func (s *sinkWriter) SetProperty(self *glib.Object, id uint, value *glib.Value) {

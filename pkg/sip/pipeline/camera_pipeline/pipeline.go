@@ -12,8 +12,10 @@ import (
 
 type CameraPipeline struct {
 	*pipeline.BasePipeline
-	*RtpBins
+	*SipIo
+	*WebrtcIo
 	*SipToWebrtc
+	*WebrtcToSip
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -41,10 +43,23 @@ func New(ctx context.Context, log logger.Logger) (*CameraPipeline, error) {
 	p.Log().Debugw("Starting event loop")
 	go cp.loop.Run()
 
-	p.Log().Debugw("Adding RTP bins")
-	cp.RtpBins, err = pipeline.AddChain(cp, NewRtpBins(log, cp))
+	// p.Log().Debugw("Adding RTP bins")
+	// cp.RtpBins, err = pipeline.AddChain(cp, NewRtpBins(log, cp))
+	// if err != nil {
+	// 	p.Log().Errorw("Failed to add RTP bins", err)
+	// 	return nil, err
+	// }
+	p.Log().Debugw("Adding SIP IO chain")
+	cp.SipIo, err = pipeline.AddChain(cp, NewSipInput(log, cp))
 	if err != nil {
-		p.Log().Errorw("Failed to add RTP bins", err)
+		p.Log().Errorw("Failed to add SIP IO chain", err)
+		return nil, err
+	}
+
+	p.Log().Debugw("Adding Webrtc IO chain")
+	cp.WebrtcIo, err = pipeline.AddChain(cp, NewWebrtcIo(log, cp))
+	if err != nil {
+		p.Log().Errorw("Failed to add WebRTC IO chain", err)
 		return nil, err
 	}
 
@@ -52,6 +67,24 @@ func New(ctx context.Context, log logger.Logger) (*CameraPipeline, error) {
 	cp.SipToWebrtc, err = pipeline.AddChain(cp, NewSipToWebrtcChain(log, cp))
 	if err != nil {
 		p.Log().Errorw("Failed to add SIP to WebRTC chain", err)
+		return nil, err
+	}
+
+	p.Log().Debugw("Adding WebRTC to SIP chain")
+	cp.WebrtcToSip, err = pipeline.AddChain(cp, NewWebrtcToSipChain(log, cp))
+	if err != nil {
+		p.Log().Errorw("Failed to add WebRTC to SIP chain", err)
+		return nil, err
+	}
+
+	p.Log().Debugw("Linking chains")
+	if err := pipeline.LinkChains(cp,
+		cp.SipIo,
+		cp.WebrtcIo,
+		cp.SipToWebrtc,
+		cp.WebrtcToSip,
+	); err != nil {
+		p.Log().Errorw("Failed to link chains", err)
 		return nil, err
 	}
 
@@ -70,16 +103,26 @@ func (cp *CameraPipeline) Close() error {
 	}
 
 	if !closed {
-		fmt.Println("Closing camera pipeline")
+		cp.Log().Debugw("Closing camera pipeline chains")
+
+		cp.Log().Debugw("Closing SIP IO")
+		if err := cp.SipIo.Close(); err != nil {
+			return fmt.Errorf("failed to close SIP IO: %w", err)
+		}
+		cp.Log().Debugw("Closing WebRTC IO")
+		if err := cp.WebrtcIo.Close(); err != nil {
+			return fmt.Errorf("failed to close WebRTC IO: %w", err)
+		}
+		cp.Log().Debugw("Closing SIP to WebRTC chain")
 		if err := cp.SipToWebrtc.Close(); err != nil {
 			return fmt.Errorf("failed to close SIP to WebRTC chain: %w", err)
 		}
-
-		if err := cp.RtpBins.Close(); err != nil {
-			return fmt.Errorf("failed to close RTP bins: %w", err)
+		cp.Log().Debugw("Closing WebRTC to SIP chain")
+		if err := cp.WebrtcToSip.Close(); err != nil {
+			return fmt.Errorf("failed to close WebRTC to SIP chain: %w", err)
 		}
 	}
-	fmt.Println("Camera pipeline closed")
+	cp.Log().Infow("Camera pipeline closed")
 
 	return nil
 }

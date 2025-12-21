@@ -3,6 +3,7 @@ package pipeline
 import (
 	"fmt"
 	"os"
+	"reflect"
 	"time"
 
 	"github.com/frostbyte73/core"
@@ -25,7 +26,7 @@ type GstPipeline interface {
 	Closed() bool
 }
 
-type GstChain[T GstPipeline] interface {
+type GstChain interface {
 	Create() error
 	Add() error
 	Link() error
@@ -131,7 +132,7 @@ func New(log logger.Logger) (*BasePipeline, error) {
 	return gp, nil
 }
 
-func AddChain[T GstPipeline, C GstChain[T]](p T, chain C) (C, error) {
+func AddChain[C GstChain](p GstPipeline, chain C) (C, error) {
 	var zero C
 
 	p.Log().Debugw("Adding chain to pipeline")
@@ -144,11 +145,32 @@ func AddChain[T GstPipeline, C GstChain[T]](p T, chain C) (C, error) {
 		return zero, fmt.Errorf("failed to add chain to pipeline: %w", err)
 	}
 
-	p.Log().Debugw("Linking chain in pipeline")
-	if err := chain.Link(); err != nil {
-		return zero, fmt.Errorf("failed to link chain in pipeline: %w", err)
-	}
+	// p.Log().Debugw("Linking chain in pipeline")
+	// if err := chain.Link(); err != nil {
+	// 	return zero, fmt.Errorf("failed to link chain in pipeline: %w", err)
+	// }
 
 	p.Log().Debugw("Chain added to pipeline")
 	return chain, nil
+}
+
+func LinkChains(p GstPipeline, chains ...GstChain) error {
+	for i, chain := range chains {
+		p.Log().Debugw("Linking chain in pipeline", "chain_index", i)
+		if err := chain.Link(); err != nil {
+			typ := reflect.TypeOf(chain)
+			p.Log().Errorw("Failed to link chain in pipeline", err, "index", i, "chain_type", typ.String())
+			return fmt.Errorf("failed to link chain %s in pipeline: %w", typ.String(), err)
+		}
+	}
+	return nil
+}
+
+func SyncElements(elements ...*gst.Element) error {
+	for _, elem := range elements {
+		if !elem.SyncStateWithParent() {
+			return fmt.Errorf("failed to sync state for %s", elem.GetName())
+		}
+	}
+	return nil
 }
