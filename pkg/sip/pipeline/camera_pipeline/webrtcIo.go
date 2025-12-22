@@ -31,6 +31,7 @@ type WebrtcIo struct {
 	InputSelector *gst.Element
 
 	RtcpFunnel *gst.Element
+	RtcpFilter *gst.Element
 
 	WebrtcRtpOut  *gst.Element
 	WebrtcRtcpOut *gst.Element
@@ -71,11 +72,19 @@ func (wio *WebrtcIo) Create() error {
 	}
 
 	// rtcp
-	wio.RtcpFunnel, err = gst.NewElementWithProperties("rtpfunnel", map[string]interface{}{
+	wio.RtcpFunnel, err = gst.NewElementWithProperties("funnel", map[string]interface{}{
 		"name": "webrtc_rtcp_funnel",
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create WebRTC rtcp funnel: %w", err)
+	}
+
+	wio.RtcpFilter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
+		"name": "webrtc_rtcp_filter",
+		"caps": gst.NewCapsFromString("application/x-rtcp"),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create WebRTC rtcp filter: %w", err)
 	}
 
 	wio.WebrtcRtpOut, err = gst.NewElementWithProperties("sinkwriter", map[string]interface{}{
@@ -89,9 +98,10 @@ func (wio *WebrtcIo) Create() error {
 	}
 
 	wio.WebrtcRtcpOut, err = gst.NewElementWithProperties("sinkwriter", map[string]interface{}{
-		"name": "webrtc_rtcp_out",
-		"caps": gst.NewCapsFromString("application/x-rtcp"),
-		"sync": false,
+		"name":  "webrtc_rtcp_out",
+		"caps":  gst.NewCapsFromString("application/x-rtcp"),
+		"sync":  false,
+		"async": false,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create WebRTC rtcp sinkwriter: %w", err)
@@ -107,6 +117,7 @@ func (wio *WebrtcIo) Add() error {
 		wio.RtpFunnel,
 		wio.InputSelector,
 		wio.RtcpFunnel,
+		wio.RtcpFilter,
 		wio.WebrtcRtpOut,
 		wio.WebrtcRtcpOut,
 	); err != nil {
@@ -199,12 +210,15 @@ func (wio *WebrtcIo) Link() error {
 	}
 
 	// link rtcp in
-	// if err := pipeline.LinkPad(
-	// 	wio.RtcpFunnel.GetStaticPad("src"),
-	// 	wio.WebrtcRtpBin.GetRequestPad("recv_rtcp_sink_0"),
-	// ); err != nil {
-	// 	return fmt.Errorf("failed to link webrtc rtcp src to rtpbin: %w", err)
-	// }
+	if err := wio.RtcpFunnel.Link(wio.RtcpFilter); err != nil {
+		return fmt.Errorf("failed to link webrtc rtcp funnel to filter: %w", err)
+	}
+	if err := pipeline.LinkPad(
+		wio.RtcpFilter.GetStaticPad("src"),
+		wio.WebrtcRtpBin.GetRequestPad("recv_rtcp_sink_0"),
+	); err != nil {
+		return fmt.Errorf("failed to link webrtc rtcp src to rtpbin: %w", err)
+	}
 
 	// link rtcp out
 	if err := pipeline.LinkPad(
@@ -232,6 +246,7 @@ func (wio *WebrtcIo) Close() error {
 		wio.RtpFunnel,
 		wio.InputSelector,
 		wio.RtcpFunnel,
+		wio.RtcpFilter,
 		wio.WebrtcRtpOut,
 		wio.WebrtcRtcpOut,
 	); err != nil {

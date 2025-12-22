@@ -91,12 +91,12 @@ func (wt *WebrtcTrack) Link() error {
 		return fmt.Errorf("failed to link webrtc rtp queue to rtpbin: %w", err)
 	}
 
-	// if err := pipeline.LinkPad(
-	// 	wt.WebrtcRtcpIn.GetStaticPad("src"),
-	// 	wt.parent.RtcpFunnel.GetRequestPad("sink_%u"),
-	// ); err != nil {
-	// 	return fmt.Errorf("failed to link webrtc rtcp queue to rtcp funnel: %w", err)
-	// }
+	if err := pipeline.LinkPad(
+		wt.WebrtcRtcpIn.GetStaticPad("src"),
+		wt.parent.RtcpFunnel.GetRequestPad("sink_%u"),
+	); err != nil {
+		return fmt.Errorf("failed to link webrtc rtcp queue to rtcp funnel: %w", err)
+	}
 
 	return pipeline.SyncElements(
 		wt.WebrtcRtpIn,
