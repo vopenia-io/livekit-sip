@@ -8,14 +8,17 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+
+	"github.com/livekit/protocol/logger"
 )
 
-func NewEventLoop(ctx context.Context) *EventLoop {
+func NewEventLoop(ctx context.Context, log logger.Logger) *EventLoop {
 	ctx, cancel := context.WithCancel(ctx)
 	return &EventLoop{
 		ctx:      ctx,
 		cancel:   cancel,
 		register: make(chan CallbackHandler, 10),
+		log:      log,
 	}
 }
 
@@ -38,6 +41,7 @@ type EventLoop struct {
 	running   atomic.Bool
 	register  chan CallbackHandler
 	callbacks []CallbackHandler
+	log       logger.Logger
 }
 
 func (loop *EventLoop) Stop() {
@@ -49,7 +53,7 @@ func (loop *EventLoop) Stop() {
 
 func (loop *EventLoop) Run() {
 	if loop.running.Swap(true) {
-		fmt.Println("EventLoop: already running")
+		loop.log.Debugw("EventLoop: already running")
 		return
 	}
 	runtime.LockOSThread()
@@ -57,7 +61,7 @@ func (loop *EventLoop) Run() {
 	loop.wg.Add(1)
 	defer loop.wg.Done()
 	for {
-		fmt.Printf("EventLoop: waiting for events...\n")
+		loop.log.Debugw("EventLoop: waiting for events...")
 		loop.mu.Lock()
 		cases := make([]reflect.SelectCase, len(loop.callbacks)*2+2)
 		cases[0] = reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(loop.ctx.Done())}
@@ -69,7 +73,7 @@ func (loop *EventLoop) Run() {
 		}
 
 		chosen, recv, ok := reflect.Select(cases)
-		fmt.Printf("EventLoop: selected case %d (ok=%v)\n", chosen, ok)
+		loop.log.Debugw("EventLoop: selected case", "case", chosen, "ok", ok)
 		if chosen == 0 {
 			loop.mu.Unlock()
 			return
@@ -93,9 +97,9 @@ func (loop *EventLoop) Run() {
 			for i := 0; i < cb.inT; i++ {
 				args[i] = recv.Field(i)
 			}
-			fmt.Printf("EventLoop: invoking callback with %d args: %v\n", cb.inT, args)
+			loop.log.Debugw("EventLoop: invoking callback", "numArgs", cb.inT, "args", args)
 			result := cb.cb.Call(args)
-			fmt.Printf("EventLoop: callback returned %d results: %v\n", cb.outT, result)
+			loop.log.Debugw("EventLoop: callback returned", "numResults", cb.outT, "results", result)
 			retStructFields := make([]reflect.StructField, cb.outT)
 			for i := 0; i < cb.outT; i++ {
 				retStructFields[i] = reflect.StructField{
@@ -108,9 +112,9 @@ func (loop *EventLoop) Run() {
 			for i := 0; i < cb.outT; i++ {
 				retStruct.Field(i).Set(result[i])
 			}
-			fmt.Printf("EventLoop: sending return struct: %v\n", retStruct)
+			loop.log.Debugw("EventLoop: sending return struct", "retStruct", retStruct)
 			cb.ret.Send(retStruct)
-			fmt.Printf("EventLoop: return struct sent\n")
+			loop.log.Debugw("EventLoop: return struct sent")
 			// cb.mu.Unlock()
 
 		} else {

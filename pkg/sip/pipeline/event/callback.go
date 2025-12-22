@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"reflect"
 	"sync"
+
+	"github.com/livekit/protocol/logger"
 )
 
-func MakeCallback[Callback any]() (Callback, *sync.Mutex, reflect.Value, reflect.Value) {
+func MakeCallback[Callback any](log logger.Logger) (Callback, *sync.Mutex, reflect.Value, reflect.Value) {
 	typ := reflect.TypeFor[Callback]()
 
-	fmt.Printf("Making callback of type: %v\n", typ)
+	log.Debugw("Making callback", "type", typ)
 
 	if typ.Kind() != reflect.Func {
 		return *new(Callback), &sync.Mutex{}, reflect.Value{}, reflect.Value{}
@@ -19,7 +21,7 @@ func MakeCallback[Callback any]() (Callback, *sync.Mutex, reflect.Value, reflect
 	inT := typ.NumIn()
 	outT := typ.NumOut()
 
-	fmt.Printf("Making callback with %d inputs\n", inT)
+	log.Debugw("Making callback", "numInputs", inT)
 	argStructFields := make([]reflect.StructField, inT)
 	for i := 0; i < inT; i++ {
 		argStructFields[i] = reflect.StructField{
@@ -29,12 +31,12 @@ func MakeCallback[Callback any]() (Callback, *sync.Mutex, reflect.Value, reflect
 	}
 
 	argStructType := reflect.StructOf(argStructFields)
-	fmt.Printf("Created args struct type: %v\n", argStructType)
+	log.Debugw("Created args struct type", "type", argStructType)
 
 	argChanType := reflect.ChanOf(reflect.BothDir, argStructType)
 	argChan := reflect.MakeChan(argChanType, 1)
 
-	fmt.Printf("Making callback with %d outputs\n", outT)
+	log.Debugw("Making callback", "numOutputs", outT)
 	retStuctFields := make([]reflect.StructField, outT)
 	for i := 0; i < outT; i++ {
 		retStuctFields[i] = reflect.StructField{
@@ -44,7 +46,7 @@ func MakeCallback[Callback any]() (Callback, *sync.Mutex, reflect.Value, reflect
 	}
 
 	retStructType := reflect.StructOf(retStuctFields)
-	fmt.Printf("Created return struct type: %v\n", retStructType)
+	log.Debugw("Created return struct type", "type", retStructType)
 
 	retChanType := reflect.ChanOf(reflect.BothDir, retStructType)
 	retChan := reflect.MakeChan(retChanType, 1)
@@ -52,13 +54,13 @@ func MakeCallback[Callback any]() (Callback, *sync.Mutex, reflect.Value, reflect
 	mu := sync.Mutex{}
 
 	wrappedFunc := reflect.MakeFunc(typ, func(args []reflect.Value) (results []reflect.Value) {
-		fmt.Printf("Invoked wrapped function with %d args: %v\n", len(args), args)
+		log.Debugw("Invoked wrapped function", "numArgs", len(args), "args", args)
 		// mu.Lock()
 		argStruct := reflect.New(argStructType).Elem()
 		for i, arg := range args {
 			argStruct.Field(i).Set(arg)
 		}
-		fmt.Printf("Sending args struct: %v\n", argStruct)
+		log.Debugw("Sending args struct", "argStruct", argStruct)
 		argChan.Send(argStruct)
 		recv, ok := retChan.Recv()
 		if !ok {
@@ -74,7 +76,7 @@ func MakeCallback[Callback any]() (Callback, *sync.Mutex, reflect.Value, reflect
 		return results
 	})
 
-	fmt.Printf("Created wrapped function: %v\n", wrappedFunc)
+	log.Debugw("Created wrapped function", "func", wrappedFunc)
 
 	return wrappedFunc.Interface().(Callback), &mu, argChan, retChan
 }
@@ -103,7 +105,7 @@ func HandleCallback[Callback any](ctx context.Context, loop *EventLoop, cb Callb
 }
 
 func RegisterCallback[Callback any](ctx context.Context, loop *EventLoop, cb Callback) Callback {
-	wrap, mu, args, ret := MakeCallback[Callback]()
+	wrap, mu, args, ret := MakeCallback[Callback](loop.log)
 
 	HandleCallback(ctx, loop, cb, mu, args, ret)
 

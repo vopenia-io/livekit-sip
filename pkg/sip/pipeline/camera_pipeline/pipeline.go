@@ -28,7 +28,7 @@ func New(ctx context.Context, log logger.Logger) (*CameraPipeline, error) {
 	cp := &CameraPipeline{
 		ctx:    ctx,
 		cancel: cancel,
-		loop:   event.NewEventLoop(ctx),
+		loop:   event.NewEventLoop(ctx, log),
 	}
 
 	p, err := pipeline.New(log.WithComponent("camera_pipeline"))
