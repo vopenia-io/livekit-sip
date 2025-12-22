@@ -8,6 +8,8 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+
+	"github.com/livekit/protocol/logger"
 )
 
 func NewEventLoop(ctx context.Context) *EventLoop {
@@ -49,7 +51,7 @@ func (loop *EventLoop) Stop() {
 
 func (loop *EventLoop) Run() {
 	if loop.running.Swap(true) {
-		fmt.Println("EventLoop: already running")
+		logger.Debugw("EventLoop: already running")
 		return
 	}
 	runtime.LockOSThread()
@@ -57,7 +59,7 @@ func (loop *EventLoop) Run() {
 	loop.wg.Add(1)
 	defer loop.wg.Done()
 	for {
-		fmt.Printf("EventLoop: waiting for events...\n")
+		logger.Debugw("EventLoop: waiting for events")
 		loop.mu.Lock()
 		cases := make([]reflect.SelectCase, len(loop.callbacks)*2+2)
 		cases[0] = reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(loop.ctx.Done())}
@@ -69,7 +71,7 @@ func (loop *EventLoop) Run() {
 		}
 
 		chosen, recv, ok := reflect.Select(cases)
-		fmt.Printf("EventLoop: selected case %d (ok=%v)\n", chosen, ok)
+		logger.Debugw("EventLoop: selected case", "case", chosen, "ok", ok)
 		if chosen == 0 {
 			loop.mu.Unlock()
 			return
@@ -93,9 +95,9 @@ func (loop *EventLoop) Run() {
 			for i := 0; i < cb.inT; i++ {
 				args[i] = recv.Field(i)
 			}
-			fmt.Printf("EventLoop: invoking callback with %d args: %v\n", cb.inT, args)
+			logger.Debugw("EventLoop: invoking callback", "argCount", cb.inT, "args", args)
 			result := cb.cb.Call(args)
-			fmt.Printf("EventLoop: callback returned %d results: %v\n", cb.outT, result)
+			logger.Debugw("EventLoop: callback returned", "resultCount", cb.outT, "results", result)
 			retStructFields := make([]reflect.StructField, cb.outT)
 			for i := 0; i < cb.outT; i++ {
 				retStructFields[i] = reflect.StructField{
@@ -108,9 +110,9 @@ func (loop *EventLoop) Run() {
 			for i := 0; i < cb.outT; i++ {
 				retStruct.Field(i).Set(result[i])
 			}
-			fmt.Printf("EventLoop: sending return struct: %v\n", retStruct)
+			logger.Debugw("EventLoop: sending return struct", "struct", retStruct)
 			cb.ret.Send(retStruct)
-			fmt.Printf("EventLoop: return struct sent\n")
+			logger.Debugw("EventLoop: return struct sent")
 			// cb.mu.Unlock()
 
 		} else {

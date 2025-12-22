@@ -85,18 +85,18 @@ var pid = os.Getpid()
 
 func (p *BasePipeline) Close() error {
 	if p.Closed() {
-		fmt.Println("Pipeline already closed")
+		p.log.Debugw("pipeline already closed")
 		return nil
 	}
 	p.closed.Break()
-	fmt.Println("Closing pipeline")
+	p.log.Debugw("closing pipeline")
 
-	fmt.Printf("Setting pipeline to null state (pid %d)\n", pid)
+	p.log.Debugw("setting pipeline to null state", "pid", pid)
 	err := p.Pipeline().SetState(gst.StateNull)
-	fmt.Printf("Pipeline set to null state, err: %v\n", err)
+	p.log.Debugw("pipeline set to null state", "err", err)
 	time.Sleep(100 * time.Millisecond) // give some time to settle
 	if err != nil {
-		fmt.Printf("Failed to set pipeline to null state: %v\n", err)
+		p.log.Debugw("failed to set pipeline to null state", "err", err)
 		return fmt.Errorf("failed to set pipeline to null state: %w", err)
 	}
 
@@ -109,7 +109,7 @@ func (p *BasePipeline) Close() error {
 
 	// time.Sleep(1 * time.Second)
 
-	fmt.Println("Pipeline closed")
+	p.log.Debugw("pipeline closed")
 
 	return nil
 }
