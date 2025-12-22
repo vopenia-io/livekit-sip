@@ -34,6 +34,7 @@ func (p *BasePipeline) Monitor() {
 
 		for !p.closed.IsBroken() {
 			dotData := p.Pipeline().DebugBinToDotData(gst.DebugGraphShowCapsDetails | gst.DebugGraphShowStates)
+			dotData = sanitizeDot(dotData)
 
 			if dotData != prevDot {
 				fmt.Printf("Pipeline %s changed, updating dot file\n", name)
