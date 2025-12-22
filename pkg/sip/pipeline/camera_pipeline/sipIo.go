@@ -70,9 +70,10 @@ func (sio *SipIo) Create() error {
 	}
 
 	sio.SipRtcpOut, err = gst.NewElementWithProperties("sinkwriter", map[string]interface{}{
-		"name": "sip_rtcp_out",
-		"caps": gst.NewCapsFromString("application/x-rtcp"),
-		"sync": false,
+		"name":  "sip_rtcp_out",
+		"caps":  gst.NewCapsFromString("application/x-rtcp"),
+		"sync":  false,
+		"async": false,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create SIP rtcp sinkwriter: %w", err)
