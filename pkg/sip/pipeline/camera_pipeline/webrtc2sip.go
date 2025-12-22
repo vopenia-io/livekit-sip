@@ -28,6 +28,7 @@ type WebrtcToSip struct {
 	Queue       *gst.Element
 	X264Enc     *gst.Element
 	RtpH264Pay  *gst.Element
+	CapsFilter  *gst.Element
 }
 
 var _ pipeline.GstChain = (*WebrtcToSip)(nil)
@@ -90,6 +91,12 @@ func (stw *WebrtcToSip) Create() error {
 		return fmt.Errorf("failed to create webrtc rtp h264 payloader: %w", err)
 	}
 
+	stw.CapsFilter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
+		"caps": gst.NewCapsFromString("application/x-rtp"),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create webrtc to sip capsfilter: %w", err)
+	}
 	return nil
 }
 
@@ -103,6 +110,7 @@ func (stw *WebrtcToSip) Add() error {
 		stw.Queue,
 		stw.X264Enc,
 		stw.RtpH264Pay,
+		stw.CapsFilter,
 	); err != nil {
 		return fmt.Errorf("failed to add WebRTC to SIP elements to pipeline: %w", err)
 	}
@@ -119,9 +127,11 @@ func (stw *WebrtcToSip) Link() error {
 		stw.Queue,
 		stw.X264Enc,
 		stw.RtpH264Pay,
+		stw.CapsFilter,
 	); err != nil {
 		return fmt.Errorf("failed to link WebRTC to SIP elements: %w", err)
 	}
+
 	return nil
 }
 
@@ -135,6 +145,7 @@ func (stw *WebrtcToSip) Close() error {
 		stw.Queue,
 		stw.X264Enc,
 		stw.RtpH264Pay,
+		stw.CapsFilter,
 	); err != nil {
 		return fmt.Errorf("failed to remove WebRTC to SIP elements from pipeline: %w", err)
 	}

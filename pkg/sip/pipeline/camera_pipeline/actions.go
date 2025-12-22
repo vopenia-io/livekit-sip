@@ -64,7 +64,9 @@ func (cp *CameraPipeline) SipIO(rtp, rtcp net.Conn, pt uint8) error {
 	rtcpHandle := cgo.NewHandle(rtcp)
 	defer rtcpHandle.Delete()
 
-	h264Caps := fmt.Sprintf("application/x-rtp,media=video,encoding-name=H264,payload=%d,clock-rate=90000", pt)
+	h264Caps := fmt.Sprintf(
+		"application/x-rtp,media=video,encoding-name=H264,payload=%d,clock-rate=90000",
+		pt)
 
 	cp.Log().Infow("Setting SIP IO",
 		"rtp_remote", rtp.RemoteAddr(),
@@ -83,8 +85,14 @@ func (cp *CameraPipeline) SipIO(rtp, rtcp net.Conn, pt uint8) error {
 		return fmt.Errorf("failed to connect to rtpbin request-pt-map signal: %w", err)
 	}
 
+	if err := cp.WebrtcToSip.CapsFilter.SetProperty("caps",
+		gst.NewCapsFromString(h264Caps+",rtcp-fb-nack-pli=1,rtcp-fb-nack=1,rtcp-fb-ccm-fir=1"),
+	); err != nil {
+		return fmt.Errorf("failed to set webrtc to sip caps filter caps (pt: %d): %w", pt, err)
+	}
+
 	if err := cp.SipRtpIn.SetProperty("caps",
-		gst.NewCapsFromString(h264Caps),
+		gst.NewCapsFromString(h264Caps+",rtcp-fb-nack-pli=1,rtcp-fb-nack=1,rtcp-fb-ccm-fir=1"),
 	); err != nil {
 		return fmt.Errorf("failed to set sip rtp in caps (pt: %d): %w", pt, err)
 	}
@@ -159,10 +167,6 @@ func (cp *CameraPipeline) AddWebrtcTrack(ssrc uint32, rtp, rtcp io.ReadCloser) (
 	if err := pipeline.LinkChains(cp, track); err != nil {
 		return nil, fmt.Errorf("failed to link webrtc track chain: %w", err)
 	}
-
-	// if err := cp.DirtySwitchWebrtcInput(ssrc); err != nil {
-	// 	return nil, fmt.Errorf("failed to switch webrtc input to ssrc %d: %w", ssrc, err)
-	// }
 
 	return track, nil
 }

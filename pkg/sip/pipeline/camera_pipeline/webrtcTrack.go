@@ -38,7 +38,7 @@ func (wt *WebrtcTrack) Create() error {
 
 	wt.WebrtcRtpIn, err = gst.NewElementWithProperties("sourcereader", map[string]interface{}{
 		"name":         fmt.Sprintf("webrtc_rtp_in_%d", wt.SSRC),
-		"caps":         gst.NewCapsFromString(VP8CAPS),
+		"caps":         gst.NewCapsFromString(VP8CAPS + ",rtcp-fb-nack-pli=1,rtcp-fb-nack=1,rtcp-fb-ccm-fir=1"),
 		"do-timestamp": true,
 	})
 	if err != nil {

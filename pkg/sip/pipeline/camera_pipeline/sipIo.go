@@ -36,8 +36,8 @@ var _ pipeline.GstChain = (*SipIo)(nil)
 func (sio *SipIo) Create() error {
 	var err error
 	sio.SipRtpBin, err = gst.NewElementWithProperties("rtpbin", map[string]interface{}{
-		"name": "sip_rtp_bin",
-		// "rtp-profile": int(3), // GST_RTP_PROFILE_AVPF
+		"name":        "sip_rtp_bin",
+		"rtp-profile": int(3), // GST_RTP_PROFILE_AVPF
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create SIP rtpbin: %w", err)
@@ -55,6 +55,7 @@ func (sio *SipIo) Create() error {
 		"name":        "sip_rtp_out",
 		"max-bitrate": int(1_500_000),
 		"sync":        false,
+		"async":       false,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create SIP rtp sinkwriter: %w", err)
@@ -147,7 +148,7 @@ func (sio *SipIo) Link() error {
 	}
 
 	if err := pipeline.LinkPad(
-		sio.pipeline.WebrtcToSip.RtpH264Pay.GetStaticPad("src"),
+		sio.pipeline.WebrtcToSip.CapsFilter.GetStaticPad("src"),
 		sio.SipRtpBin.GetRequestPad("send_rtp_sink_0"),
 	); err != nil {
 		return fmt.Errorf("failed to link rtp vp8 payloader to sip rtpbin: %w", err)

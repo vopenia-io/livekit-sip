@@ -43,12 +43,6 @@ func New(ctx context.Context, log logger.Logger) (*CameraPipeline, error) {
 	p.Log().Debugw("Starting event loop")
 	go cp.loop.Run()
 
-	// p.Log().Debugw("Adding RTP bins")
-	// cp.RtpBins, err = pipeline.AddChain(cp, NewRtpBins(log, cp))
-	// if err != nil {
-	// 	p.Log().Errorw("Failed to add RTP bins", err)
-	// 	return nil, err
-	// }
 	p.Log().Debugw("Adding SIP IO chain")
 	cp.SipIo, err = pipeline.AddChain(cp, NewSipInput(log, cp))
 	if err != nil {
