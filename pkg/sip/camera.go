@@ -82,7 +82,7 @@ func (cm *CameraManager) CreateVideoPipeline(opt *MediaOptions) (SipPipeline, er
 	if err != nil {
 		return nil, fmt.Errorf("failed to create SIP WebRTC pipeline: %w", err)
 	}
-	pipeline.Monitor()
+	// pipeline.Monitor()
 
 	return pipeline, nil
 }
