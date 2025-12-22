@@ -1,6 +1,7 @@
 package camera_pipeline
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/sip/pkg/sip/pipeline"
+	"github.com/livekit/sip/pkg/sip/pipeline/event"
 )
 
 func (cp *CameraPipeline) checkReady() error {
@@ -62,20 +64,33 @@ func (cp *CameraPipeline) SipIO(rtp, rtcp net.Conn, pt uint8) error {
 	rtcpHandle := cgo.NewHandle(rtcp)
 	defer rtcpHandle.Delete()
 
+	h264Caps := fmt.Sprintf("application/x-rtp,media=video,encoding-name=H264,payload=%d,clock-rate=90000", pt)
+
+	cp.Log().Infow("Setting SIP IO",
+		"rtp_remote", rtp.RemoteAddr(),
+		"rtp_local", rtp.LocalAddr(),
+		"rtcp_remote", rtcp.RemoteAddr(),
+		"rtcp_local", rtcp.LocalAddr(),
+		"caps", h264Caps,
+	)
+
+	if _, err := cp.SipRtpBin.Connect("request-pt-map", event.RegisterCallback(context.TODO(), cp.loop, func(self *gst.Element, session uint, sipPt uint) *gst.Caps {
+		if sipPt == uint(pt) {
+			return gst.NewCapsFromString(h264Caps)
+		}
+		return nil
+	})); err != nil {
+		return fmt.Errorf("failed to connect to rtpbin request-pt-map signal: %w", err)
+	}
+
 	if err := cp.SipRtpIn.SetProperty("caps",
-		gst.NewCapsFromString(fmt.Sprintf(
-			"application/x-rtp,media=video,encoding-name=H264,payload=%d,clock-rate=90000",
-			pt,
-		)),
+		gst.NewCapsFromString(h264Caps),
 	); err != nil {
 		return fmt.Errorf("failed to set sip rtp in caps (pt: %d): %w", pt, err)
 	}
 
 	if err := cp.SipRtpOut.SetProperty("caps",
-		gst.NewCapsFromString(fmt.Sprintf(
-			"application/x-rtp,media=video,encoding-name=H264,payload=%d,clock-rate=90000",
-			pt,
-		)),
+		gst.NewCapsFromString(h264Caps),
 	); err != nil {
 		return fmt.Errorf("failed to set sip rtp out caps (pt: %d): %w", pt, err)
 	}
