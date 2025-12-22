@@ -90,6 +90,7 @@ func (wio *WebrtcIo) Create() error {
 
 	wio.WebrtcRtcpOut, err = gst.NewElementWithProperties("sinkwriter", map[string]interface{}{
 		"name": "webrtc_rtcp_out",
+		"caps": gst.NewCapsFromString("application/x-rtcp"),
 		"sync": false,
 	})
 	if err != nil {
