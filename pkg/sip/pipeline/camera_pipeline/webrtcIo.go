@@ -49,8 +49,8 @@ var webrtcCaps = map[uint]string{
 func (wio *WebrtcIo) Create() error {
 	var err error
 	wio.WebrtcRtpBin, err = gst.NewElementWithProperties("rtpbin", map[string]interface{}{
-		"name": "webrtc_rtp_bin",
-		// "rtp-profile": int(3), // GST_RTP_PROFILE_AVPF
+		"name":        "webrtc_rtp_bin",
+		"rtp-profile": int(3), // GST_RTP_PROFILE_AVPF
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create WebRTC rtpbin: %w", err)
@@ -203,7 +203,7 @@ func (wio *WebrtcIo) Link() error {
 	}
 
 	if err := pipeline.LinkPad(
-		wio.pipeline.SipToWebrtc.Vp8Pay.GetStaticPad("src"),
+		wio.pipeline.SipToWebrtc.CapsFilter.GetStaticPad("src"),
 		wio.WebrtcRtpBin.GetRequestPad("send_rtp_sink_0"),
 	); err != nil {
 		return fmt.Errorf("failed to link rtp vp8 payloader to webrtc rtpbin: %w", err)
