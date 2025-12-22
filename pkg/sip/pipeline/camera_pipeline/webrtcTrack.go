@@ -126,10 +126,17 @@ func (wt *WebrtcTrack) LinkParent(rtpbinPad *gst.Pad) error {
 		return fmt.Errorf("failed to link webrtc rtp queue to input selector: %w", err)
 	}
 
-	return pipeline.SyncElements(
+	if err := pipeline.SyncElements(
 		wt.Vp8Depay,
 		wt.RtpQueue,
-	)
+	); err != nil {
+		return fmt.Errorf("failed to sync webrtc track elements: %w", err)
+	}
+
+	if err := wt.parent.pipeline.DirtySwitchWebrtcInput(wt.SSRC); err != nil {
+		return fmt.Errorf("failed to switch webrtc input to ssrc %d: %w", wt.SSRC, err)
+	}
+	return nil
 }
 
 // Close implements GstChain.

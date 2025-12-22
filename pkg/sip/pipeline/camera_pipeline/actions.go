@@ -145,9 +145,9 @@ func (cp *CameraPipeline) AddWebrtcTrack(ssrc uint32, rtp, rtcp io.ReadCloser) (
 		return nil, fmt.Errorf("failed to link webrtc track chain: %w", err)
 	}
 
-	if err := cp.DirtySwitchWebrtcInput(ssrc); err != nil {
-		return nil, fmt.Errorf("failed to switch webrtc input to ssrc %d: %w", ssrc, err)
-	}
+	// if err := cp.DirtySwitchWebrtcInput(ssrc); err != nil {
+	// 	return nil, fmt.Errorf("failed to switch webrtc input to ssrc %d: %w", ssrc, err)
+	// }
 
 	return track, nil
 }
