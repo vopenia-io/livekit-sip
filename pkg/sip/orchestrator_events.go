@@ -30,6 +30,15 @@ func (o *MediaOrchestrator) cameraTrackSubscribed(track *webrtc.TrackRemote, pub
 	return o.camera.WebrtcTrackInput(ti, rp.SID(), uint32(track.SSRC()))
 }
 
+func (o *MediaOrchestrator) screenshareTrackSubscribed(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) error {
+	if o.screenshare == nil || o.screenshare.Status() != VideoStatusStarted {
+		o.log.Warnw("screenshare not started, ignoring track", nil, "status", o.screenshare.Status())
+		return nil
+	}
+	ti := NewTrackInput(track, pub, rp)
+	return o.screenshare.WebrtcTrackInput(ti, rp.SID(), uint32(track.SSRC()))
+}
+
 func (o *MediaOrchestrator) webrtcTrackSubscribed(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) error {
 	log := o.log.WithValues("participant", rp.Identity(), "pID", rp.SID(), "trackID", pub.SID(), "trackName", pub.Name())
 	switch pub.Kind() {
@@ -37,6 +46,9 @@ func (o *MediaOrchestrator) webrtcTrackSubscribed(track *webrtc.TrackRemote, pub
 		switch pub.Source() {
 		case livekit.TrackSource_CAMERA:
 			return o.tracks.CameraTracks.TrackSubscribed(track, pub, rp, o.cameraTrackSubscribed)
+		case livekit.TrackSource_SCREEN_SHARE:
+			log.Infow("screenshare track subscribed")
+			return o.screenshareTrackSubscribed(track, pub, rp)
 		}
 	}
 	log.Warnw("unsupported track kind for subscription", fmt.Errorf("kind=%s", pub.Kind()))
@@ -59,6 +71,14 @@ func (o *MediaOrchestrator) cameraTrackUnsubscribed(_ *webrtc.TrackRemote, _ *lk
 	return o.camera.RemoveWebrtcTrackInput(rp.SID())
 }
 
+func (o *MediaOrchestrator) screenshareTrackUnsubscribed(_ *webrtc.TrackRemote, _ *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) error {
+	if o.screenshare == nil || !o.screenshare.IsActive() {
+		return nil
+	}
+	o.log.Infow("screenshare track unsubscribed", "participant", rp.Identity())
+	return o.screenshare.Stop()
+}
+
 func (o *MediaOrchestrator) webrtcTrackUnsubscribed(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) error {
 	log := o.log.WithValues("participant", rp.Identity(), "pID", rp.SID(), "trackID", pub.SID(), "trackName", pub.Name())
 	switch pub.Kind() {
@@ -66,6 +86,9 @@ func (o *MediaOrchestrator) webrtcTrackUnsubscribed(track *webrtc.TrackRemote, p
 		switch pub.Source() {
 		case livekit.TrackSource_CAMERA:
 			return o.tracks.CameraTracks.TrackUnsubscribed(track, pub, rp, o.cameraTrackUnsubscribed)
+		case livekit.TrackSource_SCREEN_SHARE:
+			log.Infow("screenshare track unsubscribed")
+			return o.screenshareTrackUnsubscribed(track, pub, rp)
 		}
 	}
 	log.Warnw("unsupported track kind for unsubscription", fmt.Errorf("kind=%s", pub.Kind()))
