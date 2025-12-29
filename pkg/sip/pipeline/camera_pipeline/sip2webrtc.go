@@ -132,7 +132,7 @@ func (stw *SipToWebrtc) Create() error {
 	}
 
 	stw.CapsFilter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-		"caps": gst.NewCapsFromString("application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,rtcp-fb-nack=1,rtcp-fb-nack-pli=1,rtcp-fb-ccm-fir=1,rtcp-fb-transport-cc=1,extmap-3=\"http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\""),
+		"caps": gst.NewCapsFromString("application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,rtcp-fb-nack=(boolean)true,rtcp-fb-nack-pli=(boolean)true,rtcp-fb-ccm-fir=(boolean)true,rtcp-fb-transport-cc=(boolean)true,extmap-3=\"http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\""),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create SIP to WebRTC capsfilter: %w", err)
