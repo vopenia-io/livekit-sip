@@ -240,6 +240,9 @@ func (wio *WebrtcIo) Close() error {
 			errs = append(errs, err)
 		}
 	}
+	for k := range wio.Tracks {
+		delete(wio.Tracks, k)
+	}
 
 	if err := wio.pipeline.Pipeline().RemoveMany(
 		wio.WebrtcRtpBin,

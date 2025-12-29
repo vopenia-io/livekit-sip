@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
@@ -69,6 +70,7 @@ type MediaOrchestrator struct {
 	inbound *sipInbound
 
 	dispatchCH chan dispatchOperation
+	dispatchOK atomic.Bool
 	wg         sync.WaitGroup
 
 	audioinfo AudioInfo
@@ -95,6 +97,9 @@ func NewMediaOrchestrator(log logger.Logger, ctx context.Context, inbound *sipIn
 
 	o.wg.Add(1)
 	go o.dispatchLoop()
+	for !o.dispatchOK.Load() {
+		runtime.Gosched() // wait for dispatch loop to start
+	}
 
 	if err := o.dispatch(func() error {
 		return o.init(room)
@@ -137,6 +142,10 @@ func (o *MediaOrchestrator) okStates(allowed ...MediaState) error {
 const DispatchTimeout = 20 * time.Second
 
 func (o *MediaOrchestrator) dispatch(fn func() error) error {
+	if !o.dispatchOK.Load() {
+		return ErrWrongState
+	}
+
 	done := make(chan error)
 	op := dispatchOperation{
 		fn:   fn,
@@ -167,6 +176,8 @@ func (o *MediaOrchestrator) dispatch(fn func() error) error {
 }
 
 func (o *MediaOrchestrator) dispatchLoop() {
+	o.dispatchOK.Store(true)
+	defer o.dispatchOK.Store(false)
 	defer o.wg.Done()
 	defer o.log.Debugw("media orchestrator dispatch loop exited")
 

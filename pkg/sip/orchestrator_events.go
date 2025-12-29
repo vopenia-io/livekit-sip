@@ -98,11 +98,15 @@ func (o *MediaOrchestrator) activeParticipantChanged(p []lksdk.Participant) erro
 }
 
 func (o *MediaOrchestrator) ActiveParticipantChanged(p []lksdk.Participant) error {
-	return nil
+	// return nil
 	if err := o.dispatch(func() error {
 		return o.activeParticipantChanged(p)
 	}); err != nil {
 		return fmt.Errorf("could not handle active participant changed: %w", err)
 	}
 	return nil
+}
+
+func (o *MediaOrchestrator) Disconnect() error {
+	return o.Close()
 }
