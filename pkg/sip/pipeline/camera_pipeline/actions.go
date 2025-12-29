@@ -76,7 +76,7 @@ func (cp *CameraPipeline) SipIO(rtp, rtcp net.Conn, pt uint8) error {
 		"caps", h264Caps,
 	)
 
-	if _, err := cp.SipRtpBin.Connect("request-pt-map", event.RegisterCallback(context.TODO(), cp.loop, func(self *gst.Element, session uint, sipPt uint) *gst.Caps {
+	if _, err := cp.SipRtpBin.Connect("request-pt-map", event.RegisterCallback(context.TODO(), cp.Loop(), func(self *gst.Element, session uint, sipPt uint) *gst.Caps {
 		if sipPt == uint(pt) {
 			return gst.NewCapsFromString(h264Caps)
 		}
@@ -149,6 +149,8 @@ func (cp *CameraPipeline) AddWebrtcTrack(ssrc uint32, rtp, rtcp io.ReadCloser) (
 	rtcpHnd := cgo.NewHandle(rtcp)
 	defer rtcpHnd.Delete()
 
+	cp.Log().Infow("Adding WebRTC track", "ssrc", ssrc)
+
 	track, err := pipeline.AddChain(cp, NewWebrtcTrack(cp.Log(), cp.WebrtcIo, ssrc))
 	if err != nil {
 		return nil, fmt.Errorf("failed to add webrtc track chain: %w", err)
@@ -204,10 +206,59 @@ func (cp *CameraPipeline) DirtySwitchWebrtcInput(ssrc uint32) error {
 		return fmt.Errorf("webrtc track with ssrc %d not found", ssrc)
 	}
 
+	if track.SelPad == nil {
+		return fmt.Errorf("webrtc track with ssrc %d has no sel pad", ssrc)
+	}
+
+	active, err := cp.WebrtcIo.InputSelector.GetProperty("active-pad")
+	if err == nil {
+		activePad, ok := active.(*gst.Pad)
+		if ok {
+			if activePad.GetName() == track.SelPad.GetName() {
+				cp.Log().Infow("webrtc input already set to desired ssrc", "ssrc", ssrc)
+				return nil
+			}
+		} else {
+			cp.Log().Errorw("active webrtc input pad is not a gst.Pad", nil,
+				"pad", active,
+			)
+		}
+	} else {
+		cp.Log().Errorw("failed to get active pad from webrtc input selector", err)
+	}
+
+	cp.Log().Infow("switching webrtc input to new ssrc", "ssrc", ssrc)
+
 	if err := cp.WebrtcIo.InputSelector.SetProperty("active-pad",
-		track.RtpQueue.GetStaticPad("src"),
+		track.SelPad,
 	); err != nil {
 		return fmt.Errorf("failed to switch webrtc input to ssrc %d: %w", ssrc, err)
+	} else {
+		cp.Log().Infow("switched webrtc input to new ssrc", "ssrc", ssrc)
+		if err := cp.RequestTrackKeyframe(track); err != nil {
+			return fmt.Errorf("failed to request keyframe for webrtc track ssrc %d: %w", ssrc, err)
+		}
+	}
+
+	return nil
+}
+
+func (cp *CameraPipeline) RequestTrackKeyframe(wt *WebrtcTrack) error {
+	structure := gst.NewStructure("GstForceKeyUnit")
+	defer structure.Free()
+	structure.SetValue("timestamp", uint64(gst.ClockTimeNone))
+	structure.SetValue("stream-time", uint64(gst.ClockTimeNone))
+	structure.SetValue("running-time", uint64(gst.ClockTimeNone))
+	structure.SetValue("all-headers", true)
+	structure.SetValue("count", uint32(1))
+	structure.SetValue("ssrc", uint32(wt.SSRC))
+
+	cp.Log().Infow("Requesting keyframe for webrtc track", "ssrc", wt.SSRC)
+
+	event := gst.NewCustomEvent(gst.EventTypeCustomUpstream, structure)
+
+	if !cp.WebrtcIo.WebrtcRtpBin.SendEvent(event) {
+		return fmt.Errorf("failed to send force key unit event to webrtc source")
 	}
 
 	return nil

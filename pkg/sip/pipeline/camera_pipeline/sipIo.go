@@ -97,7 +97,7 @@ func (sio *SipIo) Add() error {
 // Link implements [pipeline.GstChain].
 func (sio *SipIo) Link() error {
 	// link rtp in
-	if _, err := sio.SipRtpBin.Connect("pad-added", event.RegisterCallback(context.TODO(), sio.pipeline.loop, func(rtpbin *gst.Element, pad *gst.Pad) {
+	if _, err := sio.SipRtpBin.Connect("pad-added", event.RegisterCallback(context.TODO(), sio.pipeline.Loop(), func(rtpbin *gst.Element, pad *gst.Pad) {
 		sio.log.Debugw("RTPBIN PAD ADDED", "pad", pad.GetName())
 		padName := pad.GetName()
 		if !strings.HasPrefix(padName, "recv_rtp_src_0_") {
@@ -129,7 +129,7 @@ func (sio *SipIo) Link() error {
 	}
 
 	// link rtp out
-	if _, err := sio.SipRtpBin.Connect("pad-added", event.RegisterCallback(context.TODO(), sio.pipeline.loop, func(rtpbin *gst.Element, pad *gst.Pad) {
+	if _, err := sio.SipRtpBin.Connect("pad-added", event.RegisterCallback(context.TODO(), sio.pipeline.Loop(), func(rtpbin *gst.Element, pad *gst.Pad) {
 		sio.log.Debugw("WEBRTC RTPBIN PAD ADDED", "pad", pad.GetName())
 		padName := pad.GetName()
 		if padName != "send_rtp_src_0" {

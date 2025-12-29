@@ -23,11 +23,17 @@ type WebrtcTrack struct {
 	SSRC uint32
 
 	WebrtcRtpIn *gst.Element
+	// RtpCapsFilter *gst.Element
+	// RtpCapsSetter *gst.Element
 	// rtpbin
 	Vp8Depay *gst.Element
 	RtpQueue *gst.Element
 
 	WebrtcRtcpIn *gst.Element
+	// RtcpCapsFilter *gst.Element
+	// RtcpCapsSetter *gst.Element
+
+	SelPad *gst.Pad
 }
 
 var _ pipeline.GstChain = (*WebrtcTrack)(nil)
@@ -44,6 +50,25 @@ func (wt *WebrtcTrack) Create() error {
 	if err != nil {
 		return fmt.Errorf("failed to create webrtc rtp sourcereader: %w", err)
 	}
+
+	rtpCaps := VP8CAPS + fmt.Sprintf(",ssrc=(uint)%d", wt.SSRC) + ",rtcp-fb-nack-pli=1,rtcp-fb-nack=1,rtcp-fb-ccm-fir=1"
+	fmt.Printf("WebRTC RTP Caps: %s\n", rtpCaps)
+
+	// wt.RtpCapsFilter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
+	// 	"caps": gst.NewCapsFromString(rtpCaps),
+	// })
+	// if err != nil {
+	// 	return fmt.Errorf("failed to create webrtc rtp caps filter: %w", err)
+	// }
+
+	// wt.RtpCapsSetter, err = gst.NewElementWithProperties("capssetter", map[string]interface{}{
+	// 	"caps":    gst.NewCapsFromString(rtpCaps),
+	// 	"join":    false,
+	// 	"replace": true,
+	// })
+	// if err != nil {
+	// 	return fmt.Errorf("failed to create webrtc rtp caps filter: %w", err)
+	// }
 
 	wt.Vp8Depay, err = gst.NewElementWithProperties("rtpvp8depay", map[string]interface{}{
 		"request-keyframe": true,
@@ -66,6 +91,25 @@ func (wt *WebrtcTrack) Create() error {
 		return fmt.Errorf("failed to create webrtc rtcp appsrc: %w", err)
 	}
 
+	rtcpCaps := "application/x-rtcp" + fmt.Sprintf(",ssrc=(uint)%d", wt.SSRC)
+	fmt.Printf("WebRTC RTCP Caps: %s\n", rtcpCaps)
+
+	// wt.RtcpCapsFilter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
+	// 	"caps": gst.NewCapsFromString(rtcpCaps),
+	// })
+	// if err != nil {
+	// 	return fmt.Errorf("failed to create webrtc rtcp caps filter: %w", err)
+	// }
+
+	// wt.RtcpCapsSetter, err = gst.NewElementWithProperties("capssetter", map[string]interface{}{
+	// 	"caps":    gst.NewCapsFromString(rtcpCaps),
+	// 	"join":    false,
+	// 	"replace": true,
+	// })
+	// if err != nil {
+	// 	return fmt.Errorf("failed to create webrtc rtcp caps filter: %w", err)
+	// }
+
 	return nil
 }
 
@@ -73,9 +117,13 @@ func (wt *WebrtcTrack) Create() error {
 func (wt *WebrtcTrack) Add() error {
 	if err := wt.parent.pipeline.Pipeline().AddMany(
 		wt.WebrtcRtpIn,
+		// wt.RtpCapsFilter,
+		// wt.RtpCapsSetter,
 		wt.Vp8Depay,
 		wt.RtpQueue,
 		wt.WebrtcRtcpIn,
+		// wt.RtcpCapsFilter,
+		// wt.RtcpCapsSetter,
 	); err != nil {
 		return fmt.Errorf("failed to add webrtc track elements to pipeline: %w", err)
 	}
@@ -84,6 +132,14 @@ func (wt *WebrtcTrack) Add() error {
 
 // Link implements GstChain.
 func (wt *WebrtcTrack) Link() error {
+	// if err := gst.ElementLinkMany(
+	// 	wt.WebrtcRtpIn,
+	// 	wt.RtpCapsFilter,
+	// 	wt.RtpCapsSetter,
+	// ); err != nil {
+	// 	return fmt.Errorf("failed to link webrtc rtp in elements: %w", err)
+	// }
+
 	if err := pipeline.LinkPad(
 		wt.WebrtcRtpIn.GetStaticPad("src"),
 		wt.parent.RtpFunnel.GetRequestPad("sink_%u"),
@@ -91,8 +147,18 @@ func (wt *WebrtcTrack) Link() error {
 		return fmt.Errorf("failed to link webrtc rtp queue to rtpbin: %w", err)
 	}
 
+	// if err := gst.ElementLinkMany(
+	// 	wt.WebrtcRtcpIn,
+	// 	wt.RtcpCapsFilter,
+	// 	wt.RtcpCapsSetter,
+	// ); err != nil {
+	// 	return fmt.Errorf("failed to link webrtc rtcp in elements: %w", err)
+	// }
+
+	rtcpPad := wt.WebrtcRtcpIn.GetStaticPad("src")
+	rtcpPad.AddProbe(gst.PadProbeTypeBuffer, NewRtcpSsrcFilter(wt.SSRC))
 	if err := pipeline.LinkPad(
-		wt.WebrtcRtcpIn.GetStaticPad("src"),
+		rtcpPad,
 		wt.parent.RtcpFunnel.GetRequestPad("sink_%u"),
 	); err != nil {
 		return fmt.Errorf("failed to link webrtc rtcp queue to rtcp funnel: %w", err)
@@ -119,9 +185,11 @@ func (wt *WebrtcTrack) LinkParent(rtpbinPad *gst.Pad) error {
 		return fmt.Errorf("failed to link webrtc track rtp elements: %w", err)
 	}
 
+	wt.SelPad = wt.parent.InputSelector.GetRequestPad("sink_%u")
+
 	if err := pipeline.LinkPad(
 		wt.RtpQueue.GetStaticPad("src"),
-		wt.parent.InputSelector.GetRequestPad("sink_%u"),
+		wt.SelPad,
 	); err != nil {
 		return fmt.Errorf("failed to link webrtc rtp queue to input selector: %w", err)
 	}
@@ -141,11 +209,18 @@ func (wt *WebrtcTrack) LinkParent(rtpbinPad *gst.Pad) error {
 
 // Close implements GstChain.
 func (wt *WebrtcTrack) Close() error {
+	wt.parent.InputSelector.ReleaseRequestPad(wt.SelPad)
+	wt.SelPad = nil
+
 	wt.parent.pipeline.Pipeline().RemoveMany(
 		wt.WebrtcRtpIn,
+		// wt.RtpCapsFilter,
+		// wt.RtpCapsSetter,
 		wt.Vp8Depay,
 		wt.RtpQueue,
 		wt.WebrtcRtcpIn,
+		// wt.RtcpCapsFilter,
+		// wt.RtcpCapsSetter,
 	)
 
 	wt.log.Infow("Closed webrtc track", "ssrc", wt.SSRC)
