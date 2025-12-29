@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"runtime"
 	"runtime/cgo"
 
 	"github.com/go-gst/go-gst/gst"
