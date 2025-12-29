@@ -367,9 +367,6 @@ func (s *safeUDPConn) Read(b []byte) (int, error) {
 }
 
 func (s *safeUDPConn) Close() error {
-	err := s.udpConn.Close()
-	if errors.Is(err, net.ErrClosed) {
-		return nil
-	}
-	return err
+	// No-op: socket managed by VideoManager
+	return nil
 }

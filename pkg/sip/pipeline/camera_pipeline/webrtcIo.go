@@ -129,7 +129,7 @@ func (wio *WebrtcIo) Add() error {
 // Link implements [pipeline.GstChain].
 func (wio *WebrtcIo) Link() error {
 	// pt map
-	if _, err := wio.WebrtcRtpBin.Connect("request-pt-map", event.RegisterCallback(context.TODO(), wio.pipeline.loop, func(self *gst.Element, session uint, pt uint) *gst.Caps {
+	if _, err := wio.WebrtcRtpBin.Connect("request-pt-map", event.RegisterCallback(context.TODO(), wio.pipeline.Loop(), func(self *gst.Element, session uint, pt uint) *gst.Caps {
 		caps, ok := webrtcCaps[pt]
 		if !ok {
 			return nil
@@ -141,7 +141,7 @@ func (wio *WebrtcIo) Link() error {
 	}
 
 	// link rtp in
-	if _, err := wio.WebrtcRtpBin.Connect("pad-added", event.RegisterCallback(context.TODO(), wio.pipeline.loop, func(rtpbin *gst.Element, pad *gst.Pad) {
+	if _, err := wio.WebrtcRtpBin.Connect("pad-added", event.RegisterCallback(context.TODO(), wio.pipeline.Loop(), func(rtpbin *gst.Element, pad *gst.Pad) {
 		wio.log.Debugw("WEBRTC RTPBIN PAD ADDED", "pad", pad.GetName())
 		padName := pad.GetName()
 		if !strings.HasPrefix(padName, "recv_rtp_src_0_") {
@@ -184,7 +184,7 @@ func (wio *WebrtcIo) Link() error {
 	}
 
 	// link rtp out
-	if _, err := wio.WebrtcRtpBin.Connect("pad-added", event.RegisterCallback(context.TODO(), wio.pipeline.loop, func(rtpbin *gst.Element, pad *gst.Pad) {
+	if _, err := wio.WebrtcRtpBin.Connect("pad-added", event.RegisterCallback(context.TODO(), wio.pipeline.Loop(), func(rtpbin *gst.Element, pad *gst.Pad) {
 		wio.log.Debugw("WEBRTC RTPBIN PAD ADDED", "pad", pad.GetName())
 		padName := pad.GetName()
 		if padName != "send_rtp_src_0" {

@@ -31,10 +31,11 @@ func (o *MediaOrchestrator) cameraTrackSubscribed(track *webrtc.TrackRemote, pub
 }
 
 func (o *MediaOrchestrator) screenshareTrackSubscribed(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) error {
-	if o.screenshare == nil || o.screenshare.Status() != VideoStatusStarted {
-		o.log.Warnw("screenshare not started, ignoring track", nil, "status", o.screenshare.Status())
+	if o.screenshare == nil {
+		o.log.Warnw("screenshare manager not initialized", nil)
 		return nil
 	}
+	// ScreenshareManager handles pending tracks
 	ti := NewTrackInput(track, pub, rp)
 	return o.screenshare.WebrtcTrackInput(ti, rp.SID(), uint32(track.SSRC()))
 }
@@ -105,23 +106,23 @@ func (o *MediaOrchestrator) WebrtcTrackUnsubscribed(track *webrtc.TrackRemote, p
 }
 
 func (o *MediaOrchestrator) activeParticipantChanged(p []lksdk.Participant) error {
+	if o.camera.Status() != VideoStatusStarted {
+		return nil
+	}
+	if len(p) == 0 {
+		o.log.Debugw("no active speakers found")
+		return nil
+	}
+	sid := p[0].SID()
+	if err := o.camera.SwitchActiveWebrtcTrack(sid); err != nil {
+		o.log.Warnw("could not switch active webrtc track", err, "sid", sid)
+		return nil
+	}
 	return nil
-	// if o.camera.Status() != VideoStatusStarted {
-	// 	return nil
-	// }
-	// if len(p) == 0 {
-	// 	o.log.Debugw("no active speakers found")
-	// 	return nil
-	// }
-	// sid := p[0].SID()
-	// if err := o.camera.SwitchActiveWebrtcTrack(sid); err != nil {
-	// 	o.log.Warnw("could not switch active webrtc track", err, "sid", sid)
-	// 	return nil
-	// }
-	// return nil
 }
 
 func (o *MediaOrchestrator) ActiveParticipantChanged(p []lksdk.Participant) error {
+	return nil
 	if err := o.dispatch(func() error {
 		return o.activeParticipantChanged(p)
 	}); err != nil {

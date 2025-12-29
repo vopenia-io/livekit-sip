@@ -10,7 +10,6 @@ import (
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/sip/pkg/sip/pipeline"
-	"github.com/livekit/sip/pkg/sip/pipeline/event"
 )
 
 type ScreensharePipeline struct {
@@ -21,7 +20,6 @@ type ScreensharePipeline struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
-	loop   *event.EventLoop
 
 	// Callback for when WebRTC track ends (EOS)
 	OnTrackEnded func()
@@ -33,10 +31,9 @@ func New(ctx context.Context, log logger.Logger, sipPayloadType uint8) (*Screens
 	sp := &ScreensharePipeline{
 		ctx:    ctx,
 		cancel: cancel,
-		loop:   event.NewEventLoop(ctx, log),
 	}
 
-	p, err := pipeline.New(log.WithComponent("screenshare_pipeline"))
+	p, err := pipeline.New(ctx, log.WithComponent("screenshare_pipeline"), sp.cleanup)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("failed to create gst pipeline: %w", err)
@@ -45,9 +42,6 @@ func New(ctx context.Context, log logger.Logger, sipPayloadType uint8) (*Screens
 	p.Pipeline().GetBus().SetFlushing(true)
 
 	sp.BasePipeline = p
-
-	p.Log().Debugw("Starting event loop")
-	go sp.loop.Run()
 
 	p.Log().Debugw("Adding WebRTC IO chain")
 	sp.WebrtcIo, err = pipeline.AddChain(sp, NewWebrtcIo(log, sp))
@@ -89,36 +83,38 @@ func New(ctx context.Context, log logger.Logger, sipPayloadType uint8) (*Screens
 	return sp, nil
 }
 
-func (sp *ScreensharePipeline) Close() error {
-	closed := sp.Closed()
-
-	sp.loop.Stop()
-	// NOT calling sp.cancel() - matches camera pipeline pattern
-
-	if err := sp.BasePipeline.Close(); err != nil {
-		return fmt.Errorf("failed to close screenshare pipeline: %w", err)
+func (sp *ScreensharePipeline) cleanup() error {
+	if sp.BasePipeline == nil {
+		return nil // edge case where pipeline close right after creation
 	}
 
-	if !closed {
-		sp.Log().Debugw("Closing screenshare pipeline chains")
+	sp.Log().Debugw("Closing screenshare pipeline chains")
 
-		sp.Log().Debugw("Closing WebRTC IO")
-		if err := sp.WebrtcIo.Close(); err != nil {
-			return fmt.Errorf("failed to close WebRTC IO: %w", err)
-		}
-		sp.WebrtcIo = nil
+	sp.Log().Debugw("Closing WebRTC IO")
+	if err := sp.WebrtcIo.Close(); err != nil {
+		return fmt.Errorf("failed to close WebRTC IO: %w", err)
+	}
+	sp.WebrtcIo = nil
 
-		sp.Log().Debugw("Closing WebRTC to SIP chain")
-		if err := sp.WebrtcToSip.Close(); err != nil {
-			return fmt.Errorf("failed to close WebRTC to SIP chain: %w", err)
-		}
-		sp.WebrtcToSip = nil
+	sp.Log().Debugw("Closing WebRTC to SIP chain")
+	if err := sp.WebrtcToSip.Close(); err != nil {
+		return fmt.Errorf("failed to close WebRTC to SIP chain: %w", err)
+	}
+	sp.WebrtcToSip = nil
 
-		sp.Log().Debugw("Closing SIP IO")
-		if err := sp.SipIo.Close(); err != nil {
-			return fmt.Errorf("failed to close SIP IO: %w", err)
-		}
-		sp.SipIo = nil
+	sp.Log().Debugw("Closing SIP IO")
+	if err := sp.SipIo.Close(); err != nil {
+		return fmt.Errorf("failed to close SIP IO: %w", err)
+	}
+	sp.SipIo = nil
+
+	sp.Log().Debugw("Screenshare pipeline chains closed")
+	return nil
+}
+
+func (sp *ScreensharePipeline) Close() error {
+	if err := sp.BasePipeline.Close(); err != nil {
+		return fmt.Errorf("failed to close screenshare pipeline: %w", err)
 	}
 	sp.Log().Infow("Screenshare pipeline closed")
 
