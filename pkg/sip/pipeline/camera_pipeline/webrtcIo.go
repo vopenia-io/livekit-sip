@@ -39,7 +39,7 @@ type WebrtcIo struct {
 
 var _ pipeline.GstChain = (*WebrtcIo)(nil)
 
-const VP8CAPS = "application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,payload=96"
+const VP8CAPS = "application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,payload=96,rtcp-fb-nack-pli=1,rtcp-fb-nack=1,rtcp-fb-ccm-fir=1"
 
 var webrtcCaps = map[uint]string{
 	96: VP8CAPS,
