@@ -73,10 +73,12 @@ func (stw *WebrtcToSip) Create() error {
 	}
 
 	stw.X264Enc, err = gst.NewElementWithProperties("x264enc", map[string]interface{}{
-		"bitrate":      int(2000),
-		"key-int-max":  int(48), // Matches framerate for 1 keyframe/sec
-		"speed-preset": int(1),  // ultrafast
-		"tune":         int(4),  // zerolatency
+		"bitrate":       int(2000),
+		"key-int-max":   int(24), // Matches framerate for 1 keyframe/sec
+		"speed-preset":  int(1),  // ultrafast
+		"tune":          int(4),  // zerolatency
+		"bframes":       int(0),
+		"intra-refresh": true,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create webrtc x264 encoder: %w", err)
