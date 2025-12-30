@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"runtime"
 	"runtime/cgo"
 
 	"github.com/go-gst/go-gst/gst"
@@ -86,22 +87,22 @@ func (cp *CameraPipeline) SipIO(rtp, rtcp net.Conn, pt uint8) error {
 	}
 
 	if err := cp.WebrtcToSip.CapsFilter.SetProperty("caps",
-		gst.NewCapsFromString(h264Caps+",rtcp-fb-nack-pli=1,rtcp-fb-nack=1,rtcp-fb-ccm-fir=1"),
+		gst.NewCapsFromString(h264Caps+",rtcp-fb-nack-pli=(boolean)true,rtcp-fb-nack=(boolean)true,rtcp-fb-ccm-fir=(boolean)true"),
 	); err != nil {
 		return fmt.Errorf("failed to set webrtc to sip caps filter caps (pt: %d): %w", pt, err)
 	}
 
 	if err := cp.SipRtpIn.SetProperty("caps",
-		gst.NewCapsFromString(h264Caps+",rtcp-fb-nack-pli=1,rtcp-fb-nack=1,rtcp-fb-ccm-fir=1"),
+		gst.NewCapsFromString(h264Caps+",rtcp-fb-nack-pli=(boolean)true,rtcp-fb-nack=(boolean)true,rtcp-fb-ccm-fir=(boolean)true"),
 	); err != nil {
 		return fmt.Errorf("failed to set sip rtp in caps (pt: %d): %w", pt, err)
 	}
 
-	if err := cp.SipRtpOut.SetProperty("caps",
-		gst.NewCapsFromString(h264Caps),
-	); err != nil {
-		return fmt.Errorf("failed to set sip rtp out caps (pt: %d): %w", pt, err)
-	}
+	// if err := cp.SipRtpOut.SetProperty("caps",
+	// 	gst.NewCapsFromString(h264Caps),
+	// ); err != nil {
+	// 	return fmt.Errorf("failed to set sip rtp out caps (pt: %d): %w", pt, err)
+	// }
 
 	if err := cp.SipRtpIn.SetProperty("handle", uint64(rtpHandle)); err != nil {
 		return fmt.Errorf("failed to set rtp in handle: %w", err)
@@ -245,19 +246,19 @@ func (cp *CameraPipeline) DirtySwitchWebrtcInput(ssrc uint32) error {
 
 func (cp *CameraPipeline) RequestTrackKeyframe(wt *WebrtcTrack) error {
 	structure := gst.NewStructure("GstForceKeyUnit")
-	defer structure.Free()
+	runtime.SetFinalizer(structure, nil) // gstreamer take ownership
 	structure.SetValue("timestamp", uint64(gst.ClockTimeNone))
 	structure.SetValue("stream-time", uint64(gst.ClockTimeNone))
 	structure.SetValue("running-time", uint64(gst.ClockTimeNone))
 	structure.SetValue("all-headers", true)
-	structure.SetValue("count", uint32(1))
+	structure.SetValue("count", uint32(0))
 	structure.SetValue("ssrc", uint32(wt.SSRC))
 
 	cp.Log().Infow("Requesting keyframe for webrtc track", "ssrc", wt.SSRC)
 
 	event := gst.NewCustomEvent(gst.EventTypeCustomUpstream, structure)
 
-	if !cp.WebrtcIo.WebrtcRtpBin.SendEvent(event) {
+	if !wt.RtpBinPad.SendEvent(event) {
 		return fmt.Errorf("failed to send force key unit event to webrtc source")
 	}
 

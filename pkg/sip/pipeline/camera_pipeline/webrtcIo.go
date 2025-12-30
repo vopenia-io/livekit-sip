@@ -49,8 +49,9 @@ var webrtcCaps = map[uint]string{
 func (wio *WebrtcIo) Create() error {
 	var err error
 	wio.WebrtcRtpBin, err = gst.NewElementWithProperties("rtpbin", map[string]interface{}{
-		"name":        "webrtc_rtp_bin",
-		"rtp-profile": int(3), // GST_RTP_PROFILE_AVPF
+		"name":           "webrtc_rtp_bin",
+		"rtp-profile":    int(3), // GST_RTP_PROFILE_AVPF
+		"do-sync-events": true,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create WebRTC rtpbin: %w", err)
@@ -88,18 +89,19 @@ func (wio *WebrtcIo) Create() error {
 	}
 
 	wio.WebrtcRtpOut, err = gst.NewElementWithProperties("sinkwriter", map[string]interface{}{
-		"name":        "webrtc_rtp_out",
-		"caps":        gst.NewCapsFromString(VP8CAPS),
+		"name": "webrtc_rtp_out",
+		// "caps":        gst.NewCapsFromString(VP8CAPS),
 		"max-bitrate": int(1_500_000),
 		"sync":        false,
+		"async":       false,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create WebRTC rtp sinkwriter: %w", err)
 	}
 
 	wio.WebrtcRtcpOut, err = gst.NewElementWithProperties("sinkwriter", map[string]interface{}{
-		"name":  "webrtc_rtcp_out",
-		"caps":  gst.NewCapsFromString("application/x-rtcp"),
+		"name": "webrtc_rtcp_out",
+		// "caps":  gst.NewCapsFromString("application/x-rtcp"),
 		"sync":  false,
 		"async": false,
 	})

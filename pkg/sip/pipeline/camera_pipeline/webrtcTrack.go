@@ -33,9 +33,10 @@ type WebrtcTrack struct {
 	// RtcpCapsFilter *gst.Element
 	// RtcpCapsSetter *gst.Element
 
-	RtpPad  *gst.Pad
-	RtcpPad *gst.Pad
-	SelPad  *gst.Pad
+	RtpPad    *gst.Pad
+	RtcpPad   *gst.Pad
+	SelPad    *gst.Pad
+	RtpBinPad *gst.Pad
 }
 
 var _ pipeline.GstChain = (*WebrtcTrack)(nil)
@@ -46,15 +47,15 @@ func (wt *WebrtcTrack) Create() error {
 
 	wt.WebrtcRtpIn, err = gst.NewElementWithProperties("sourcereader", map[string]interface{}{
 		"name":         fmt.Sprintf("webrtc_rtp_in_%d", wt.SSRC),
-		"caps":         gst.NewCapsFromString(VP8CAPS + ",rtcp-fb-nack-pli=1,rtcp-fb-nack=1,rtcp-fb-ccm-fir=1"),
+		"caps":         gst.NewCapsFromString(VP8CAPS + ",rtcp-fb-nack-pli=(boolean)true,rtcp-fb-nack=(boolean)true,rtcp-fb-ccm-fir=(boolean)true"),
 		"do-timestamp": true,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create webrtc rtp sourcereader: %w", err)
 	}
 
-	rtpCaps := VP8CAPS + fmt.Sprintf(",ssrc=(uint)%d", wt.SSRC) + ",rtcp-fb-nack-pli=1,rtcp-fb-nack=1,rtcp-fb-ccm-fir=1"
-	fmt.Printf("WebRTC RTP Caps: %s\n", rtpCaps)
+	// rtpCaps := VP8CAPS + fmt.Sprintf(",ssrc=(uint)%d", wt.SSRC) + ",rtcp-fb-nack-pli=1,rtcp-fb-nack=1,rtcp-fb-ccm-fir=1"
+	// fmt.Printf("WebRTC RTP Caps: %s\n", rtpCaps)
 
 	// wt.RtpCapsFilter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
 	// 	"caps": gst.NewCapsFromString(rtpCaps),
@@ -174,8 +175,9 @@ func (wt *WebrtcTrack) Link() error {
 }
 
 func (wt *WebrtcTrack) LinkParent(rtpbinPad *gst.Pad) error {
+	wt.RtpBinPad = rtpbinPad
 	if err := pipeline.LinkPad(
-		rtpbinPad,
+		wt.RtpBinPad,
 		wt.Vp8Depay.GetStaticPad("sink"),
 	); err != nil {
 		return fmt.Errorf("failed to link webrtc rtpbin pad to depayloader: %w", err)
