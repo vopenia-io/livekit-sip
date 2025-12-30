@@ -245,21 +245,27 @@ func (cp *CameraPipeline) DirtySwitchWebrtcInput(ssrc uint32) error {
 }
 
 func (cp *CameraPipeline) RequestTrackKeyframe(wt *WebrtcTrack) error {
-	structure := gst.NewStructure("GstForceKeyUnit")
-	runtime.SetFinalizer(structure, nil) // gstreamer take ownership
-	structure.SetValue("timestamp", uint64(gst.ClockTimeNone))
-	structure.SetValue("stream-time", uint64(gst.ClockTimeNone))
-	structure.SetValue("running-time", uint64(gst.ClockTimeNone))
-	structure.SetValue("all-headers", true)
-	structure.SetValue("count", uint32(0))
-	structure.SetValue("ssrc", uint32(wt.SSRC))
-
 	cp.Log().Infow("Requesting keyframe for webrtc track", "ssrc", wt.SSRC)
 
-	event := gst.NewCustomEvent(gst.EventTypeCustomUpstream, structure)
+	fkuStruct := gst.NewStructure("GstForceKeyUnit")
+	fkuStruct.SetValue("ssrc", wt.SSRC)
+	fkuStruct.SetValue("payload", uint(96))
+	fkuStruct.SetValue("running-time", uint64(0xFFFFFFFFFFFFFFFF))
+	fkuStruct.SetValue("all-headers", true)
+	fkuStruct.SetValue("count", uint(0))
 
-	if !wt.RtpBinPad.SendEvent(event) {
-		return fmt.Errorf("failed to send force key unit event to webrtc source")
+	fkuEvent := gst.NewCustomEvent(gst.EventTypeCustomUpstream, fkuStruct)
+
+	srcPad := wt.Vp8Depay.GetStaticPad("src")
+	if srcPad == nil {
+		cp.Log().Warnw("VP8 depayloader src pad not found", nil, "ssrc", wt.SSRC)
+		return nil
+	}
+
+	if srcPad.SendEvent(fkuEvent) {
+		cp.Log().Infow("Sent GstForceKeyUnit event upstream", "ssrc", wt.SSRC)
+	} else {
+		cp.Log().Warnw("Failed to send GstForceKeyUnit event upstream", nil, "ssrc", wt.SSRC)
 	}
 
 	return nil
