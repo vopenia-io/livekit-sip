@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"runtime"
 	"runtime/cgo"
 
 	"github.com/go-gst/go-gst/gst"
@@ -86,13 +87,13 @@ func (cp *CameraPipeline) SipIO(rtp, rtcp net.Conn, pt uint8) error {
 	}
 
 	if err := cp.WebrtcToSip.CapsFilter.SetProperty("caps",
-		gst.NewCapsFromString(h264Caps+",rtcp-fb-nack-pli=(boolean)true,rtcp-fb-nack=(boolean)true,rtcp-fb-ccm-fir=(boolean)true"),
+		gst.NewCapsFromString(h264Caps+",rtcp-fb-nack-pli=1,rtcp-fb-nack=1,rtcp-fb-ccm-fir=1"),
 	); err != nil {
 		return fmt.Errorf("failed to set webrtc to sip caps filter caps (pt: %d): %w", pt, err)
 	}
 
 	if err := cp.SipRtpIn.SetProperty("caps",
-		gst.NewCapsFromString(h264Caps+",rtcp-fb-nack-pli=(boolean)true,rtcp-fb-nack=(boolean)true,rtcp-fb-ccm-fir=(boolean)true"),
+		gst.NewCapsFromString(h264Caps+",rtcp-fb-nack-pli=1,rtcp-fb-nack=1,rtcp-fb-ccm-fir=1"),
 	); err != nil {
 		return fmt.Errorf("failed to set sip rtp in caps (pt: %d): %w", pt, err)
 	}
@@ -247,10 +248,11 @@ func (cp *CameraPipeline) RequestTrackKeyframe(wt *WebrtcTrack) error {
 	cp.Log().Infow("Requesting keyframe for webrtc track", "ssrc", wt.SSRC)
 
 	fkuStruct := gst.NewStructure("GstForceKeyUnit")
+	runtime.SetFinalizer(fkuStruct, nil)
 	fkuStruct.SetValue("ssrc", wt.SSRC)
-	fkuStruct.SetValue("payload", uint(96))
-	fkuStruct.SetValue("running-time", uint64(0xFFFFFFFFFFFFFFFF))
-	fkuStruct.SetValue("all-headers", true)
+	// fkuStruct.SetValue("payload", uint(96))
+	fkuStruct.SetValue("running-time", gst.ClockTimeNone)
+	fkuStruct.SetValue("all-headers", false)
 	fkuStruct.SetValue("count", uint(0))
 
 	fkuEvent := gst.NewCustomEvent(gst.EventTypeCustomUpstream, fkuStruct)
