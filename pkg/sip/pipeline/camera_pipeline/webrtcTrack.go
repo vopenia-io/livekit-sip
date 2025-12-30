@@ -33,7 +33,9 @@ type WebrtcTrack struct {
 	// RtcpCapsFilter *gst.Element
 	// RtcpCapsSetter *gst.Element
 
-	SelPad *gst.Pad
+	RtpPad  *gst.Pad
+	RtcpPad *gst.Pad
+	SelPad  *gst.Pad
 }
 
 var _ pipeline.GstChain = (*WebrtcTrack)(nil)
@@ -140,8 +142,9 @@ func (wt *WebrtcTrack) Link() error {
 	// 	return fmt.Errorf("failed to link webrtc rtp in elements: %w", err)
 	// }
 
+	wt.RtpPad = wt.WebrtcRtpIn.GetStaticPad("src")
 	if err := pipeline.LinkPad(
-		wt.WebrtcRtpIn.GetStaticPad("src"),
+		wt.RtpPad,
 		wt.parent.RtpFunnel.GetRequestPad("sink_%u"),
 	); err != nil {
 		return fmt.Errorf("failed to link webrtc rtp queue to rtpbin: %w", err)
@@ -155,10 +158,10 @@ func (wt *WebrtcTrack) Link() error {
 	// 	return fmt.Errorf("failed to link webrtc rtcp in elements: %w", err)
 	// }
 
-	rtcpPad := wt.WebrtcRtcpIn.GetStaticPad("src")
-	rtcpPad.AddProbe(gst.PadProbeTypeBuffer, NewRtcpSsrcFilter(wt.SSRC))
+	wt.RtcpPad = wt.WebrtcRtcpIn.GetStaticPad("src")
+	wt.RtcpPad.AddProbe(gst.PadProbeTypeBuffer, NewRtcpSsrcFilter(wt.SSRC))
 	if err := pipeline.LinkPad(
-		rtcpPad,
+		wt.RtcpPad,
 		wt.parent.RtcpFunnel.GetRequestPad("sink_%u"),
 	); err != nil {
 		return fmt.Errorf("failed to link webrtc rtcp queue to rtcp funnel: %w", err)
@@ -186,7 +189,6 @@ func (wt *WebrtcTrack) LinkParent(rtpbinPad *gst.Pad) error {
 	}
 
 	wt.SelPad = wt.parent.InputSelector.GetRequestPad("sink_%u")
-
 	if err := pipeline.LinkPad(
 		wt.RtpQueue.GetStaticPad("src"),
 		wt.SelPad,
@@ -211,6 +213,25 @@ func (wt *WebrtcTrack) LinkParent(rtpbinPad *gst.Pad) error {
 func (wt *WebrtcTrack) Close() error {
 	wt.parent.InputSelector.ReleaseRequestPad(wt.SelPad)
 	wt.SelPad = nil
+	wt.parent.RtpFunnel.ReleaseRequestPad(wt.RtpPad)
+	wt.RtpPad = nil
+	wt.parent.RtcpFunnel.ReleaseRequestPad(wt.RtcpPad)
+	wt.RtcpPad = nil
+
+	for _, elem := range []*gst.Element{
+		wt.WebrtcRtpIn,
+		// wt.RtpCapsFilter,
+		// wt.RtpCapsSetter,
+		wt.Vp8Depay,
+		wt.RtpQueue,
+		wt.WebrtcRtcpIn,
+		// wt.RtcpCapsFilter,
+		// wt.RtcpCapsSetter,
+	} {
+		if err := elem.SetState(gst.StateNull); err != nil {
+			wt.log.Errorw("Failed to set webrtc track element to null state", err, "element", elem.GetName())
+		}
+	}
 
 	wt.parent.pipeline.Pipeline().RemoveMany(
 		wt.WebrtcRtpIn,
