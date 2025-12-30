@@ -1,12 +1,11 @@
 module github.com/livekit/sip
 
-go 1.24.2
-
-toolchain go1.24.3
+go 1.24.4
 
 require (
 	github.com/at-wat/ebml-go v0.17.1
 	github.com/frostbyte73/core v0.1.1
+	github.com/go-gst/go-glib v1.4.1-0.20241209142714-f53cebf18559
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/icholy/digest v1.1.0
 	github.com/jfreymuth/oggvorbis v1.0.5
@@ -27,6 +26,7 @@ require (
 	github.com/prometheus/client_golang v1.22.0
 	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.11.1
+	github.com/vopenia-io/bfcp v0.0.0-20251208070418-52ef30fdbcd4
 	golang.org/x/exp v0.0.0-20251009144603-d2f985daa21b
 	google.golang.org/protobuf v1.36.10
 	gopkg.in/hraban/opus.v2 v2.0.0-20230925203106-0188a62cb302
@@ -34,8 +34,7 @@ require (
 )
 
 require (
-	github.com/go-gst/go-glib v1.4.0 // indirect
-	github.com/mattn/go-pointer v0.0.1 // indirect
+	github.com/go-gst/go-pointer v0.0.0-20241127163939-ba766f075b4c // indirect
 	github.com/nyaruka/phonenumbers v1.6.5 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/otel v1.37.0 // indirect
@@ -109,7 +108,7 @@ require (
 	github.com/pion/logging v0.2.4 // indirect
 	github.com/pion/mdns/v2 v2.0.7 // indirect
 	github.com/pion/randutil v0.1.0 // indirect
-	github.com/pion/rtcp v1.2.15 // indirect
+	github.com/pion/rtcp v1.2.15
 	github.com/pion/sctp v1.8.40 // indirect
 	github.com/pion/srtp/v3 v3.0.8 // indirect
 	github.com/pion/stun/v3 v3.0.0 // indirect
@@ -145,3 +144,7 @@ require (
 	google.golang.org/grpc v1.76.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
+
+replace github.com/livekit/media-sdk => github.com/vopenia-io/media-sdk v0.0.0-20251229153245-6b76cc17de47
+
+replace github.com/go-gst/go-gst => github.com/vopenia-io/go-gst v0.0.0-20250528163357-3a1d70d48c6f
