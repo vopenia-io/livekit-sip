@@ -169,6 +169,24 @@ func (sio *SipIo) Link() error {
 		return fmt.Errorf("failed to link rtpbin rtcp src to sip rtcp sink: %w", err)
 	}
 
+	// configure rtpbin
+	sess, err := sio.SipRtpBin.Emit("get-internal-session", uint(0))
+	if err != nil || sess == nil {
+		return fmt.Errorf("failed to get sip rtpbin internal session(%t): %w", sess != nil, err)
+	} else {
+		sessElem := gst.ToElement(sess)
+		if sessElem == nil || sessElem.Instance() == nil {
+			return fmt.Errorf("failed to cast sip rtpbin internal session to element")
+		}
+
+		if err := sessElem.SetProperty("rtcp-min-interval", uint64(0)); err != nil {
+			return fmt.Errorf("failed to set sip rtpbin rtcp min interval: %w", err)
+		}
+		if err := sessElem.SetProperty("rtcp-fraction", 0.10); err != nil {
+			return fmt.Errorf("failed to set sip rtpbin rtcp fraction: %w", err)
+		}
+	}
+
 	return nil
 }
 
