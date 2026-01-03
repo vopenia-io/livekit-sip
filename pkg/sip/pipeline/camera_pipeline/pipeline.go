@@ -3,11 +3,14 @@ package camera_pipeline
 import (
 	"context"
 	"fmt"
-
-	"github.com/livekit/sip/pkg/sip/pipeline"
+	"time"
 
 	"github.com/livekit/protocol/logger"
+	"github.com/livekit/sip/pkg/sip/pipeline"
 )
+
+const MaxKeyframeWaitTime = 2 * time.Second
+const PLIRetryInterval = 200 * time.Millisecond
 
 type CameraPipeline struct {
 	*pipeline.BasePipeline
@@ -15,6 +18,10 @@ type CameraPipeline struct {
 	*WebrtcIo
 	*SipToWebrtc
 	*WebrtcToSip
+
+	pendingSwitchSSRC uint32
+	switchStartTime   time.Time
+	lastPLITime       time.Time
 }
 
 func New(ctx context.Context, log logger.Logger) (*CameraPipeline, error) {
@@ -31,7 +38,6 @@ func New(ctx context.Context, log logger.Logger) (*CameraPipeline, error) {
 	cp.BasePipeline = p
 
 	p.Log().Debugw("Starting event loop")
-	// go cp.loop.Run()
 
 	p.Log().Debugw("Adding SIP IO chain")
 	cp.SipIo, err = pipeline.AddChain(cp, NewSipInput(log, cp))
@@ -79,7 +85,7 @@ func New(ctx context.Context, log logger.Logger) (*CameraPipeline, error) {
 
 func (cp *CameraPipeline) cleanup() error {
 	if cp.BasePipeline == nil {
-		return nil // edge case where pipeline close right after creation
+		return nil
 	}
 
 	cp.Log().Debugw("Closing camera pipeline chains")
@@ -110,19 +116,9 @@ func (cp *CameraPipeline) cleanup() error {
 }
 
 func (cp *CameraPipeline) Close() error {
-
-	// pre cleanup all webrtc tracks before they become broken
-	for ssrc, track := range cp.WebrtcIo.Tracks {
-		cp.Log().Infow("Closing WebRTC track", "ssrc", ssrc)
-		if err := track.Close(); err != nil {
-			cp.Log().Errorw("Failed to close webrtc track", err, "ssrc", ssrc)
-		}
-	}
-
 	if err := cp.BasePipeline.Close(); err != nil {
 		return fmt.Errorf("failed to close camera pipeline: %w", err)
 	}
 	cp.Log().Infow("Camera pipeline closed")
-
 	return nil
 }

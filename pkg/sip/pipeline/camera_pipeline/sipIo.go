@@ -169,21 +169,46 @@ func (sio *SipIo) Link() error {
 		return fmt.Errorf("failed to link rtpbin rtcp src to sip rtcp sink: %w", err)
 	}
 
-	// configure rtpbin
+	// configure rtpbin - session configuration is optional, don't fail if unavailable
 	sess, err := sio.SipRtpBin.Emit("get-internal-session", uint(0))
 	if err != nil || sess == nil {
-		return fmt.Errorf("failed to get sip rtpbin internal session(%t): %w", sess != nil, err)
+		sio.log.Warnw("could not get sip rtpbin internal session, RTCP feedback logging disabled", err, "sessNotNil", sess != nil)
 	} else {
 		sessElem := gst.ToElement(sess)
 		if sessElem == nil || sessElem.Instance() == nil {
-			return fmt.Errorf("failed to cast sip rtpbin internal session to element")
-		}
+			sio.log.Warnw("could not cast sip rtpbin internal session to element, RTCP feedback logging disabled", nil)
+		} else {
+			if err := sessElem.SetProperty("rtcp-min-interval", uint64(0)); err != nil {
+				sio.log.Warnw("failed to set sip rtpbin rtcp min interval", err)
+			}
+			if err := sessElem.SetProperty("rtcp-fraction", 0.10); err != nil {
+				sio.log.Warnw("failed to set sip rtpbin rtcp fraction", err)
+			}
 
-		if err := sessElem.SetProperty("rtcp-min-interval", uint64(0)); err != nil {
-			return fmt.Errorf("failed to set sip rtpbin rtcp min interval: %w", err)
-		}
-		if err := sessElem.SetProperty("rtcp-fraction", 0.10); err != nil {
-			return fmt.Errorf("failed to set sip rtpbin rtcp fraction: %w", err)
+			// Log RTCP feedback (PLI/FIR) requests from SIP device
+			if _, err := sessElem.Connect("on-feedback-rtcp", event.RegisterCallback(context.TODO(), sio.pipeline.Loop(), func(session *gst.Element, fbType uint, fbSubType uint, senderSsrc uint, mediaSsrc uint) {
+				fbTypeName := "unknown"
+				if fbType == 205 {
+					fbTypeName = "RTPFB"
+				} else if fbType == 206 {
+					switch fbSubType {
+					case 1:
+						fbTypeName = "PLI"
+					case 4:
+						fbTypeName = "FIR"
+					default:
+						fbTypeName = fmt.Sprintf("PSFB-%d", fbSubType)
+					}
+				}
+				sio.log.Infow("SIP device sent RTCP feedback",
+					"fbType", fbType,
+					"fbSubType", fbSubType,
+					"fbTypeName", fbTypeName,
+					"senderSsrc", senderSsrc,
+					"mediaSsrc", mediaSsrc)
+			})); err != nil {
+				sio.log.Warnw("failed to connect to rtpsession on-feedback-rtcp signal", err)
+			}
 		}
 	}
 

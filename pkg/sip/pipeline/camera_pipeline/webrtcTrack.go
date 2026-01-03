@@ -22,21 +22,21 @@ type WebrtcTrack struct {
 
 	SSRC uint32
 
-	WebrtcRtpIn *gst.Element
-	// RtpCapsFilter *gst.Element
-	// RtpCapsSetter *gst.Element
-	// rtpbin
-	Vp8Depay *gst.Element
-	RtpQueue *gst.Element
-
+	WebrtcRtpIn  *gst.Element
+	Vp8Depay     *gst.Element
+	RtpQueue     *gst.Element
 	WebrtcRtcpIn *gst.Element
-	// RtcpCapsFilter *gst.Element
-	// RtcpCapsSetter *gst.Element
 
-	RtpPad    *gst.Pad
-	RtcpPad   *gst.Pad
-	SelPad    *gst.Pad
-	RtpBinPad *gst.Pad
+	RtpPad        *gst.Pad
+	RtcpPad       *gst.Pad
+	RtpBinPad     *gst.Pad
+	RtpFunnelPad  *gst.Pad
+	RtcpFunnelPad *gst.Pad
+	SelPad        *gst.Pad
+
+	HasKeyframe         bool
+	SeenKeyframeInQueue bool
+	RequestKeyframe     func() error
 }
 
 var _ pipeline.GstChain = (*WebrtcTrack)(nil)
@@ -53,25 +53,6 @@ func (wt *WebrtcTrack) Create() error {
 	if err != nil {
 		return fmt.Errorf("failed to create webrtc rtp sourcereader: %w", err)
 	}
-
-	// rtpCaps := VP8CAPS + fmt.Sprintf(",ssrc=(uint)%d", wt.SSRC) + ",rtcp-fb-nack-pli=1,rtcp-fb-nack=1,rtcp-fb-ccm-fir=1"
-	// fmt.Printf("WebRTC RTP Caps: %s\n", rtpCaps)
-
-	// wt.RtpCapsFilter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-	// 	"caps": gst.NewCapsFromString(rtpCaps),
-	// })
-	// if err != nil {
-	// 	return fmt.Errorf("failed to create webrtc rtp caps filter: %w", err)
-	// }
-
-	// wt.RtpCapsSetter, err = gst.NewElementWithProperties("capssetter", map[string]interface{}{
-	// 	"caps":    gst.NewCapsFromString(rtpCaps),
-	// 	"join":    false,
-	// 	"replace": true,
-	// })
-	// if err != nil {
-	// 	return fmt.Errorf("failed to create webrtc rtp caps filter: %w", err)
-	// }
 
 	wt.Vp8Depay, err = gst.NewElementWithProperties("rtpvp8depay", map[string]interface{}{
 		"request-keyframe": true,
@@ -94,78 +75,34 @@ func (wt *WebrtcTrack) Create() error {
 		return fmt.Errorf("failed to create webrtc rtcp appsrc: %w", err)
 	}
 
-	rtcpCaps := "application/x-rtcp" + fmt.Sprintf(",ssrc=(uint)%d", wt.SSRC)
-	fmt.Printf("WebRTC RTCP Caps: %s\n", rtcpCaps)
-
-	// wt.RtcpCapsFilter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-	// 	"caps": gst.NewCapsFromString(rtcpCaps),
-	// })
-	// if err != nil {
-	// 	return fmt.Errorf("failed to create webrtc rtcp caps filter: %w", err)
-	// }
-
-	// wt.RtcpCapsSetter, err = gst.NewElementWithProperties("capssetter", map[string]interface{}{
-	// 	"caps":    gst.NewCapsFromString(rtcpCaps),
-	// 	"join":    false,
-	// 	"replace": true,
-	// })
-	// if err != nil {
-	// 	return fmt.Errorf("failed to create webrtc rtcp caps filter: %w", err)
-	// }
-
 	return nil
 }
 
-// Add implements GstChain.
 func (wt *WebrtcTrack) Add() error {
 	if err := wt.parent.pipeline.Pipeline().AddMany(
 		wt.WebrtcRtpIn,
-		// wt.RtpCapsFilter,
-		// wt.RtpCapsSetter,
 		wt.Vp8Depay,
 		wt.RtpQueue,
 		wt.WebrtcRtcpIn,
-		// wt.RtcpCapsFilter,
-		// wt.RtcpCapsSetter,
 	); err != nil {
 		return fmt.Errorf("failed to add webrtc track elements to pipeline: %w", err)
 	}
 	return nil
 }
 
-// Link implements GstChain.
 func (wt *WebrtcTrack) Link() error {
-	// if err := gst.ElementLinkMany(
-	// 	wt.WebrtcRtpIn,
-	// 	wt.RtpCapsFilter,
-	// 	wt.RtpCapsSetter,
-	// ); err != nil {
-	// 	return fmt.Errorf("failed to link webrtc rtp in elements: %w", err)
-	// }
-
 	wt.RtpPad = wt.WebrtcRtpIn.GetStaticPad("src")
-	if err := pipeline.LinkPad(
-		wt.RtpPad,
-		wt.parent.RtpFunnel.GetRequestPad("sink_%u"),
-	); err != nil {
-		return fmt.Errorf("failed to link webrtc rtp queue to rtpbin: %w", err)
+	wt.RtcpPad = wt.WebrtcRtcpIn.GetStaticPad("src")
+
+	wt.RtpFunnelPad = wt.parent.RtpFunnel.GetRequestPad("sink_%u")
+	if err := pipeline.LinkPad(wt.RtpPad, wt.RtpFunnelPad); err != nil {
+		return fmt.Errorf("failed to link webrtc rtp to funnel: %w", err)
 	}
 
-	// if err := gst.ElementLinkMany(
-	// 	wt.WebrtcRtcpIn,
-	// 	wt.RtcpCapsFilter,
-	// 	wt.RtcpCapsSetter,
-	// ); err != nil {
-	// 	return fmt.Errorf("failed to link webrtc rtcp in elements: %w", err)
-	// }
-
-	wt.RtcpPad = wt.WebrtcRtcpIn.GetStaticPad("src")
 	wt.RtcpPad.AddProbe(gst.PadProbeTypeBuffer, NewRtcpSsrcFilter(wt.SSRC))
-	if err := pipeline.LinkPad(
-		wt.RtcpPad,
-		wt.parent.RtcpFunnel.GetRequestPad("sink_%u"),
-	); err != nil {
-		return fmt.Errorf("failed to link webrtc rtcp queue to rtcp funnel: %w", err)
+	wt.RtcpFunnelPad = wt.parent.RtcpFunnel.GetRequestPad("sink_%u")
+	if err := pipeline.LinkPad(wt.RtcpPad, wt.RtcpFunnelPad); err != nil {
+		return fmt.Errorf("failed to link webrtc rtcp to funnel: %w", err)
 	}
 
 	return pipeline.SyncElements(
@@ -191,44 +128,122 @@ func (wt *WebrtcTrack) LinkParent(rtpbinPad *gst.Pad) error {
 	}
 
 	wt.SelPad = wt.parent.InputSelector.GetRequestPad("sink_%u")
-	if err := pipeline.LinkPad(
-		wt.RtpQueue.GetStaticPad("src"),
-		wt.SelPad,
-	); err != nil {
+	if err := pipeline.LinkPad(wt.RtpQueue.GetStaticPad("src"), wt.SelPad); err != nil {
 		return fmt.Errorf("failed to link webrtc rtp queue to input selector: %w", err)
 	}
 
-	if err := pipeline.SyncElements(
-		wt.Vp8Depay,
-		wt.RtpQueue,
-	); err != nil {
+	// Install keyframe probe before queue and P-frame drop probe after queue
+	depayOutPad := wt.Vp8Depay.GetStaticPad("src")
+	depayOutPad.AddProbe(gst.PadProbeTypeBuffer, wt.keyframeProbe)
+
+	queueOutPad := wt.RtpQueue.GetStaticPad("src")
+	queueOutPad.AddProbe(gst.PadProbeTypeBuffer, wt.queueOutputProbe)
+
+	if err := pipeline.SyncElements(wt.Vp8Depay, wt.RtpQueue); err != nil {
 		return fmt.Errorf("failed to sync webrtc track elements: %w", err)
 	}
 
-	if err := wt.parent.pipeline.DirtySwitchWebrtcInput(wt.SSRC); err != nil {
+	if err := wt.parent.pipeline.SwitchWebrtcInput(wt.SSRC); err != nil {
 		return fmt.Errorf("failed to switch webrtc input to ssrc %d: %w", wt.SSRC, err)
 	}
 	return nil
 }
 
-// Close implements GstChain.
+// keyframeProbe detects keyframes and triggers switch, drops P-frames while waiting.
+func (wt *WebrtcTrack) keyframeProbe(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+	buffer := info.GetBuffer()
+	if buffer == nil {
+		return gst.PadProbeOK
+	}
+
+	pendingSSRC := wt.parent.pipeline.pendingSwitchSSRC
+	isKeyframe := !buffer.HasFlags(gst.BufferFlagDeltaUnit)
+
+	if isKeyframe {
+		if !wt.HasKeyframe {
+			wt.log.Infow("[SWITCH_DEBUG] First keyframe received on track", "ssrc", wt.SSRC)
+		}
+		wt.HasKeyframe = true
+
+		if pendingSSRC == wt.SSRC {
+			wt.log.Infow("[SWITCH_DEBUG] Keyframe detected, executing switch", "ssrc", wt.SSRC)
+			buffer.SetFlags(gst.BufferFlagDiscont)
+			wt.parent.pipeline.onTrackKeyframe(wt.SSRC)
+		}
+	} else if pendingSSRC == wt.SSRC {
+		wt.parent.pipeline.checkPLIRetry(wt.SSRC)
+		return gst.PadProbeDrop
+	}
+
+	return gst.PadProbeOK
+}
+
+// queueOutputProbe drops P-frames exiting queue before keyframe is seen.
+func (wt *WebrtcTrack) queueOutputProbe(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+	buffer := info.GetBuffer()
+	if buffer == nil {
+		return gst.PadProbeOK
+	}
+
+	if !wt.parent.pipeline.isActiveTrack(wt.SSRC) {
+		return gst.PadProbeOK
+	}
+
+	isKeyframe := !buffer.HasFlags(gst.BufferFlagDeltaUnit)
+
+	if isKeyframe {
+		if !wt.SeenKeyframeInQueue {
+			wt.log.Infow("[SWITCH_DEBUG] First keyframe exiting queue after switch", "ssrc", wt.SSRC)
+		}
+		wt.SeenKeyframeInQueue = true
+
+		// Clear pending switch if keyframe was already buffered in queue
+		if wt.parent.pipeline.pendingSwitchSSRC == wt.SSRC {
+			wt.log.Infow("[SWITCH_DEBUG] Clearing pending switch - keyframe in queue", "ssrc", wt.SSRC)
+			wt.parent.pipeline.pendingSwitchSSRC = 0
+		}
+
+		return gst.PadProbeOK
+	}
+
+	if !wt.SeenKeyframeInQueue {
+		wt.log.Debugw("[SWITCH_DEBUG] Dropping stale P-frame from queue", "ssrc", wt.SSRC)
+		return gst.PadProbeDrop
+	}
+
+	return gst.PadProbeOK
+}
+
 func (wt *WebrtcTrack) Close() error {
-	wt.parent.InputSelector.ReleaseRequestPad(wt.SelPad)
-	wt.SelPad = nil
-	wt.parent.RtpFunnel.ReleaseRequestPad(wt.RtpPad)
-	wt.RtpPad = nil
-	wt.parent.RtcpFunnel.ReleaseRequestPad(wt.RtcpPad)
-	wt.RtcpPad = nil
+	if wt.SelPad != nil {
+		active, err := wt.parent.InputSelector.GetProperty("active-pad")
+		if err == nil && active != nil {
+			if activePad, ok := active.(*gst.Pad); ok && activePad != nil {
+				if activePad.GetName() == wt.SelPad.GetName() {
+					wt.log.Warnw("Closing active track", nil, "ssrc", wt.SSRC)
+				}
+			}
+		}
+	}
+
+	if wt.SelPad != nil {
+		wt.parent.InputSelector.ReleaseRequestPad(wt.SelPad)
+		wt.SelPad = nil
+	}
+	if wt.RtpFunnelPad != nil {
+		wt.parent.RtpFunnel.ReleaseRequestPad(wt.RtpFunnelPad)
+		wt.RtpFunnelPad = nil
+	}
+	if wt.RtcpFunnelPad != nil {
+		wt.parent.RtcpFunnel.ReleaseRequestPad(wt.RtcpFunnelPad)
+		wt.RtcpFunnelPad = nil
+	}
 
 	for _, elem := range []*gst.Element{
 		wt.WebrtcRtpIn,
-		// wt.RtpCapsFilter,
-		// wt.RtpCapsSetter,
 		wt.Vp8Depay,
 		wt.RtpQueue,
 		wt.WebrtcRtcpIn,
-		// wt.RtcpCapsFilter,
-		// wt.RtcpCapsSetter,
 	} {
 		if err := elem.SetState(gst.StateNull); err != nil {
 			wt.log.Errorw("Failed to set webrtc track element to null state", err, "element", elem.GetName())
@@ -237,13 +252,9 @@ func (wt *WebrtcTrack) Close() error {
 
 	wt.parent.pipeline.Pipeline().RemoveMany(
 		wt.WebrtcRtpIn,
-		// wt.RtpCapsFilter,
-		// wt.RtpCapsSetter,
 		wt.Vp8Depay,
 		wt.RtpQueue,
 		wt.WebrtcRtcpIn,
-		// wt.RtcpCapsFilter,
-		// wt.RtcpCapsSetter,
 	)
 
 	wt.log.Infow("Closed webrtc track", "ssrc", wt.SSRC)

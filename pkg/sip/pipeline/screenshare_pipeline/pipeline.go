@@ -113,6 +113,9 @@ func (sp *ScreensharePipeline) cleanup() error {
 }
 
 func (sp *ScreensharePipeline) Close() error {
+	// BasePipeline.Close() will set the pipeline to NULL state, which triggers
+	// Unlock() on all source elements. The Unlock() calls Close() on the readers
+	// which sets a read deadline to unblock any pending Read() calls.
 	if err := sp.BasePipeline.Close(); err != nil {
 		return fmt.Errorf("failed to close screenshare pipeline: %w", err)
 	}

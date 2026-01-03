@@ -168,6 +168,11 @@ func NewTrackInput(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication,
 	ti := &TrackInput{
 		RtpIn:  NewTrackAdapter(track, pub),
 		RtcpIn: NewRtcpReader(pub, rp),
+		RequestKeyframe: func() error {
+			// Send RTCP PLI (Picture Loss Indication) to request keyframe from WebRTC sender
+			rp.WritePLI(track.SSRC())
+			return nil
+		},
 	}
 	return ti
 }
@@ -178,8 +183,9 @@ type WebrtcTrackInput struct {
 }
 
 type TrackInput struct {
-	RtpIn  io.ReadCloser
-	RtcpIn io.ReadCloser
+	RtpIn          io.ReadCloser
+	RtcpIn         io.ReadCloser
+	RequestKeyframe func() error // Callback to request keyframe via RTCP PLI
 }
 
 type TrackOutput struct {

@@ -15,10 +15,6 @@ func (o *MediaOrchestrator) LocalParticipantReady(p *lksdk.LocalParticipant) err
 	if err := o.tracks.ParticipantReady(p); err != nil {
 		return fmt.Errorf("could not set participant ready: %w", err)
 	}
-
-	// if err := o.Start(); err != nil {
-	// 	return fmt.Errorf("could not start media orchestrator: %w", err)
-	// }
 	return nil
 }
 
@@ -35,7 +31,6 @@ func (o *MediaOrchestrator) screenshareTrackSubscribed(track *webrtc.TrackRemote
 		o.log.Warnw("screenshare manager not initialized", nil)
 		return nil
 	}
-	// ScreenshareManager handles pending tracks
 	ti := NewTrackInput(track, pub, rp)
 	return o.screenshare.WebrtcTrackInput(ti, rp.SID(), uint32(track.SSRC()))
 }
@@ -110,19 +105,29 @@ func (o *MediaOrchestrator) activeParticipantChanged(p []lksdk.Participant) erro
 		return nil
 	}
 	if len(p) == 0 {
-		o.log.Debugw("no active speakers found")
 		return nil
 	}
-	sid := p[0].SID()
-	if err := o.camera.SwitchActiveWebrtcTrack(sid); err != nil {
-		o.log.Warnw("could not switch active webrtc track", err, "sid", sid)
-		return nil
+
+	// Try each speaker until we find one with a video track
+	for i, speaker := range p {
+		sid := speaker.SID()
+		if i == 0 {
+			o.log.Infow("[SWITCH_DEBUG] Active speaker changed", "sid", sid, "totalSpeakers", len(p))
+		}
+
+		switched, err := o.camera.SwitchActiveWebrtcTrack(sid)
+		if err != nil {
+			o.log.Warnw("[SWITCH_DEBUG] Could not switch active webrtc track", err, "sid", sid)
+			return nil
+		}
+		if switched {
+			return nil
+		}
 	}
 	return nil
 }
 
 func (o *MediaOrchestrator) ActiveParticipantChanged(p []lksdk.Participant) error {
-	// return nil
 	if err := o.dispatch(func() error {
 		return o.activeParticipantChanged(p)
 	}); err != nil {

@@ -49,9 +49,8 @@ var webrtcCaps = map[uint]string{
 func (wio *WebrtcIo) Create() error {
 	var err error
 	wio.WebrtcRtpBin, err = gst.NewElementWithProperties("rtpbin", map[string]interface{}{
-		"name":           "webrtc_rtp_bin",
-		"rtp-profile":    int(3), // GST_RTP_PROFILE_AVPF
-		"do-sync-events": true,
+		"name":        "webrtc_rtp_bin",
+		"rtp-profile": int(3), // GST_RTP_PROFILE_AVPF
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create WebRTC rtpbin: %w", err)
@@ -66,7 +65,8 @@ func (wio *WebrtcIo) Create() error {
 	}
 
 	wio.InputSelector, err = gst.NewElementWithProperties("input-selector", map[string]interface{}{
-		"name": "webrtc_input_selector",
+		"name":          "webrtc_input_selector",
+		"cache-buffers": true,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create WebRTC input selector: %w", err)
@@ -230,21 +230,46 @@ func (wio *WebrtcIo) Link() error {
 		return fmt.Errorf("failed to link webrtc rtcpbin to sinkwriter: %w", err)
 	}
 
-	// configure rtpbin
+	// configure rtpbin - session configuration is optional, don't fail if unavailable
 	sess, err := wio.WebrtcRtpBin.Emit("get-internal-session", uint(0))
 	if err != nil || sess == nil {
-		return fmt.Errorf("failed to get webrtc rtpbin internal session(%t): %w", sess != nil, err)
+		wio.log.Warnw("could not get webrtc rtpbin internal session, RTCP feedback logging disabled", err, "sessNotNil", sess != nil)
 	} else {
 		sessElem := gst.ToElement(sess)
 		if sessElem == nil || sessElem.Instance() == nil {
-			return fmt.Errorf("failed to cast webrtc rtpbin internal session to element")
-		}
+			wio.log.Warnw("could not cast webrtc rtpbin internal session to element, RTCP feedback logging disabled", nil)
+		} else {
+			if err := sessElem.SetProperty("rtcp-min-interval", uint64(0)); err != nil {
+				wio.log.Warnw("failed to set webrtc rtpbin rtcp min interval", err)
+			}
+			if err := sessElem.SetProperty("rtcp-fraction", 0.10); err != nil {
+				wio.log.Warnw("failed to set webrtc rtpbin rtcp fraction", err)
+			}
 
-		if err := sessElem.SetProperty("rtcp-min-interval", uint64(0)); err != nil {
-			return fmt.Errorf("failed to set webrtc rtpbin rtcp min interval: %w", err)
-		}
-		if err := sessElem.SetProperty("rtcp-fraction", 0.10); err != nil {
-			return fmt.Errorf("failed to set webrtc rtpbin rtcp fraction: %w", err)
+			// Log RTCP feedback (PLI/FIR) requests from WebRTC peers
+			if _, err := sessElem.Connect("on-feedback-rtcp", event.RegisterCallback(context.TODO(), wio.pipeline.Loop(), func(session *gst.Element, fbType uint, fbSubType uint, senderSsrc uint, mediaSsrc uint) {
+				fbTypeName := "unknown"
+				if fbType == 205 {
+					fbTypeName = "RTPFB"
+				} else if fbType == 206 {
+					switch fbSubType {
+					case 1:
+						fbTypeName = "PLI"
+					case 4:
+						fbTypeName = "FIR"
+					default:
+						fbTypeName = fmt.Sprintf("PSFB-%d", fbSubType)
+					}
+				}
+				wio.log.Infow("WebRTC peer sent RTCP feedback",
+					"fbType", fbType,
+					"fbSubType", fbSubType,
+					"fbTypeName", fbTypeName,
+					"senderSsrc", senderSsrc,
+					"mediaSsrc", mediaSsrc)
+			})); err != nil {
+				wio.log.Warnw("failed to connect to webrtc rtpsession on-feedback-rtcp signal", err)
+			}
 		}
 	}
 
