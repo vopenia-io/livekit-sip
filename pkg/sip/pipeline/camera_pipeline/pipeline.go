@@ -112,7 +112,7 @@ func (cp *CameraPipeline) cleanup() error {
 func (cp *CameraPipeline) Close() error {
 
 	// pre cleanup all webrtc tracks before they become broken
-	for ssrc, track := range cp.WebrtcIo.Tracks {
+	for ssrc, track := range cp.WebrtcIo.Tracks.All() {
 		cp.Log().Infow("Closing WebRTC track", "ssrc", ssrc)
 		if err := track.Close(); err != nil {
 			cp.Log().Errorw("Failed to close webrtc track", err, "ssrc", ssrc)

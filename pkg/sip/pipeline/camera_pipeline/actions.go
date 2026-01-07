@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
+	"runtime"
 	"runtime/cgo"
 
 	"github.com/go-gst/go-gst/gst"
@@ -195,7 +196,7 @@ func (cp *CameraPipeline) AddWebrtcTrack(ssrc uint32, rtp, rtcp io.ReadCloser) (
 		return nil, fmt.Errorf("failed to add webrtc track chain: %w", err)
 	}
 
-	cp.WebrtcIo.Tracks[ssrc] = track
+	cp.WebrtcIo.Tracks.Store(ssrc, track)
 
 	if err := track.WebrtcRtpIn.SetProperty("handle", uint64(rtpHandle)); err != nil {
 		return nil, fmt.Errorf("failed to set webrtc rtp in handle: %w", err)
@@ -213,7 +214,7 @@ func (cp *CameraPipeline) AddWebrtcTrack(ssrc uint32, rtp, rtcp io.ReadCloser) (
 }
 
 func (cp *CameraPipeline) RemoveWebrtcTrack(ssrc uint32) error {
-	track, ok := cp.WebrtcIo.Tracks[ssrc]
+	track, ok := cp.WebrtcIo.Tracks.Load(ssrc)
 	if !ok {
 		return fmt.Errorf("webrtc track with ssrc %d not found", ssrc)
 	}
@@ -223,7 +224,7 @@ func (cp *CameraPipeline) RemoveWebrtcTrack(ssrc uint32) error {
 	}
 
 	var newTrack *WebrtcTrack
-	for s, t := range cp.WebrtcIo.Tracks {
+	for s, t := range cp.WebrtcIo.Tracks.All() {
 		if s != ssrc {
 			newTrack = t
 			break
@@ -240,7 +241,7 @@ func (cp *CameraPipeline) RemoveWebrtcTrack(ssrc uint32) error {
 }
 
 func (cp *CameraPipeline) DirtySwitchWebrtcInput(ssrc uint32) error {
-	track, ok := cp.WebrtcIo.Tracks[ssrc]
+	track, ok := cp.WebrtcIo.Tracks.Load(ssrc)
 	if !ok {
 		return fmt.Errorf("webrtc track with ssrc %d not found", ssrc)
 	}
@@ -283,29 +284,29 @@ func (cp *CameraPipeline) DirtySwitchWebrtcInput(ssrc uint32) error {
 }
 
 func (cp *CameraPipeline) RequestTrackKeyframe(wt *WebrtcTrack) error {
-	// cp.Log().Infow("Requesting keyframe for webrtc track", "ssrc", wt.SSRC)
+	cp.Log().Infow("Requesting keyframe for webrtc track", "ssrc", wt.SSRC)
 
-	// fkuStruct := gst.NewStructure("GstForceKeyUnit")
-	// runtime.SetFinalizer(fkuStruct, nil)
-	// fkuStruct.SetValue("ssrc", wt.SSRC)
-	// // fkuStruct.SetValue("payload", uint(96))
-	// fkuStruct.SetValue("running-time", gst.ClockTimeNone)
-	// fkuStruct.SetValue("all-headers", false)
-	// fkuStruct.SetValue("count", uint(0))
+	fkuStruct := gst.NewStructure("GstForceKeyUnit")
+	runtime.SetFinalizer(fkuStruct, nil)
+	fkuStruct.SetValue("ssrc", wt.SSRC)
+	// fkuStruct.SetValue("payload", uint(96))
+	fkuStruct.SetValue("running-time", gst.ClockTimeNone)
+	fkuStruct.SetValue("all-headers", false)
+	fkuStruct.SetValue("count", uint(0))
 
-	// fkuEvent := gst.NewCustomEvent(gst.EventTypeCustomUpstream, fkuStruct)
+	fkuEvent := gst.NewCustomEvent(gst.EventTypeCustomUpstream, fkuStruct)
 
-	// srcPad := wt.Vp8Depay.GetStaticPad("src")
-	// if srcPad == nil {
-	// 	cp.Log().Warnw("VP8 depayloader src pad not found", nil, "ssrc", wt.SSRC)
-	// 	return nil
-	// }
+	srcPad := wt.BinPad
+	if srcPad == nil {
+		cp.Log().Warnw("Cannot send GstForceKeyUnit event upstream, bin pad is nil", nil, "ssrc", wt.SSRC)
+		return nil
+	}
 
-	// if srcPad.SendEvent(fkuEvent) {
-	// 	cp.Log().Infow("Sent GstForceKeyUnit event upstream", "ssrc", wt.SSRC)
-	// } else {
-	// 	cp.Log().Warnw("Failed to send GstForceKeyUnit event upstream", nil, "ssrc", wt.SSRC)
-	// }
+	if srcPad.SendEvent(fkuEvent) {
+		cp.Log().Infow("Sent GstForceKeyUnit event upstream", "ssrc", wt.SSRC)
+	} else {
+		cp.Log().Warnw("Failed to send GstForceKeyUnit event upstream", nil, "ssrc", wt.SSRC)
+	}
 
 	return nil
 }

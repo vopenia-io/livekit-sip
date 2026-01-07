@@ -12,14 +12,12 @@ import (
 
 type CameraManager struct {
 	*VideoManager
-	ssrcs map[string]uint32
-	tm    *TrackManager
+	tm *TrackManager
 }
 
 func NewCameraManager(log logger.Logger, ctx context.Context, room *Room, opts *MediaOptions, tm *TrackManager) (*CameraManager, error) {
 	cm := &CameraManager{
-		ssrcs: make(map[string]uint32),
-		tm:    tm,
+		tm: tm,
 	}
 
 	vm, err := NewVideoManager(log, ctx, opts, cm)
@@ -87,7 +85,7 @@ func (cm *CameraManager) CreateVideoPipeline(opt *MediaOptions) (SipPipeline, er
 	return pipeline, nil
 }
 
-func (cm *CameraManager) WebrtcTrackInput(ti *TrackInput, sid string, ssrc uint32) error {
+func (cm *CameraManager) WebrtcTrackInput(ti *TrackInput, ssrc uint32) error {
 	if cm.status != VideoStatusStarted {
 		cm.log.Errorw("video manager not started, cannot add WebRTC track input", nil, "status", cm.status)
 		return fmt.Errorf("video manager not started")
@@ -105,16 +103,11 @@ func (cm *CameraManager) WebrtcTrackInput(ti *TrackInput, sid string, ssrc uint3
 		return fmt.Errorf("failed to add WebRTC source to selector: %w", err)
 	}
 
-	cm.ssrcs[sid] = ssrc
 	return nil
 }
 
-func (cm *CameraManager) RemoveWebrtcTrackInput(sid string) error {
-	ssrc, ok := cm.ssrcs[sid]
-	if !ok {
-		return fmt.Errorf("no SSRC found for sid %s", sid)
-	}
-	cm.log.Debugw("removing WebRTC video track input", "sid", sid, "ssrc", ssrc)
+func (cm *CameraManager) RemoveWebrtcTrackInput(ssrc uint32) error {
+	cm.log.Debugw("removing WebRTC video track input", "ssrc", ssrc)
 
 	p := cm.pipeline.(*camera_pipeline.CameraPipeline)
 
@@ -122,7 +115,6 @@ func (cm *CameraManager) RemoveWebrtcTrackInput(sid string) error {
 		return fmt.Errorf("failed to remove WebRTC source from selector: %w", err)
 	}
 
-	delete(cm.ssrcs, sid)
 	return nil
 }
 
@@ -161,12 +153,8 @@ func (cm *CameraManager) webrtcTrackOutput(to *TrackOutput) error {
 	return nil
 }
 
-func (cm *CameraManager) SwitchActiveWebrtcTrack(sid string) error {
-	ssrc, ok := cm.ssrcs[sid]
-	if !ok {
-		return fmt.Errorf("no SSRC found for sid %s", sid)
-	}
-	cm.log.Debugw("switching active WebRTC video track", "sid", sid, "ssrc", ssrc)
+func (cm *CameraManager) SwitchActiveWebrtcTrack(ssrc uint32) error {
+	cm.log.Debugw("switching active WebRTC video track", "ssrc", ssrc)
 
 	p := cm.pipeline.(*camera_pipeline.CameraPipeline)
 

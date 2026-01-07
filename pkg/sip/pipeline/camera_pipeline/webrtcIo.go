@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/go4org/hashtriemap"
+
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/sip/pkg/sip/pipeline"
@@ -15,7 +17,6 @@ func NewWebrtcIo(log logger.Logger, parent *CameraPipeline) *WebrtcIo {
 	return &WebrtcIo{
 		log:      log.WithComponent("webrtc_io"),
 		pipeline: parent,
-		Tracks:   make(map[uint32]*WebrtcTrack),
 	}
 }
 
@@ -25,7 +26,8 @@ type WebrtcIo struct {
 
 	WebrtcRtpBin *gst.Element
 
-	Tracks map[uint32]*WebrtcTrack
+	// Tracks map[uint32]*WebrtcTrack
+	Tracks hashtriemap.HashTrieMap[uint32, *WebrtcTrack]
 
 	RtpFunnel     *gst.Element
 	InputSelector *gst.Element
@@ -156,7 +158,7 @@ func (wio *WebrtcIo) Link() error {
 		}
 		wio.log.Infow("RTP pad added", "pad", padName, "ssrc", ssrc, "payloadType", payloadType)
 
-		track, ok := wio.Tracks[ssrc]
+		track, ok := wio.Tracks.Load(ssrc)
 		if !ok {
 			wio.log.Warnw("No track found for RTP pad", nil, "ssrc", ssrc)
 			return
@@ -254,14 +256,14 @@ func (wio *WebrtcIo) Link() error {
 // Close implements [pipeline.GstChain].
 func (wio *WebrtcIo) Close() error {
 	var errs []error
-	for _, track := range wio.Tracks {
+	for _, track := range wio.Tracks.All() {
 		if err := track.Close(); err != nil {
 			wio.log.Errorw("Failed to close webrtc track", err, "ssrc", track.SSRC)
 			errs = append(errs, err)
 		}
 	}
-	for k := range wio.Tracks {
-		delete(wio.Tracks, k)
+	for k := range wio.Tracks.All() {
+		wio.Tracks.Delete(k)
 	}
 
 	if err := wio.pipeline.Pipeline().RemoveMany(

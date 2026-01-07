@@ -27,7 +27,7 @@ func (o *MediaOrchestrator) cameraTrackSubscribed(track *webrtc.TrackRemote, pub
 		return nil
 	}
 	ti := NewTrackInput(track, pub, rp)
-	return o.camera.WebrtcTrackInput(ti, rp.SID(), uint32(track.SSRC()))
+	return o.camera.WebrtcTrackInput(ti, uint32(track.SSRC()))
 }
 
 func (o *MediaOrchestrator) webrtcTrackSubscribed(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) error {
@@ -52,11 +52,11 @@ func (o *MediaOrchestrator) WebrtcTrackSubscribed(track *webrtc.TrackRemote, pub
 	return nil
 }
 
-func (o *MediaOrchestrator) cameraTrackUnsubscribed(_ *webrtc.TrackRemote, _ *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) error {
+func (o *MediaOrchestrator) cameraTrackUnsubscribed(track *webrtc.TrackRemote, _ *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) error {
 	if o.camera.Status() != VideoStatusStarted {
 		return nil
 	}
-	return o.camera.RemoveWebrtcTrackInput(rp.SID())
+	return o.camera.RemoveWebrtcTrackInput(uint32(track.SSRC()))
 }
 
 func (o *MediaOrchestrator) webrtcTrackUnsubscribed(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) error {
@@ -89,9 +89,26 @@ func (o *MediaOrchestrator) activeParticipantChanged(p []lksdk.Participant) erro
 		o.log.Debugw("no active speakers found")
 		return nil
 	}
-	sid := p[0].SID()
-	if err := o.camera.SwitchActiveWebrtcTrack(sid); err != nil {
-		o.log.Warnw("could not switch active webrtc track", err, "sid", sid)
+	var pub *lksdk.RemoteTrackPublication = nil
+	var ok bool
+	for _, t := range p {
+		pub, ok = t.GetTrackPublication(livekit.TrackSource_CAMERA).(*lksdk.RemoteTrackPublication)
+		if pub != nil && ok {
+			break
+		} else {
+			pub = nil
+		}
+	}
+
+	if pub == nil {
+		o.log.Debugw("no active camera track found among active speakers")
+		return nil
+	}
+
+	ssrc := pub.TrackRemote().SSRC()
+
+	if err := o.camera.SwitchActiveWebrtcTrack(uint32(ssrc)); err != nil {
+		o.log.Warnw("could not switch active webrtc track", err, "ssrc", ssrc)
 		return nil
 	}
 	return nil

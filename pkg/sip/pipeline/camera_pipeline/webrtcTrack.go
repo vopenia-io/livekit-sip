@@ -22,6 +22,7 @@ type WebrtcTrack struct {
 
 	SSRC   uint32
 	SelPad *gst.Pad
+	BinPad *gst.Pad
 
 	WebrtcRtpIn *gst.Element
 	// rtpbin
@@ -131,9 +132,10 @@ func (wt *WebrtcTrack) Link() error {
 }
 
 func (wt *WebrtcTrack) LinkParent(rtpbinPad *gst.Pad) error {
+	wt.BinPad = rtpbinPad
 	wt.SelPad = wt.parent.InputSelector.GetRequestPad("sink_%u")
 	if err := pipeline.LinkPad(
-		rtpbinPad,
+		wt.BinPad,
 		wt.SelPad,
 	); err != nil {
 		return fmt.Errorf("failed to link webrtc rtpbin pad to depayloader: %w", err)
@@ -149,6 +151,7 @@ func (wt *WebrtcTrack) LinkParent(rtpbinPad *gst.Pad) error {
 func (wt *WebrtcTrack) Close() error {
 	wt.parent.InputSelector.ReleaseRequestPad(wt.SelPad)
 	wt.SelPad = nil
+	wt.BinPad = nil
 
 	for _, elem := range []*gst.Element{
 		wt.WebrtcRtpIn,
@@ -165,7 +168,7 @@ func (wt *WebrtcTrack) Close() error {
 	)
 
 	wt.log.Infow("Closed webrtc track", "ssrc", wt.SSRC)
-	delete(wt.parent.Tracks, wt.SSRC)
+	wt.parent.Tracks.Delete(wt.SSRC)
 	wt.log.Infow("Removed webrtc track from parent", "ssrc", wt.SSRC)
 	return nil
 }
