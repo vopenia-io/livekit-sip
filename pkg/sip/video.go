@@ -7,21 +7,19 @@ import (
 	"io"
 	"net"
 	"net/netip"
-	"os"
 	"runtime"
-	"syscall"
 	"time"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/media-sdk/h264"
-	mrtp "github.com/livekit/media-sdk/rtp"
 	sdpv1 "github.com/livekit/media-sdk/sdp"
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/sip/pkg/sip/pipeline"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/h264vp8"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sinkwriter"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipconn"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sourcereader"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/vp8h264"
 )
@@ -46,13 +44,19 @@ func init() {
 		panic("Failed to register vp8-h264")
 	}
 
+	if !sipconn.Register() {
+		panic("Failed to register sipconn")
+	}
+
 	mainLoop = glib.NewMainLoop(glib.MainContextDefault(), false)
 	_ = mainLoop
 }
 
 type SipPipeline interface {
 	pipeline.GstPipeline
-	SipIO(rtp, rtcp net.Conn, pt uint8) error
+	Configure(remote netip.Addr, media *sdpv2.SDPMedia) error
+	SipRtpPort() uint16
+	SipRtcpPort() uint16
 }
 
 type PipelineFactory interface {
@@ -88,20 +92,20 @@ func NewVideoManager(log logger.Logger, ctx context.Context, opts *MediaOptions,
 		bindIP = opts.IP
 	}
 	// Allocate RTP/RTCP port pair (even port for RTP, odd port for RTCP)
-	rtpConn, rtcpConn, err := mrtp.ListenUDPPortPair(opts.Ports.Start, opts.Ports.End, bindIP)
-	if err != nil {
-		return nil, fmt.Errorf("failed to listen on UDP port pair for RTP/RTCP: bindIP=%s, portRange=%d-%d, advertiseIP=%s: %w",
-			bindIP, opts.Ports.Start, opts.Ports.End, opts.IP, err)
-	}
+	// rtpConn, rtcpConn, err := mrtp.ListenUDPPortPair(opts.Ports.Start, opts.Ports.End, bindIP)
+	// if err != nil {
+	// 	return nil, fmt.Errorf("failed to listen on UDP port pair for RTP/RTCP: bindIP=%s, portRange=%d-%d, advertiseIP=%s: %w",
+	// 		bindIP, opts.Ports.Start, opts.Ports.End, opts.IP, err)
+	// }
 
 	v := &VideoManager{
-		log:      log,
-		ctx:      ctx,
-		opts:     opts,
-		rtpConn:  newUDPConn(log.WithComponent("video-rtp"), rtpConn),
-		rtcpConn: newUDPConn(log.WithComponent("video-rtcp"), rtcpConn),
-		factory:  factory,
-		status:   VideoStatusStopped,
+		log:  log,
+		ctx:  ctx,
+		opts: opts,
+		// rtpConn:  newUDPConn(log.WithComponent("video-rtp"), rtpConn),
+		// rtcpConn: newUDPConn(log.WithComponent("video-rtcp"), rtcpConn),
+		factory: factory,
+		status:  VideoStatusStopped,
 	}
 
 	v.log.Infow("video manager created")
@@ -110,23 +114,24 @@ func NewVideoManager(log logger.Logger, ctx context.Context, opts *MediaOptions,
 }
 
 type VideoManager struct {
-	log      logger.Logger
-	ctx      context.Context
-	opts     *MediaOptions
-	rtpConn  *udpConn
-	rtcpConn *udpConn
+	log  logger.Logger
+	ctx  context.Context
+	opts *MediaOptions
+	// rtpConn  *udpConn
+	// rtcpConn *udpConn
 	status   VideoStatus
 	pipeline SipPipeline
 	Media    *sdpv2.SDPMedia
+	Remote   netip.Addr
 	factory  PipelineFactory
 }
 
 func (v *VideoManager) RtpPort() int {
-	return v.rtpConn.LocalAddr().(*net.UDPAddr).Port
+	return int(v.pipeline.SipRtpPort())
 }
 
 func (v *VideoManager) RtcpPort() int {
-	return v.rtcpConn.LocalAddr().(*net.UDPAddr).Port
+	return int(v.pipeline.SipRtcpPort())
 }
 
 func (v *VideoManager) Close() error {
@@ -137,12 +142,12 @@ func (v *VideoManager) Close() error {
 	if err := v.stop(); err != nil {
 		return fmt.Errorf("failed to stop video manager: %w", err)
 	}
-	if err := v.rtpConn.Close(); err != nil {
-		// return fmt.Errorf("failed to close RTP connection: %w", err)
-	}
-	if err := v.rtcpConn.Close(); err != nil {
-		// return fmt.Errorf("failed to close RTCP connection: %w", err)
-	}
+	// if err := v.rtpConn.Close(); err != nil {
+	// 	// return fmt.Errorf("failed to close RTP connection: %w", err)
+	// }
+	// if err := v.rtcpConn.Close(); err != nil {
+	// 	// return fmt.Errorf("failed to close RTCP connection: %w", err)
+	// }
 	v.status = VideoStatusClosed
 	return nil
 }
@@ -220,13 +225,13 @@ func (v *VideoManager) mediaOK(newMedia *sdpv2.SDPMedia) bool {
 	return true
 }
 
-type NoCloseConn struct {
-	net.Conn
-}
+// type NoCloseConn struct {
+// 	net.Conn
+// }
 
-func (n *NoCloseConn) Close() error {
-	return n.SetDeadline(time.Now())
-}
+// func (n *NoCloseConn) Close() error {
+// 	return n.SetDeadline(time.Now())
+// }
 
 type ReconcileStatus int
 
@@ -268,8 +273,10 @@ func (v *VideoManager) Reconcile(remote netip.Addr, media *sdpv2.SDPMedia) (Reco
 	// 	return rs, fmt.Errorf("failed to configure GStreamer pipeline: %w", err)
 	// }
 
-	v.rtpConn.SetDst(netip.AddrPortFrom(remote, media.Port))
-	v.rtcpConn.SetDst(netip.AddrPortFrom(remote, media.RTCPPort))
+	v.Remote = remote
+
+	// v.rtpConn.SetDst(netip.AddrPortFrom(remote, media.Port))
+	// v.rtcpConn.SetDst(netip.AddrPortFrom(remote, media.RTCPPort))
 
 	// if err := v.pipeline.SipIO(&safeUDPConn{udpConn: v.rtpConn}, &safeUDPConn{udpConn: v.rtcpConn}, media.Codec.PayloadType); err != nil {
 	// 	v.log.Errorw("failed to configure SIP IO", err)
@@ -287,7 +294,7 @@ func (v *VideoManager) Start() error {
 		return nil
 	}
 
-	if err := v.pipeline.SipIO(&safeUDPConn{udpConn: v.rtpConn}, &safeUDPConn{udpConn: v.rtcpConn}, v.Media.Codec.PayloadType); err != nil {
+	if err := v.pipeline.Configure(v.Remote, v.Media); err != nil {
 		v.log.Errorw("failed to configure SIP IO", err)
 		return fmt.Errorf("failed to configure SIP IO: %w", err)
 	}
@@ -326,7 +333,7 @@ func (v *VideoManager) resetPipeline() (bool, error) {
 	return init, nil
 }
 
-var pid = os.Getpid()
+// var pid = os.Getpid()
 
 func (v *VideoManager) stop() error {
 	v.log.Debugw("stopping video manager")
@@ -343,14 +350,13 @@ func (v *VideoManager) stop() error {
 			return fmt.Errorf("failed to set GStreamer pipeline to null: %w", err)
 		}
 		v.pipeline = nil
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond) // DO NOT REMOVE: force both GC to fully release resources
 		runtime.GC()
 		time.Sleep(100 * time.Millisecond)
 		runtime.GC()
+		time.Sleep(1 * time.Second) // DO NOT REMOVE: give time to GStreamer to cleanup
 
-		syscall.Kill(pid, syscall.SIGUSR1)
-
-		time.Sleep(1 * time.Second)
+		// syscall.Kill(pid, syscall.SIGUSR1)
 	}
 
 	v.status = VideoStatusStopped

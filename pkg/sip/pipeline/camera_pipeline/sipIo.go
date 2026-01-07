@@ -24,10 +24,7 @@ type SipIo struct {
 
 	SipRtpBin *gst.Element
 
-	SipRtpIn   *gst.Element
-	SipRtcpIn  *gst.Element
-	SipRtpOut  *gst.Element
-	SipRtcpOut *gst.Element
+	SipConn *gst.Element
 }
 
 var _ pipeline.GstChain = (*SipIo)(nil)
@@ -36,48 +33,19 @@ var _ pipeline.GstChain = (*SipIo)(nil)
 func (sio *SipIo) Create() error {
 	var err error
 	sio.SipRtpBin, err = gst.NewElementWithProperties("rtpbin", map[string]interface{}{
-		"name":        "sip_rtp_bin",
-		"rtp-profile": int(3), // GST_RTP_PROFILE_AVPF
+		"name":           "sip_rtp_bin",
+		"rtp-profile":    int(3), // GST_RTP_PROFILE_AVPF
+		"do-sync-events": true,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create SIP rtpbin: %w", err)
 	}
 
-	sio.SipRtpIn, err = gst.NewElementWithProperties("sourcereader", map[string]interface{}{
-		"name":         "sip_rtp_in",
-		"do-timestamp": true,
+	sio.SipConn, err = gst.NewElementWithProperties("sipconn", map[string]interface{}{
+		"name": "sip_conn",
 	})
 	if err != nil {
-		return fmt.Errorf("failed to create SIP rtp sourcereader: %w", err)
-	}
-
-	sio.SipRtpOut, err = gst.NewElementWithProperties("sinkwriter", map[string]interface{}{
-		"name":        "sip_rtp_out",
-		"max-bitrate": int(1_500_000),
-		"sync":        false,
-		"async":       false,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create SIP rtp sinkwriter: %w", err)
-	}
-
-	sio.SipRtcpIn, err = gst.NewElementWithProperties("sourcereader", map[string]interface{}{
-		"name":         "sip_rtcp_in",
-		"caps":         gst.NewCapsFromString("application/x-rtcp"),
-		"do-timestamp": true,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create SIP rtcp sourcereader: %w", err)
-	}
-
-	sio.SipRtcpOut, err = gst.NewElementWithProperties("sinkwriter", map[string]interface{}{
-		"name":  "sip_rtcp_out",
-		"caps":  gst.NewCapsFromString("application/x-rtcp"),
-		"sync":  false,
-		"async": false,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create SIP rtcp sinkwriter: %w", err)
+		return fmt.Errorf("failed to create SIP connection element: %w", err)
 	}
 
 	return nil
@@ -87,10 +55,7 @@ func (sio *SipIo) Create() error {
 func (sio *SipIo) Add() error {
 	return sio.pipeline.Pipeline().AddMany(
 		sio.SipRtpBin,
-		sio.SipRtpIn,
-		sio.SipRtcpIn,
-		sio.SipRtpOut,
-		sio.SipRtcpOut,
+		sio.SipConn,
 	)
 }
 
@@ -122,7 +87,7 @@ func (sio *SipIo) Link() error {
 	}
 
 	if err := pipeline.LinkPad(
-		sio.SipRtpIn.GetStaticPad("src"),
+		sio.SipConn.GetStaticPad("src"),
 		sio.SipRtpBin.GetRequestPad("recv_rtp_sink_0"),
 	); err != nil {
 		return fmt.Errorf("failed to link sip rtp src to rtpbin: %w", err)
@@ -137,7 +102,7 @@ func (sio *SipIo) Link() error {
 		}
 		if err := pipeline.LinkPad(
 			pad,
-			sio.SipRtpOut.GetStaticPad("sink"),
+			sio.SipConn.GetStaticPad("sink"),
 		); err != nil {
 			sio.log.Errorw("Failed to link sip rtpbin pad to sinkwriter", err)
 			return
@@ -156,15 +121,16 @@ func (sio *SipIo) Link() error {
 
 	// link rtcp in
 	if err := pipeline.LinkPad(
-		sio.SipRtcpIn.GetStaticPad("src"),
+		sio.SipConn.GetStaticPad("src_rtcp"),
 		sio.SipRtpBin.GetRequestPad("recv_rtcp_sink_0"),
 	); err != nil {
 		return fmt.Errorf("failed to link sip rtcp src to rtpbin: %w", err)
 	}
 
+	// link rtcp out
 	if err := pipeline.LinkPad(
 		sio.SipRtpBin.GetRequestPad("send_rtcp_src_0"),
-		sio.SipRtcpOut.GetStaticPad("sink"),
+		sio.SipConn.GetStaticPad("sink_rtcp"),
 	); err != nil {
 		return fmt.Errorf("failed to link rtpbin rtcp src to sip rtcp sink: %w", err)
 	}
@@ -194,10 +160,7 @@ func (sio *SipIo) Link() error {
 func (sio *SipIo) Close() error {
 	if err := sio.pipeline.Pipeline().RemoveMany(
 		sio.SipRtpBin,
-		sio.SipRtpIn,
-		sio.SipRtcpIn,
-		sio.SipRtpOut,
-		sio.SipRtcpOut,
+		sio.SipConn,
 	); err != nil {
 		return fmt.Errorf("failed to remove SIP IO elements from pipeline: %w", err)
 	}

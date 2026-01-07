@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
-	"runtime"
+	"net/netip"
 	"runtime/cgo"
 
 	"github.com/go-gst/go-gst/gst"
+	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
 	"github.com/livekit/sip/pkg/sip/pipeline"
 	"github.com/livekit/sip/pkg/sip/pipeline/event"
 )
@@ -30,10 +30,6 @@ func (cp *CameraPipeline) checkReady() error {
 	}
 
 	ready := true
-	ready = ready && checkHandle(cp.SipRtpIn)
-	ready = ready && checkHandle(cp.SipRtpOut)
-	ready = ready && checkHandle(cp.SipRtcpIn)
-	ready = ready && checkHandle(cp.SipRtcpOut)
 	ready = ready && checkHandle(cp.WebrtcRtpOut)
 	ready = ready && checkHandle(cp.WebrtcRtcpOut)
 
@@ -44,10 +40,6 @@ func (cp *CameraPipeline) checkReady() error {
 		}
 
 		for _, e := range []*gst.Element{
-			cp.SipRtpIn,
-			cp.SipRtpOut,
-			cp.SipRtcpIn,
-			cp.SipRtcpOut,
 			cp.WebrtcRtpOut,
 			cp.WebrtcRtcpOut,
 		} {
@@ -59,21 +51,14 @@ func (cp *CameraPipeline) checkReady() error {
 	return nil
 }
 
-func (cp *CameraPipeline) SipIO(rtp, rtcp net.Conn, pt uint8) error {
-	rtpHandle := cgo.NewHandle(rtp)
-	defer rtpHandle.Delete()
-	rtcpHandle := cgo.NewHandle(rtcp)
-	defer rtcpHandle.Delete()
+func (cp *CameraPipeline) Configure(remote netip.Addr, media *sdpv2.SDPMedia) error {
+	pt := media.Codec.PayloadType
 
 	h264Caps := fmt.Sprintf(
 		"application/x-rtp,media=video,encoding-name=H264,payload=%d,clock-rate=90000",
 		pt)
 
-	cp.Log().Infow("Setting SIP IO",
-		"rtp_remote", rtp.RemoteAddr(),
-		"rtp_local", rtp.LocalAddr(),
-		"rtcp_remote", rtcp.RemoteAddr(),
-		"rtcp_local", rtcp.LocalAddr(),
+	cp.Log().Infow("Setting SIP config",
 		"caps", h264Caps,
 	)
 
@@ -86,43 +71,96 @@ func (cp *CameraPipeline) SipIO(rtp, rtcp net.Conn, pt uint8) error {
 		return fmt.Errorf("failed to connect to rtpbin request-pt-map signal: %w", err)
 	}
 
-	if err := cp.WebrtcToSip.CapsFilter.SetProperty("caps",
-		gst.NewCapsFromString(h264Caps+",rtcp-fb-nack-pli=1,rtcp-fb-nack=1,rtcp-fb-ccm-fir=1"),
-	); err != nil {
-		return fmt.Errorf("failed to set webrtc to sip caps filter caps (pt: %d): %w", pt, err)
-	}
+	// if err := cp.WebrtcToSip.Vp8H264.SetProperty("caps",
+	// 	gst.NewCapsFromString(h264Caps+",rtcp-fb-nack-pli=1,rtcp-fb-nack=1,rtcp-fb-ccm-fir=1"),
+	// ); err != nil {
+	// 	return fmt.Errorf("failed to set webrtc to sip caps filter caps (pt: %d): %w", pt, err)
+	// }
 
-	if err := cp.SipRtpIn.SetProperty("caps",
+	if err := cp.SipConn.SetProperty("caps",
+		gst.NewCapsFromString(h264Caps), //+",rtcp-fb-nack-pli=1,rtcp-fb-nack=1,rtcp-fb-ccm-fir=1"),
+	); err != nil {
+		return fmt.Errorf("failed to set sip rtp in caps (pt: %d): %w", pt, err)
+	}
+	if err := cp.SipConn.SetProperty("caps",
+		gst.NewCapsFromString(h264Caps), //+",rtcp-fb-nack-pli=1,rtcp-fb-nack=1,rtcp-fb-ccm-fir=1"),
+	); err != nil {
+		return fmt.Errorf("failed to set sip rtp in caps (pt: %d): %w", pt, err)
+	}
+	if err := cp.SipConn.SetProperty("caps",
+		gst.NewCapsFromString(h264Caps), //+",rtcp-fb-nack-pli=1,rtcp-fb-nack=1,rtcp-fb-ccm-fir=1"),
+	); err != nil {
+		return fmt.Errorf("failed to set sip rtp in caps (pt: %d): %w", pt, err)
+	}
+	if err := cp.SipConn.SetProperty("caps",
+		gst.NewCapsFromString(h264Caps), //+",rtcp-fb-nack-pli=1,rtcp-fb-nack=1,rtcp-fb-ccm-fir=1"),
+	); err != nil {
+		return fmt.Errorf("failed to set sip rtp in caps (pt: %d): %w", pt, err)
+	}
+	if err := cp.SipConn.SetProperty("caps",
+		gst.NewCapsFromString(h264Caps), //+",rtcp-fb-nack-pli=1,rtcp-fb-nack=1,rtcp-fb-ccm-fir=1"),
+	); err != nil {
+		return fmt.Errorf("failed to set sip rtp in caps (pt: %d): %w", pt, err)
+	}
+	if err := cp.SipConn.SetProperty("caps",
 		gst.NewCapsFromString(h264Caps+",rtcp-fb-nack-pli=1,rtcp-fb-nack=1,rtcp-fb-ccm-fir=1"),
 	); err != nil {
 		return fmt.Errorf("failed to set sip rtp in caps (pt: %d): %w", pt, err)
 	}
-
-	// if err := cp.SipRtpOut.SetProperty("caps",
-	// 	gst.NewCapsFromString(h264Caps),
-	// ); err != nil {
-	// 	return fmt.Errorf("failed to set sip rtp out caps (pt: %d): %w", pt, err)
-	// }
-
-	if err := cp.SipRtpIn.SetProperty("handle", uint64(rtpHandle)); err != nil {
-		return fmt.Errorf("failed to set rtp in handle: %w", err)
+	if err := cp.SipConn.SetProperty("caps",
+		gst.NewCapsFromString(h264Caps), //+",rtcp-fb-nack-pli=1,rtcp-fb-nack=1,rtcp-fb-ccm-fir=1"),
+	); err != nil {
+		return fmt.Errorf("failed to set sip rtp in caps (pt: %d): %w", pt, err)
+	}
+	if err := cp.SipConn.SetProperty("caps",
+		gst.NewCapsFromString(h264Caps), //+",rtcp-fb-nack-pli=1,rtcp-fb-nack=1,rtcp-fb-ccm-fir=1"),
+	); err != nil {
+		return fmt.Errorf("failed to set sip rtp in caps (pt: %d): %w", pt, err)
 	}
 
-	if err := cp.SipRtpOut.SetProperty("handle", uint64(rtpHandle)); err != nil {
-		return fmt.Errorf("failed to set rtp out handle: %w", err)
+	if err := cp.SipConn.SetProperty("remote-ip", remote.String()); err != nil {
+		return fmt.Errorf("failed to set webrtc remote ip: %w", err)
 	}
 
-	if err := cp.SipRtcpIn.SetProperty("handle", uint64(rtcpHandle)); err != nil {
-		return fmt.Errorf("failed to set rtcp in handle: %w", err)
+	if err := cp.SipConn.SetProperty("remote-rtp-port", int(media.Port)); err != nil {
+		return fmt.Errorf("failed to set sip remote rtp port: %w", err)
 	}
 
-	if err := cp.SipRtcpOut.SetProperty("handle", uint64(rtcpHandle)); err != nil {
-		return fmt.Errorf("failed to set rtcp out handle: %w", err)
+	if err := cp.SipConn.SetProperty("remote-rtcp-port", int(media.RTCPPort)); err != nil {
+		return fmt.Errorf("failed to set sip remote rtcp port: %w", err)
 	}
 
 	cp.checkReady()
 
 	return nil
+}
+
+func (cp *CameraPipeline) SipRtpPort() uint16 {
+	sipConnPortVal, err := cp.SipConn.GetProperty("rtp-port")
+	if err != nil {
+		cp.Log().Errorw("failed to get sip rtp port", err)
+		return 0
+	}
+	sipConnPort, ok := sipConnPortVal.(int)
+	if !ok {
+		cp.Log().Errorw("sip rtp port property is not uint16", nil, "value", sipConnPortVal)
+		return 0
+	}
+	return uint16(sipConnPort)
+}
+
+func (cp *CameraPipeline) SipRtcpPort() uint16 {
+	sipConnPortVal, err := cp.SipConn.GetProperty("rtcp-port")
+	if err != nil {
+		cp.Log().Errorw("failed to get sip rtcp port", err)
+		return 0
+	}
+	sipConnPort, ok := sipConnPortVal.(int)
+	if !ok {
+		cp.Log().Errorw("sip rtcp port property is not uint16", nil, "value", sipConnPortVal)
+		return 0
+	}
+	return uint16(sipConnPort)
 }
 
 func (cp *CameraPipeline) WebrtcOutput(rtp, rtcp io.WriteCloser) error {
