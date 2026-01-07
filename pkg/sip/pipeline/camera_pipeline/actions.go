@@ -245,29 +245,29 @@ func (cp *CameraPipeline) DirtySwitchWebrtcInput(ssrc uint32) error {
 }
 
 func (cp *CameraPipeline) RequestTrackKeyframe(wt *WebrtcTrack) error {
-	cp.Log().Infow("Requesting keyframe for webrtc track", "ssrc", wt.SSRC)
+	// cp.Log().Infow("Requesting keyframe for webrtc track", "ssrc", wt.SSRC)
 
-	fkuStruct := gst.NewStructure("GstForceKeyUnit")
-	runtime.SetFinalizer(fkuStruct, nil)
-	fkuStruct.SetValue("ssrc", wt.SSRC)
-	// fkuStruct.SetValue("payload", uint(96))
-	fkuStruct.SetValue("running-time", gst.ClockTimeNone)
-	fkuStruct.SetValue("all-headers", false)
-	fkuStruct.SetValue("count", uint(0))
+	// fkuStruct := gst.NewStructure("GstForceKeyUnit")
+	// runtime.SetFinalizer(fkuStruct, nil)
+	// fkuStruct.SetValue("ssrc", wt.SSRC)
+	// // fkuStruct.SetValue("payload", uint(96))
+	// fkuStruct.SetValue("running-time", gst.ClockTimeNone)
+	// fkuStruct.SetValue("all-headers", false)
+	// fkuStruct.SetValue("count", uint(0))
 
-	fkuEvent := gst.NewCustomEvent(gst.EventTypeCustomUpstream, fkuStruct)
+	// fkuEvent := gst.NewCustomEvent(gst.EventTypeCustomUpstream, fkuStruct)
 
-	srcPad := wt.Vp8Depay.GetStaticPad("src")
-	if srcPad == nil {
-		cp.Log().Warnw("VP8 depayloader src pad not found", nil, "ssrc", wt.SSRC)
-		return nil
-	}
+	// srcPad := wt.Vp8Depay.GetStaticPad("src")
+	// if srcPad == nil {
+	// 	cp.Log().Warnw("VP8 depayloader src pad not found", nil, "ssrc", wt.SSRC)
+	// 	return nil
+	// }
 
-	if srcPad.SendEvent(fkuEvent) {
-		cp.Log().Infow("Sent GstForceKeyUnit event upstream", "ssrc", wt.SSRC)
-	} else {
-		cp.Log().Warnw("Failed to send GstForceKeyUnit event upstream", nil, "ssrc", wt.SSRC)
-	}
+	// if srcPad.SendEvent(fkuEvent) {
+	// 	cp.Log().Infow("Sent GstForceKeyUnit event upstream", "ssrc", wt.SSRC)
+	// } else {
+	// 	cp.Log().Warnw("Failed to send GstForceKeyUnit event upstream", nil, "ssrc", wt.SSRC)
+	// }
 
 	return nil
 }

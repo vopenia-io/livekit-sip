@@ -111,7 +111,7 @@ func (sio *SipIo) Link() error {
 		sio.log.Infow("RTP pad added", "pad", padName, "ssrc", ssrc, "payloadType", payloadType)
 		if err := pipeline.LinkPad(
 			pad,
-			sio.pipeline.SipToWebrtc.H264Depay.GetStaticPad("sink"),
+			sio.pipeline.SipToWebrtc.H264Vp8.GetStaticPad("sink"),
 		); err != nil {
 			sio.log.Errorw("Failed to link rtpbin pad to depayloader", err)
 			return
@@ -148,7 +148,7 @@ func (sio *SipIo) Link() error {
 	}
 
 	if err := pipeline.LinkPad(
-		sio.pipeline.WebrtcToSip.CapsFilter.GetStaticPad("src"),
+		sio.pipeline.WebrtcToSip.Vp8H264.GetStaticPad("src"),
 		sio.SipRtpBin.GetRequestPad("send_rtp_sink_0"),
 	); err != nil {
 		return fmt.Errorf("failed to link rtp vp8 payloader to sip rtpbin: %w", err)

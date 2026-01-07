@@ -180,7 +180,7 @@ func (wio *WebrtcIo) Link() error {
 
 	if err := gst.ElementLinkMany(
 		wio.InputSelector,
-		wio.pipeline.WebrtcToSip.Vp8Dec,
+		wio.pipeline.WebrtcToSip.Vp8H264,
 	); err != nil {
 		return fmt.Errorf("failed to link webrtc input selector to vp8 decoder: %w", err)
 	}
@@ -205,7 +205,7 @@ func (wio *WebrtcIo) Link() error {
 	}
 
 	if err := pipeline.LinkPad(
-		wio.pipeline.SipToWebrtc.CapsFilter.GetStaticPad("src"),
+		wio.pipeline.SipToWebrtc.H264Vp8.GetStaticPad("src"),
 		wio.WebrtcRtpBin.GetRequestPad("send_rtp_sink_0"),
 	); err != nil {
 		return fmt.Errorf("failed to link rtp vp8 payloader to webrtc rtpbin: %w", err)

@@ -20,8 +20,10 @@ import (
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/sip/pkg/sip/pipeline"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/h264vp8"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sinkwriter"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sourcereader"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/vp8h264"
 )
 
 var mainLoop *glib.MainLoop
@@ -34,6 +36,14 @@ func init() {
 
 	if !sinkwriter.Register() {
 		panic("failed to register sinkwriter element")
+	}
+
+	if !h264vp8.Register() {
+		panic("Failed to register h264-vp8")
+	}
+
+	if !vp8h264.Register() {
+		panic("Failed to register vp8-h264")
 	}
 
 	mainLoop = glib.NewMainLoop(glib.MainContextDefault(), false)
