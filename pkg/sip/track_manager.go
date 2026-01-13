@@ -180,9 +180,9 @@ func (tm *TrackManager) Close() error {
 		if err := tm.camera.RtpOut.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("could not close camera RTP output: %w", err))
 		}
-		if err := tm.camera.RtcpOut.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("could not close camera RTCP output: %w", err))
-		}
+		// if err := tm.camera.RtcpOut.Close(); err != nil {
+		// 	errs = append(errs, fmt.Errorf("could not close camera RTCP output: %w", err))
+		// }
 		tm.camera = nil
 	}
 

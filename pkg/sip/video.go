@@ -18,6 +18,7 @@ import (
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/sip/pkg/sip/pipeline"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/h264vp8"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/lkroom"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sinkwriter"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipconn"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sourcereader"
@@ -46,6 +47,10 @@ func init() {
 
 	if !sipconn.Register() {
 		panic("Failed to register sipconn")
+	}
+
+	if !lkroom.Register() {
+		panic("Failed to register lkroom")
 	}
 
 	mainLoop = glib.NewMainLoop(glib.MainContextDefault(), false)
