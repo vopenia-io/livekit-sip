@@ -496,7 +496,9 @@ func (s *sipconn) ChangeState(instance *gst.Element, transition gst.StateChange)
 
 	switch transition {
 	case gst.StateChangeNullToReady:
-		return s.open(self)
+		if ret := s.open(self); ret != gst.StateChangeSuccess {
+			return ret
+		}
 	}
 
 	ret := self.ParentChangeState(transition)
