@@ -11,6 +11,7 @@ import (
 
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
 	"github.com/livekit/protocol/logger"
+	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/livekit/sip/pkg/sip/pipeline"
 )
 
@@ -117,7 +118,7 @@ func (o *MediaOrchestrator) init(room *Room) error {
 
 	o.tracks = NewTrackManager(o.log.WithComponent("track_manager"))
 
-	camera, err := NewCameraManager(o.log.WithComponent("camera"), o.ctx, room, o.opts, o.tracks)
+	camera, err := NewCameraManager(o.log.WithComponent("camera"), o.ctx, o.opts, o.tracks)
 	if err != nil {
 		return fmt.Errorf("could not create video manager: %w", err)
 	}
@@ -230,6 +231,19 @@ func (o *MediaOrchestrator) Close() error {
 	log.Debugw("media orchestrator closed")
 
 	return nil
+}
+
+// GetRoom implements [RoomCallbacks].
+func (o *MediaOrchestrator) JoinRoom(wsUrl, token string, callbacks *lksdk.RoomCallback, opts ...lksdk.ConnectOption) (*lksdk.Room, error) {
+	var errs []error
+	room, err := o.camera.GetRoom()
+	errs = append(errs, err)
+	errs = append(errs, o.camera.SetRoomCallbacks(callbacks))
+	errs = append(errs, o.camera.SetRoomOptions(wsUrl, token, opts...))
+	if err := errors.Join(errs...); err != nil {
+		return nil, fmt.Errorf("could not join room: %w", err)
+	}
+	return room, nil
 }
 
 func (o *MediaOrchestrator) AnswerSDP(offer *sdpv2.SDP) (answer *sdpv2.SDP, err error) {

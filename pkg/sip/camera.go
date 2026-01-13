@@ -7,6 +7,7 @@ import (
 
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
 	"github.com/livekit/protocol/logger"
+	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/livekit/sip/pkg/sip/pipeline/camera_pipeline"
 )
 
@@ -15,7 +16,7 @@ type CameraManager struct {
 	tm *TrackManager
 }
 
-func NewCameraManager(log logger.Logger, ctx context.Context, room *Room, opts *MediaOptions, tm *TrackManager) (*CameraManager, error) {
+func NewCameraManager(log logger.Logger, ctx context.Context, opts *MediaOptions, tm *TrackManager) (*CameraManager, error) {
 	cm := &CameraManager{
 		tm: tm,
 	}
@@ -27,6 +28,21 @@ func NewCameraManager(log logger.Logger, ctx context.Context, room *Room, opts *
 	cm.VideoManager = vm
 
 	return cm, nil
+}
+
+func (cm *CameraManager) SetRoomCallbacks(callbacks *lksdk.RoomCallback) error {
+	p := cm.pipeline.(*camera_pipeline.CameraPipeline)
+	return p.SetRoomCallbacks(callbacks)
+}
+
+func (cm *CameraManager) GetRoom() (*lksdk.Room, error) {
+	p := cm.pipeline.(*camera_pipeline.CameraPipeline)
+	return p.GetRoom()
+}
+
+func (cm *CameraManager) SetRoomOptions(wsUrl, token string, opts ...lksdk.ConnectOption) error {
+	p := cm.pipeline.(*camera_pipeline.CameraPipeline)
+	return p.SetRoomOptions(wsUrl, token, opts...)
 }
 
 func (cm *CameraManager) publishCameraTrack() error {

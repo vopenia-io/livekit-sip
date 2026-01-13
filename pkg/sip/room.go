@@ -196,6 +196,7 @@ type RoomCallbacks interface {
 	ActiveParticipantChanged(p []lksdk.Participant) error
 	LocalParticipantReady(p *lksdk.LocalParticipant) error
 	Disconnect() error
+	JoinRoom(wsUrl, token string, callbacks *lksdk.RoomCallback, opts ...lksdk.ConnectOption) (*lksdk.Room, error)
 }
 
 func NewRoom(log logger.Logger, st *RoomStats) *Room {
@@ -419,15 +420,32 @@ func (r *Room) Connect(conf *config.Config, rconf RoomConfig) error {
 			return err
 		}
 	}
-	room := lksdk.NewRoom(roomCallback)
-	room.SetLogger(medialogutils.NewOverrideLogger(r.log))
-	err := room.JoinWithToken(rconf.WsUrl, rconf.Token,
-		lksdk.WithAutoSubscribe(false),
-		lksdk.WithExtraAttributes(partConf.Attributes),
-	)
+
+	var room *lksdk.Room
+	var err error
+	if cb := r.callbackHandler.Load(); cb != nil {
+		room, err = (*cb).JoinRoom(rconf.WsUrl, rconf.Token, roomCallback,
+			lksdk.WithAutoSubscribe(false),
+			lksdk.WithExtraAttributes(partConf.Attributes))
+		room.SetLogger(medialogutils.NewOverrideLogger(r.log))
+	} else {
+		room = lksdk.NewRoom(roomCallback)
+		room.SetLogger(medialogutils.NewOverrideLogger(r.log))
+		err = room.JoinWithToken(rconf.WsUrl, rconf.Token,
+			lksdk.WithAutoSubscribe(false),
+			lksdk.WithExtraAttributes(partConf.Attributes),
+		)
+	}
 	if err != nil {
 		return err
 	}
+	// err = room.JoinWithToken(rconf.WsUrl, rconf.Token,
+	// 	lksdk.WithAutoSubscribe(false),
+	// 	lksdk.WithExtraAttributes(partConf.Attributes),
+	// )
+	// if err != nil {
+	// 	return err
+	// }
 	r.room = room
 	r.p.ID = r.room.LocalParticipant.SID()
 	r.p.Identity = r.room.LocalParticipant.Identity()

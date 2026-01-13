@@ -24,6 +24,8 @@ type WebrtcIo struct {
 	pipeline *CameraPipeline
 	log      logger.Logger
 
+	LkRoom *gst.Element
+
 	WebrtcRtpBin *gst.Element
 
 	// Tracks map[uint32]*WebrtcTrack
@@ -35,8 +37,8 @@ type WebrtcIo struct {
 	RtcpFunnel *gst.Element
 	RtcpFilter *gst.Element
 
-	WebrtcRtpOut  *gst.Element
-	WebrtcRtcpOut *gst.Element
+	WebrtcRtpOut *gst.Element
+	// WebrtcRtcpOut *gst.Element
 }
 
 var _ pipeline.GstChain = (*WebrtcIo)(nil)
@@ -57,6 +59,14 @@ func (wio *WebrtcIo) Create() error {
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create WebRTC rtpbin: %w", err)
+	}
+
+	wio.LkRoom, err = gst.NewElementWithProperties("lkroom", map[string]interface{}{
+		"name":      "webrtc_lkroom",
+		"auto-join": false,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create WebRTC lkroom: %w", err)
 	}
 
 	// rtp
@@ -101,15 +111,15 @@ func (wio *WebrtcIo) Create() error {
 		return fmt.Errorf("failed to create WebRTC rtp sinkwriter: %w", err)
 	}
 
-	wio.WebrtcRtcpOut, err = gst.NewElementWithProperties("sinkwriter", map[string]interface{}{
-		"name": "webrtc_rtcp_out",
-		// "caps":  gst.NewCapsFromString("application/x-rtcp"),
-		"sync":  false,
-		"async": false,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create WebRTC rtcp sinkwriter: %w", err)
-	}
+	// wio.WebrtcRtcpOut, err = gst.NewElementWithProperties("sinkwriter", map[string]interface{}{
+	// 	"name": "webrtc_rtcp_out",
+	// 	// "caps":  gst.NewCapsFromString("application/x-rtcp"),
+	// 	"sync":  false,
+	// 	"async": false,
+	// })
+	// if err != nil {
+	// 	return fmt.Errorf("failed to create WebRTC rtcp sinkwriter: %w", err)
+	// }
 
 	return nil
 }
@@ -118,12 +128,13 @@ func (wio *WebrtcIo) Create() error {
 func (wio *WebrtcIo) Add() error {
 	if err := wio.pipeline.Pipeline().AddMany(
 		wio.WebrtcRtpBin,
+		wio.LkRoom,
 		wio.RtpFunnel,
 		wio.InputSelector,
 		wio.RtcpFunnel,
 		wio.RtcpFilter,
 		wio.WebrtcRtpOut,
-		wio.WebrtcRtcpOut,
+		// wio.WebrtcRtcpOut,
 	); err != nil {
 		return fmt.Errorf("failed to add webrtc io to pipeline: %w", err)
 	}
@@ -224,10 +235,16 @@ func (wio *WebrtcIo) Link() error {
 		return fmt.Errorf("failed to link webrtc rtcp src to rtpbin: %w", err)
 	}
 
+	pads, _ := wio.LkRoom.GetPads()
+	for _, pad := range pads {
+		padName := pad.GetName()
+		fmt.Printf("LKROOM PAD: %s\n", padName)
+	}
+
 	// link rtcp out
 	if err := pipeline.LinkPad(
 		wio.WebrtcRtpBin.GetRequestPad("send_rtcp_src_0"),
-		wio.WebrtcRtcpOut.GetStaticPad("sink"),
+		wio.LkRoom.GetStaticPad("sink_rtcp"),
 	); err != nil {
 		return fmt.Errorf("failed to link webrtc rtcpbin to sinkwriter: %w", err)
 	}
@@ -268,12 +285,12 @@ func (wio *WebrtcIo) Close() error {
 
 	if err := wio.pipeline.Pipeline().RemoveMany(
 		wio.WebrtcRtpBin,
+		wio.LkRoom,
 		wio.RtpFunnel,
 		wio.InputSelector,
 		wio.RtcpFunnel,
 		wio.RtcpFilter,
 		wio.WebrtcRtpOut,
-		wio.WebrtcRtcpOut,
 	); err != nil {
 		errs = append(errs, fmt.Errorf("failed to remove WebRTC IO elements from pipeline: %w", err))
 	}

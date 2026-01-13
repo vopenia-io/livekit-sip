@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-gst/go-gst/gst"
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
+	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/livekit/sip/pkg/sip/pipeline"
 	"github.com/livekit/sip/pkg/sip/pipeline/event"
 )
@@ -32,7 +33,7 @@ func (cp *CameraPipeline) checkReady() error {
 
 	ready := true
 	ready = ready && checkHandle(cp.WebrtcRtpOut)
-	ready = ready && checkHandle(cp.WebrtcRtcpOut)
+	// ready = ready && checkHandle(cp.WebrtcRtcpOut)
 
 	if ready {
 		cp.Log().Infow("All handles ready, setting pipeline to PLAYING")
@@ -42,7 +43,7 @@ func (cp *CameraPipeline) checkReady() error {
 
 		for _, e := range []*gst.Element{
 			cp.WebrtcRtpOut,
-			cp.WebrtcRtcpOut,
+			// cp.WebrtcRtcpOut,
 		} {
 			if !e.SyncStateWithParent() {
 				return fmt.Errorf("failed to sync state with parent for element %s", e.GetName())
@@ -167,16 +168,16 @@ func (cp *CameraPipeline) SipRtcpPort() uint16 {
 func (cp *CameraPipeline) WebrtcOutput(rtp, rtcp io.WriteCloser) error {
 	rtpHandle := cgo.NewHandle(rtp)
 	defer rtpHandle.Delete()
-	rtcpHnd := cgo.NewHandle(rtcp)
-	defer rtcpHnd.Delete()
+	// rtcpHnd := cgo.NewHandle(rtcp)
+	// defer rtcpHnd.Delete()
 
 	if err := cp.WebrtcRtpOut.SetProperty("handle", uint64(rtpHandle)); err != nil {
 		return fmt.Errorf("failed to set webrtc rtp out handle: %w", err)
 	}
 
-	if err := cp.WebrtcRtcpOut.SetProperty("handle", uint64(rtcpHnd)); err != nil {
-		return fmt.Errorf("failed to set webrtc rtcp out handle: %w", err)
-	}
+	// if err := cp.WebrtcRtcpOut.SetProperty("handle", uint64(rtcpHnd)); err != nil {
+	// 	return fmt.Errorf("failed to set webrtc rtcp out handle: %w", err)
+	// }
 
 	cp.checkReady()
 
@@ -306,6 +307,66 @@ func (cp *CameraPipeline) RequestTrackKeyframe(wt *WebrtcTrack) error {
 		cp.Log().Infow("Sent GstForceKeyUnit event upstream", "ssrc", wt.SSRC)
 	} else {
 		cp.Log().Warnw("Failed to send GstForceKeyUnit event upstream", nil, "ssrc", wt.SSRC)
+	}
+
+	return nil
+}
+
+func (cp *CameraPipeline) SetRoomCallbacks(callbacks *lksdk.RoomCallback) error {
+	cbHandle := cgo.NewHandle(callbacks)
+	defer cbHandle.Delete()
+	if err := cp.WebrtcIo.LkRoom.SetProperty("callbacks", uint64(uintptr(cbHandle))); err != nil {
+		cp.Log().Errorw("failed to set room callbacks", err)
+		return fmt.Errorf("failed to set room callbacks: %w", err)
+	}
+	return nil
+}
+
+func (cp *CameraPipeline) GetRoom() (*lksdk.Room, error) {
+	roomHnd, err := cp.WebrtcIo.LkRoom.GetProperty("room")
+	if err != nil {
+		cp.Log().Errorw("failed to get room property", err)
+		return nil, fmt.Errorf("failed to get room property: %w", err)
+	}
+	roomHndUint, ok := roomHnd.(uint64)
+	if !ok {
+		cp.Log().Errorw("room property is not uint64", nil, "value", roomHnd)
+		return nil, fmt.Errorf("room property is not uint64")
+	}
+	h := cgo.Handle(uintptr(roomHndUint))
+	if h == 0 {
+		cp.Log().Errorw("room handle is invalid", nil, "value", roomHndUint)
+		return nil, fmt.Errorf("room handle is invalid")
+	}
+	obj := h.Value()
+	room, ok := obj.(*lksdk.Room)
+	if !ok {
+		cp.Log().Errorw("room handle value is not *lksdk.Room", nil, "value", obj)
+		return nil, fmt.Errorf("room handle value is not *lksdk.Room")
+	}
+	return room, nil
+}
+
+func (cp *CameraPipeline) SetRoomOptions(wsUrl, token string, opts ...lksdk.ConnectOption) error {
+	if err := cp.WebrtcIo.LkRoom.SetProperty("ws-url", wsUrl); err != nil {
+		return fmt.Errorf("failed to set ws-url property: %w", err)
+	}
+	if err := cp.WebrtcIo.LkRoom.SetProperty("token", token); err != nil {
+		return fmt.Errorf("failed to set token property: %w", err)
+	}
+
+	optsHandle := cgo.NewHandle(opts)
+	defer optsHandle.Delete()
+	if err := cp.WebrtcIo.LkRoom.SetProperty("connect-options", uint64(uintptr(optsHandle))); err != nil {
+		return fmt.Errorf("failed to set connect-options property: %w", err)
+	}
+
+	res, err := cp.WebrtcIo.LkRoom.Emit("join-room")
+	if err != nil {
+		return fmt.Errorf("failed to emit join-room signal: %v", err)
+	}
+	if success, ok := res.(bool); !ok || !success {
+		return fmt.Errorf("join-room signal reported failure")
 	}
 
 	return nil
