@@ -68,14 +68,18 @@ func (h *H264Vp8) InstanceInit(self *glib.Object) {
 		return
 	}
 
-	h.H264Parse, err = gst.NewElementWithProperties("h264parse", map[string]interface{}{})
+	h.H264Parse, err = gst.NewElementWithProperties("h264parse", map[string]interface{}{
+		"config-interval": int(1),
+	})
 	if err != nil {
 		h.self.Error("Failed to create h264parse element", err)
 		h.self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create h264parse element: %v", err))
 		return
 	}
 
-	h.H264Dec, err = gst.NewElementWithProperties("avdec_h264", map[string]interface{}{})
+	h.H264Dec, err = gst.NewElementWithProperties("avdec_h264", map[string]interface{}{
+		"max-threads": int(4),
+	})
 	if err != nil {
 		h.self.Error("Failed to create avdec_h264 element", err)
 		h.self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create avdec_h264 element: %v", err))
@@ -98,7 +102,9 @@ func (h *H264Vp8) InstanceInit(self *glib.Object) {
 		return
 	}
 
-	h.VideoRate, err = gst.NewElementWithProperties("videorate", map[string]interface{}{})
+	h.VideoRate, err = gst.NewElementWithProperties("videorate", map[string]interface{}{
+		"drop-only": true,
+	})
 	if err != nil {
 		h.self.Error("Failed to create videorate element", err)
 		h.self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create videorate element: %v", err))
@@ -106,7 +112,7 @@ func (h *H264Vp8) InstanceInit(self *glib.Object) {
 	}
 
 	h.Filter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-		"caps": gst.NewCapsFromString("video/x-raw,width=1280,height=720,pixel-aspect-ratio=1/1,framerate=30/1"),
+		"caps": gst.NewCapsFromString("video/x-raw,width=1280,height=720,pixel-aspect-ratio=1/1,framerate=24/1"),
 	})
 	if err != nil {
 		h.self.Error("Failed to create capsfilter element", err)
@@ -115,7 +121,20 @@ func (h *H264Vp8) InstanceInit(self *glib.Object) {
 	}
 
 	h.Vp8Enc, err = gst.NewElementWithProperties("vp8enc", map[string]interface{}{
-		"deadline": 1,
+		"deadline":            int(1),
+		"target-bitrate":      int(2_000_000),
+		"cpu-used":            int(8),
+		"keyframe-max-dist":   int(12),
+		"lag-in-frames":       int(0),
+		"threads":             int(4),
+		"buffer-initial-size": int(100),
+		"buffer-optimal-size": int(150),
+		"buffer-size":         int(200),
+		"min-quantizer":       int(4),
+		"max-quantizer":       int(32),
+		"cq-level":            int(10),
+		"error-resilient":     int(1),
+		"end-usage":           int(1),
 	})
 	if err != nil {
 		h.self.Error("Failed to create vp8enc element", err)
@@ -124,7 +143,9 @@ func (h *H264Vp8) InstanceInit(self *glib.Object) {
 	}
 
 	h.Vp8Pay, err = gst.NewElementWithProperties("rtpvp8pay", map[string]interface{}{
-		"mtu": int(1200),
+		"pt":              int(96),
+		"mtu":             int(1200),
+		"picture-id-mode": int(2),
 	})
 	if err != nil {
 		h.self.Error("Failed to create rtpvp8pay element", err)

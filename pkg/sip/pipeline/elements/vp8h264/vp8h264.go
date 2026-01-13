@@ -84,7 +84,9 @@ func (h *Vp8H264) InstanceInit(self *glib.Object) {
 		return
 	}
 
-	h.VideoRate, err = gst.NewElementWithProperties("videorate", map[string]interface{}{})
+	h.VideoRate, err = gst.NewElementWithProperties("videorate", map[string]interface{}{
+		"drop-only": true,
+	})
 	if err != nil {
 		h.self.Error("Failed to create videorate element", err)
 		h.self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create videorate element: %v", err))
@@ -92,7 +94,7 @@ func (h *Vp8H264) InstanceInit(self *glib.Object) {
 	}
 
 	h.Filter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-		"caps": gst.NewCapsFromString("video/x-raw,width=1280,height=720,pixel-aspect-ratio=1/1,framerate=30/1"),
+		"caps": gst.NewCapsFromString("video/x-raw,width=1280,height=720,pixel-aspect-ratio=1/1,framerate=24/1"),
 	})
 	if err != nil {
 		h.self.Error("Failed to create capsfilter element", err)
@@ -101,11 +103,12 @@ func (h *Vp8H264) InstanceInit(self *glib.Object) {
 	}
 
 	h.X264Enc, err = gst.NewElementWithProperties("x264enc", map[string]interface{}{
-		"bitrate":       uint(500), // in kbps
-		"speed-preset":  int(1),    // ultrafast
-		"tune":          uint8(4),  // zerolatency
-		"key-int-max":   uint(60),
-		"option-string": "no-scenecut",
+		"bitrate":          uint(2000),
+		"speed-preset":     int(1),
+		"tune":             uint(4),
+		"key-int-max":      uint(12),
+		"bframes":          uint(0),
+		"vbv-buf-capacity": uint(2000),
 	})
 	if err != nil {
 		h.self.Error("Failed to create x264enc element", err)
@@ -121,7 +124,9 @@ func (h *Vp8H264) InstanceInit(self *glib.Object) {
 	}
 
 	h.RtpH264Pay, err = gst.NewElementWithProperties("rtph264pay", map[string]interface{}{
-		"mtu": int(1200),
+		"mtu":             int(1200),
+		"config-interval": int(1),
+		"aggregate-mode":  int(1),
 	})
 	if err != nil {
 		h.self.Error("Failed to create rtph264pay element", err)
