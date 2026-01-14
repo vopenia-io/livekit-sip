@@ -37,7 +37,7 @@ type WebrtcIo struct {
 	RtcpFunnel *gst.Element
 	RtcpFilter *gst.Element
 
-	WebrtcRtpOut *gst.Element
+	// WebrtcRtpOut *gst.Element
 	// WebrtcRtcpOut *gst.Element
 }
 
@@ -100,16 +100,16 @@ func (wio *WebrtcIo) Create() error {
 		return fmt.Errorf("failed to create WebRTC rtcp filter: %w", err)
 	}
 
-	wio.WebrtcRtpOut, err = gst.NewElementWithProperties("sinkwriter", map[string]interface{}{
-		"name": "webrtc_rtp_out",
-		// "caps":        gst.NewCapsFromString(VP8CAPS),
-		"max-bitrate": int(1_500_000),
-		"sync":        false,
-		"async":       false,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create WebRTC rtp sinkwriter: %w", err)
-	}
+	// wio.WebrtcRtpOut, err = gst.NewElementWithProperties("sinkwriter", map[string]interface{}{
+	// 	"name": "webrtc_rtp_out",
+	// 	// "caps":        gst.NewCapsFromString(VP8CAPS),
+	// 	"max-bitrate": int(1_500_000),
+	// 	"sync":        false,
+	// 	"async":       false,
+	// })
+	// if err != nil {
+	// 	return fmt.Errorf("failed to create WebRTC rtp sinkwriter: %w", err)
+	// }
 
 	// wio.WebrtcRtcpOut, err = gst.NewElementWithProperties("sinkwriter", map[string]interface{}{
 	// 	"name": "webrtc_rtcp_out",
@@ -133,7 +133,7 @@ func (wio *WebrtcIo) Add() error {
 		wio.InputSelector,
 		wio.RtcpFunnel,
 		wio.RtcpFilter,
-		wio.WebrtcRtpOut,
+		// wio.WebrtcRtpOut,
 		// wio.WebrtcRtcpOut,
 	); err != nil {
 		return fmt.Errorf("failed to add webrtc io to pipeline: %w", err)
@@ -207,7 +207,7 @@ func (wio *WebrtcIo) Link() error {
 		}
 		if err := pipeline.LinkPad(
 			pad,
-			wio.WebrtcRtpOut.GetStaticPad("sink"),
+			wio.LkRoom.GetRequestPad("sink_camera"),
 		); err != nil {
 			wio.log.Errorw("Failed to link webrtc rtpbin pad to sinkwriter", err)
 			return
@@ -290,7 +290,7 @@ func (wio *WebrtcIo) Close() error {
 		wio.InputSelector,
 		wio.RtcpFunnel,
 		wio.RtcpFilter,
-		wio.WebrtcRtpOut,
+		// wio.WebrtcRtpOut,
 	); err != nil {
 		errs = append(errs, fmt.Errorf("failed to remove WebRTC IO elements from pipeline: %w", err))
 	}

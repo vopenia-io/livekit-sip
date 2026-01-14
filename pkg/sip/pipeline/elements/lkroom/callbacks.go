@@ -201,7 +201,7 @@ func (s *lkroom) OnTrackUnpublished(publication *lksdk.RemoteTrackPublication, r
 }
 
 func (s *lkroom) OnDataPacket(data lksdk.DataPacket, params lksdk.DataReceiveParams) {
-	s.self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Data packet received"))
+	s.self.Log(CAT, gst.LevelInfo, "Data packet received")
 	s.callbacks.OnDataPacket(data, params)
 }
 

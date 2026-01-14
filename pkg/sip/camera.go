@@ -84,10 +84,10 @@ func (cm *CameraManager) Start() error {
 	// 	}
 	// }
 
-	if err := cm.publishCameraTrack(); err != nil {
-		cm.log.Errorw("failed to publish camera track", err)
-		return err
-	}
+	// if err := cm.publishCameraTrack(); err != nil {
+	// 	cm.log.Errorw("failed to publish camera track", err)
+	// 	return err
+	// }
 	return nil
 }
 

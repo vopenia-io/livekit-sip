@@ -3,12 +3,16 @@ package lkroom
 import (
 	"fmt"
 	"math"
+	"runtime"
 	"runtime/cgo"
+	"slices"
+	"sync"
 	"sync/atomic"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	lksdk "github.com/livekit/server-sdk-go/v2"
+	"github.com/pion/webrtc/v4"
 )
 
 var CAT = gst.NewDebugCategory(
@@ -72,11 +76,33 @@ type config struct {
 	AutoJoin bool
 	Token    string
 	WsURL    string
-	OptHnd   []lksdk.ConnectOption
+	Opt      []lksdk.ConnectOption
 }
 
 type state struct {
-	joined atomic.Bool
+	mu         sync.Mutex
+	joined     atomic.Bool
+	joinedCond *sync.Cond
+}
+
+func (s *state) IsJoined() bool {
+	return s.joined.Load()
+}
+
+func (s *state) SetJoined(joined bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.joined.Store(joined)
+	s.joinedCond.Broadcast()
+}
+
+func (s *state) WaitJoined() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.joined.Load() {
+		s.joinedCond.Wait()
+	}
+	return s.joined.Load()
 }
 
 type lkroom struct {
@@ -89,8 +115,6 @@ type lkroom struct {
 
 	room      *lksdk.Room
 	callbacks *lksdk.RoomCallback
-
-	SinkRTCP *gst.Element
 }
 
 func (*lkroom) New() glib.GoObjectSubclass {
@@ -115,11 +139,11 @@ func (*lkroom) ClassInit(klass *glib.ObjectClass) {
 	)
 
 	CAT.Log(gst.LevelDebug, "Adding pad template")
-	// class.AddPadTemplate(gst.NewPadTemplate(
-	// 	"sink_camera",
-	// 	gst.PadDirectionSink,
-	// 	gst.PadPresenceRequest,
-	// 	gst.NewCapsFromString("application/x-rtp")))
+	class.AddPadTemplate(gst.NewPadTemplate(
+		"sink_camera",
+		gst.PadDirectionSink,
+		gst.PadPresenceRequest,
+		gst.NewCapsFromString("application/x-rtp")))
 
 	class.AddPadTemplate(gst.NewPadTemplate(
 		"sink_rtcp",
@@ -128,15 +152,15 @@ func (*lkroom) ClassInit(klass *glib.ObjectClass) {
 		gst.NewCapsFromString("application/x-rtcp")))
 
 	// class.AddPadTemplate(gst.NewPadTemplate(
-	// 	"src_camera_%u",
+	// 	"src_%u_%u",
 	// 	gst.PadDirectionSource,
 	// 	gst.PadPresenceSometimes,
 	// 	gst.NewCapsFromString("application/x-rtp")))
 
 	// class.AddPadTemplate(gst.NewPadTemplate(
-	// 	"src_rtcp",
+	// 	"src_rtcp_%u_%u",
 	// 	gst.PadDirectionSource,
-	// 	gst.PadPresenceAlways,
+	// 	gst.PadPresenceSometimes,
 	// 	gst.NewCapsFromString("application/x-rtcp")))
 
 	CAT.Log(gst.LevelDebug, "Installing properties")
@@ -158,21 +182,30 @@ func (s *lkroom) InstanceInit(instance *glib.Object) {
 		AutoJoin: true,
 	}
 
-	s.SinkRTCP, err = gst.NewElement("lkroom_sinkrtcp")
+	s.state.joinedCond = sync.NewCond(&s.state.mu)
+
+	s.room = lksdk.NewRoom(s.toCallbacks())
+
+	sHnd := cgo.NewHandle(s)
+	defer sHnd.Delete()
+
+	sinkRTCP, err := gst.NewElementWithProperties("lkroom_sinkrtcp", map[string]interface{}{
+		"parent": uint64(uintptr(sHnd)),
+	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating sink_rtcp %v", err))
 		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error creating sink_rtcp", err.Error())
 		return
 	}
 
-	if err := self.AddMany(s.SinkRTCP); err != nil {
+	if err := self.AddMany(sinkRTCP); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error adding elements to bin: %v", err))
 		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error adding elements to bin", err.Error())
 		return
 	}
 
-	gsrcRtcp := gst.NewGhostPadFromTemplate("sink_rtcp", s.SinkRTCP.GetStaticPad("sink"), class.GetPadTemplate("sink_rtcp"))
-	self.AddPad(gsrcRtcp.Pad)
+	gsinkRtcp := gst.NewGhostPadFromTemplate("sink_rtcp", sinkRTCP.GetStaticPad("sink"), class.GetPadTemplate("sink_rtcp"))
+	self.AddPad(gsinkRtcp.Pad)
 }
 
 func (s *lkroom) SetProperty(instance *glib.Object, id uint, value *glib.Value) {
@@ -245,7 +278,7 @@ func (s *lkroom) SetProperty(instance *glib.Object, id uint, value *glib.Value) 
 			self.Log(CAT, gst.LevelError, "Handle does not contain a ConnectOption")
 			return
 		}
-		s.OptHnd = opt
+		s.Opt = opt
 	}
 }
 
@@ -272,46 +305,39 @@ func (s *lkroom) GetProperty(instance *glib.Object, id uint) *glib.Value {
 	return nil
 }
 
-func (s *lkroom) open(self *gst.Bin) gst.StateChangeReturn {
-	self.Log(CAT, gst.LevelDebug, "open")
+func (s *lkroom) Constructed(instance *glib.Object) {
+	self := gst.ToGstBin(instance)
 
-	// var err error
-
-	s.room = lksdk.NewRoom(s.toCallbacks())
-
-	roomHnd := cgo.NewHandle(s.room)
-	defer roomHnd.Delete()
-
-	if err := s.SinkRTCP.SetProperty("room", uint64(uintptr(roomHnd))); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error setting handle property on sink_rtcp: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error setting handle property on sink_rtcp", err.Error())
-		return gst.StateChangeFailure
-	}
-
-	return gst.StateChangeSuccess
-}
-
-func (s *lkroom) joinRoom(self *gst.Bin) error {
-	self.Log(CAT, gst.LevelDebug, "joinRoom")
-	if s.state.joined.Load() {
-		self.Log(CAT, gst.LevelInfo, "Already joined room")
-		return nil
-	}
-	err := s.room.JoinWithToken(s.WsURL, s.Token, s.OptHnd...)
+	var (
+		err error
+	)
+	_, err = self.Connect("join-room", func(instance *gst.Element) bool {
+		self := gst.ToGstBin(instance)
+		err := s.joinRoom(self)
+		if err := self.SetLockedState(false); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Could not unlock element state: %v", err))
+			self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Could not unlock element state", err.Error())
+			return false
+		}
+		if err == nil {
+			self.ParentChangeState(gst.StateChangeReadyToPaused)
+			self.ContinueState(gst.StateChangeSuccess)
+			return true
+		} else {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error joining room: %v", err))
+			self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error joining room", err.Error())
+			self.ContinueState(gst.StateChangeFailure)
+			return false
+		}
+	})
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error connecting to room: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error connecting to room", err.Error())
-		return fmt.Errorf("error connecting to room: %w", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error connecting join-room signal: %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error connecting join-room signal", err.Error())
 	}
-	s.state.joined.Store(true)
-	self.Log(CAT, gst.LevelInfo, "Successfully joined room")
-	return nil
 }
 
 func (s *lkroom) start(self *gst.Bin) gst.StateChangeReturn {
-	self.Log(CAT, gst.LevelDebug, "start")
-
-	if s.state.joined.Load() {
+	if s.state.IsJoined() {
 		self.Log(CAT, gst.LevelInfo, "Already joined room")
 		return gst.StateChangeSuccess
 	}
@@ -327,42 +353,9 @@ func (s *lkroom) start(self *gst.Bin) gst.StateChangeReturn {
 	} else {
 		self.Log(CAT, gst.LevelInfo, "Auto-join disabled, waiting for event")
 
-		var (
-			err error
-			hnd glib.SignalHandle
-		)
 		if err := self.SetLockedState(true); err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Could not lock element state: %v", err))
 			self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Could not lock element state", err.Error())
-			return gst.StateChangeFailure
-		}
-		hnd, err = self.Connect("join-room", func(instance *gst.Element) bool {
-			self := gst.ToGstBin(instance)
-			if hnd != 0 {
-				self.HandlerDisconnect(hnd)
-			}
-			err := s.joinRoom(self)
-			if err := self.SetLockedState(false); err != nil {
-				self.Log(CAT, gst.LevelError, fmt.Sprintf("Could not unlock element state: %v", err))
-				self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Could not unlock element state", err.Error())
-				return false
-			}
-			if err == nil {
-				self.ContinueState(gst.StateChangeSuccess)
-				return true
-			} else {
-				self.Log(CAT, gst.LevelError, fmt.Sprintf("Error joining room: %v", err))
-				self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error joining room", err.Error())
-				self.ContinueState(gst.StateChangeFailure)
-				return false
-			}
-		})
-		if err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error connecting join-room signal: %v", err))
-			self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error connecting join-room signal", err.Error())
-			if err := self.SetLockedState(false); err != nil {
-				self.Log(CAT, gst.LevelError, fmt.Sprintf("Could not unlock element state: %v", err))
-			}
 			return gst.StateChangeFailure
 		}
 		return gst.StateChangeAsync
@@ -371,13 +364,51 @@ func (s *lkroom) start(self *gst.Bin) gst.StateChangeReturn {
 	return gst.StateChangeSuccess
 }
 
+func (s *lkroom) joinRoom(self *gst.Bin) error {
+	self.Log(CAT, gst.LevelDebug, "joinRoom")
+	if s.state.IsJoined() {
+		self.Log(CAT, gst.LevelInfo, "Already joined room")
+		return nil
+	}
+	err := s.room.JoinWithToken(s.WsURL, s.Token, s.Opt...)
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error connecting to room: %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error connecting to room", err.Error())
+		return fmt.Errorf("error connecting to room: %w", err)
+	}
+	for {
+		state := s.room.ConnectionState()
+		if state == lksdk.ConnectionStateConnected {
+			break
+		}
+		if state == lksdk.ConnectionStateDisconnected {
+			return fmt.Errorf("disconnected while joining room")
+		}
+		runtime.Gosched()
+	}
+	for _, pc := range []*webrtc.PeerConnection{
+		s.room.LocalParticipant.GetPublisherPeerConnection(),
+		s.room.LocalParticipant.GetSubscriberPeerConnection(),
+	} {
+		for slices.Contains([]webrtc.PeerConnectionState{
+			webrtc.PeerConnectionStateNew,
+			webrtc.PeerConnectionStateConnecting,
+		}, pc.ConnectionState()) {
+			runtime.Gosched()
+		}
+		if state := pc.ConnectionState(); state != webrtc.PeerConnectionStateConnected {
+			return fmt.Errorf("peer connection not connected after joining room: %s", state.String())
+		}
+	}
+	s.state.SetJoined(true)
+	self.Log(CAT, gst.LevelInfo, "Successfully joined room")
+	return nil
+}
+
 func (s *lkroom) close(self *gst.Bin) gst.StateChangeReturn {
 	self.Log(CAT, gst.LevelDebug, "close")
 
 	s.room.Disconnect()
-
-	s.self = nil
-	s.SinkRTCP = nil
 
 	return gst.StateChangeSuccess
 }
@@ -393,11 +424,6 @@ func (s *lkroom) ChangeState(instance *gst.Element, transition gst.StateChange) 
 	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("ChangeState: %v", transition))
 
 	switch transition {
-	case gst.StateChangeNullToReady:
-		// return s.open(self)
-		if ret := s.open(self); ret != gst.StateChangeSuccess {
-			return ret
-		}
 	case gst.StateChangeReadyToPaused:
 		if ret := s.start(self); ret != gst.StateChangeSuccess {
 			return ret
@@ -417,15 +443,83 @@ func (s *lkroom) ChangeState(instance *gst.Element, transition gst.StateChange) 
 	return ret
 }
 
-// func (s *sipconn) close(self *gst.Element) {
-// 	self.Log(CAT, gst.LevelDebug, "Closing UDP connections")
+func (s *lkroom) startCamera(self *gst.Bin) *gst.Pad {
+	self.Log(CAT, gst.LevelDebug, "startCamera")
+	camera, err := gst.NewElement("lkroom_sinkcamera")
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating sink_camera %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error creating sink_camera", err.Error())
+		return nil
+	}
 
-// 	if err := s.rtpconn.Close(); err != nil {
-// 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error closing RTP UDP connection: %v", err))
-// 		self.Error("Error closing RTP UDP connection", err)
-// 	}
-// 	if err := s.rtcpconn.Close(); err != nil {
-// 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error closing RTCP UDP connection: %v", err))
-// 		self.Error("Error closing RTCP UDP connection", err)
-// 	}
-// }
+	sHnd := cgo.NewHandle(s)
+	defer sHnd.Delete()
+
+	if err := camera.SetProperty("parent", uint64(uintptr(sHnd))); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error setting handle property on sink_camera: %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error setting handle property on sink_camera", err.Error())
+		return nil
+	}
+
+	if err := self.Add(camera); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error adding sink_camera to bin: %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error adding sink_camera to bin", err.Error())
+		return nil
+	}
+
+	class := gst.ToElementClass(self.Class())
+
+	pad := camera.GetStaticPad("sink")
+
+	gsinkCamera := gst.NewGhostPadFromTemplate("sink_camera", pad, class.GetPadTemplate("sink_camera"))
+	self.AddPad(gsinkCamera.Pad)
+
+	if !camera.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelError, "Failed to sync sink_camera state with parent")
+	}
+
+	return gsinkCamera.Pad
+}
+
+func (s *lkroom) RequestNewPad(instance *gst.Element, templ *gst.PadTemplate, name string, caps *gst.Caps) *gst.Pad {
+	self := gst.ToGstBin(instance)
+	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("RequestNewPad: %s", name))
+
+	switch templ.Name() {
+	case "sink_camera":
+		return s.startCamera(self)
+	}
+
+	self.Log(CAT, gst.LevelError, fmt.Sprintf("Unknown pad template requested: %s", templ.Name()))
+	return nil
+}
+
+func (s *lkroom) ReleasePad(instance *gst.Element, pad *gst.Pad) {
+	self := gst.ToGstBin(instance)
+	name := pad.GetName()
+
+	gpad := pad.AsGhostPad()
+	if gpad == nil {
+		return
+	}
+
+	if !self.RemovePad(pad) {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("ReleasePad: Failed to remove pad %s from bin", name))
+	}
+
+	target := gpad.GetTarget()
+	if target == nil {
+		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("ReleasePad: %s has no target (internal cleanup already done)", name))
+		return
+	}
+
+	child := target.GetParentElement()
+	if child != nil {
+		if err := child.SetState(gst.StateNull); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("ReleasePad: Failed to set child element %s to NULL: %v", child.GetName(), err))
+		}
+		if err := self.Remove(child); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("ReleasePad: Failed to remove child element %s from bin: %v", child.GetName(), err))
+		}
+	}
+}
