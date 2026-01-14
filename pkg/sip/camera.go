@@ -101,38 +101,38 @@ func (cm *CameraManager) CreateVideoPipeline(opt *MediaOptions) (SipPipeline, er
 	return pipeline, nil
 }
 
-func (cm *CameraManager) WebrtcTrackInput(ti *TrackInput, ssrc uint32) error {
-	if cm.status != VideoStatusStarted {
-		cm.log.Errorw("video manager not started, cannot add WebRTC track input", nil, "status", cm.status)
-		return fmt.Errorf("video manager not started")
-	}
+// func (cm *CameraManager) WebrtcTrackInput(ti *TrackInput, ssrc uint32) error {
+// 	if cm.status != VideoStatusStarted {
+// 		cm.log.Errorw("video manager not started, cannot add WebRTC track input", nil, "status", cm.status)
+// 		return fmt.Errorf("video manager not started")
+// 	}
 
-	cm.log.Infow("WebRTC video track subscribed - connecting WebRTC→SIP pipeline",
-		"hasRtpIn", ti.RtpIn != nil,
-		"hasRtcpIn", ti.RtcpIn != nil)
+// 	cm.log.Infow("WebRTC video track subscribed - connecting WebRTC→SIP pipeline",
+// 		"hasRtpIn", ti.RtpIn != nil,
+// 		"hasRtcpIn", ti.RtcpIn != nil)
 
-	p := cm.pipeline.(*camera_pipeline.CameraPipeline)
+// 	p := cm.pipeline.(*camera_pipeline.CameraPipeline)
 
-	_, err := p.AddWebrtcTrack(ssrc, ti.RtpIn, ti.RtcpIn)
-	if err != nil {
-		cm.log.Errorw("failed to add WebRTC source to selector", err)
-		return fmt.Errorf("failed to add WebRTC source to selector: %w", err)
-	}
+// 	_, err := p.AddWebrtcTrack(ssrc, ti.RtpIn, ti.RtcpIn)
+// 	if err != nil {
+// 		cm.log.Errorw("failed to add WebRTC source to selector", err)
+// 		return fmt.Errorf("failed to add WebRTC source to selector: %w", err)
+// 	}
 
-	return nil
-}
+// 	return nil
+// }
 
-func (cm *CameraManager) RemoveWebrtcTrackInput(ssrc uint32) error {
-	cm.log.Debugw("removing WebRTC video track input", "ssrc", ssrc)
+// func (cm *CameraManager) RemoveWebrtcTrackInput(ssrc uint32) error {
+// 	cm.log.Debugw("removing WebRTC video track input", "ssrc", ssrc)
 
-	p := cm.pipeline.(*camera_pipeline.CameraPipeline)
+// 	p := cm.pipeline.(*camera_pipeline.CameraPipeline)
 
-	if err := p.RemoveWebrtcTrack(ssrc); err != nil {
-		return fmt.Errorf("failed to remove WebRTC source from selector: %w", err)
-	}
+// 	if err := p.RemoveWebrtcTrack(ssrc); err != nil {
+// 		return fmt.Errorf("failed to remove WebRTC source from selector: %w", err)
+// 	}
 
-	return nil
-}
+// 	return nil
+// }
 
 func (cm *CameraManager) webrtcTrackOutput(to *TrackOutput) error {
 	cm.log.Infow("WebRTC video track published - connecting SIP→WebRTC pipeline",

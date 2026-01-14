@@ -8,6 +8,7 @@ import (
 	"github.com/go4org/hashtriemap"
 
 	"github.com/go-gst/go-gst/gst"
+	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/sip/pkg/sip/pipeline"
 	"github.com/livekit/sip/pkg/sip/pipeline/event"
@@ -53,9 +54,9 @@ var webrtcCaps = map[uint]string{
 func (wio *WebrtcIo) Create() error {
 	var err error
 	wio.WebrtcRtpBin, err = gst.NewElementWithProperties("rtpbin", map[string]interface{}{
-		"name":           "webrtc_rtp_bin",
-		"rtp-profile":    int(3), // GST_RTP_PROFILE_AVPF
-		"do-sync-events": true,
+		"name":        "webrtc_rtp_bin",
+		"rtp-profile": int(3), // GST_RTP_PROFILE_AVPF
+		// "do-sync-events": true,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create WebRTC rtpbin: %w", err)
@@ -156,6 +157,42 @@ func (wio *WebrtcIo) Link() error {
 	}
 
 	// link rtp in
+
+	if _, err := wio.LkRoom.Connect("pad-added", func(rtpbin *gst.Element, pad *gst.Pad) {
+		wio.log.Debugw("LKROOM PAD ADDED", "pad", pad.GetName())
+		padName := pad.GetName()
+		if !strings.HasPrefix(padName, "src_") {
+			return
+		}
+
+		var kind livekit.TrackSource
+		var ssrc uint32
+		if _, err := fmt.Sscanf(padName, "src_%d_%d", &kind, &ssrc); err != nil {
+			wio.log.Warnw("Invalid LKROOM pad format", err, "pad", padName)
+			return
+		}
+		wio.log.Infow("LKROOM pad added", "pad", padName, "ssrc", ssrc, "kind", kind)
+
+		track := NewWebrtcTrack(wio.log, wio, ssrc)
+		wio.Tracks.Store(ssrc, track)
+
+		fpad := wio.RtpFunnel.GetRequestPad("sink_%u")
+		if fpad == nil {
+			wio.log.Errorw("Failed to get rtp funnel request pad", nil, "pad", padName)
+			return
+		}
+
+		if err := pipeline.LinkPad(
+			pad,
+			fpad); err != nil {
+			wio.log.Errorw("Failed to link lkroom pad to rtp funnel", err, "pad", padName)
+			return
+		}
+		wio.log.Infow("Linked LKROOM pad", "pad", padName)
+	}); err != nil {
+		return fmt.Errorf("failed to connect to lkroom pad-added signal: %w", err)
+	}
+
 	if _, err := wio.WebrtcRtpBin.Connect("pad-added", event.RegisterCallback(context.TODO(), wio.pipeline.Loop(), func(rtpbin *gst.Element, pad *gst.Pad) {
 		wio.log.Debugw("WEBRTC RTPBIN PAD ADDED", "pad", pad.GetName())
 		padName := pad.GetName()

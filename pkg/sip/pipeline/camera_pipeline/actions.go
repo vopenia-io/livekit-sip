@@ -5,13 +5,11 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
-	"runtime"
 	"runtime/cgo"
 
 	"github.com/go-gst/go-gst/gst"
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
 	lksdk "github.com/livekit/server-sdk-go/v2"
-	"github.com/livekit/sip/pkg/sip/pipeline"
 	"github.com/livekit/sip/pkg/sip/pipeline/event"
 )
 
@@ -184,132 +182,134 @@ func (cp *CameraPipeline) WebrtcOutput(rtp, rtcp io.WriteCloser) error {
 	return nil
 }
 
-func (cp *CameraPipeline) AddWebrtcTrack(ssrc uint32, rtp, rtcp io.ReadCloser) (*WebrtcTrack, error) {
-	rtpHandle := cgo.NewHandle(rtp)
-	defer rtpHandle.Delete()
-	rtcpHnd := cgo.NewHandle(rtcp)
-	defer rtcpHnd.Delete()
+// func (cp *CameraPipeline) AddWebrtcTrack(ssrc uint32, rtp, rtcp io.ReadCloser) (*WebrtcTrack, error) {
+// 	rtpHandle := cgo.NewHandle(rtp)
+// 	defer rtpHandle.Delete()
+// 	rtcpHnd := cgo.NewHandle(rtcp)
+// 	defer rtcpHnd.Delete()
 
-	cp.Log().Infow("Adding WebRTC track", "ssrc", ssrc)
+// 	cp.Log().Infow("Adding WebRTC track", "ssrc", ssrc)
 
-	track, err := pipeline.AddChain(cp, NewWebrtcTrack(cp.Log(), cp.WebrtcIo, ssrc))
-	if err != nil {
-		return nil, fmt.Errorf("failed to add webrtc track chain: %w", err)
-	}
+// 	track, err := pipeline.AddChain(cp, NewWebrtcTrack(cp.Log(), cp.WebrtcIo, ssrc))
+// 	if err != nil {
+// 		return nil, fmt.Errorf("failed to add webrtc track chain: %w", err)
+// 	}
 
-	cp.WebrtcIo.Tracks.Store(ssrc, track)
+// 	cp.WebrtcIo.Tracks.Store(ssrc, track)
 
-	if err := track.WebrtcRtpIn.SetProperty("handle", uint64(rtpHandle)); err != nil {
-		return nil, fmt.Errorf("failed to set webrtc rtp in handle: %w", err)
-	}
+// 	if err := track.WebrtcRtpIn.SetProperty("handle", uint64(rtpHandle)); err != nil {
+// 		return nil, fmt.Errorf("failed to set webrtc rtp in handle: %w", err)
+// 	}
 
-	if err := track.WebrtcRtcpIn.SetProperty("handle", uint64(rtcpHnd)); err != nil {
-		return nil, fmt.Errorf("failed to set webrtc rtcp in handle: %w", err)
-	}
+// 	if err := track.WebrtcRtcpIn.SetProperty("handle", uint64(rtcpHnd)); err != nil {
+// 		return nil, fmt.Errorf("failed to set webrtc rtcp in handle: %w", err)
+// 	}
 
-	if err := pipeline.LinkChains(cp, track); err != nil {
-		return nil, fmt.Errorf("failed to link webrtc track chain: %w", err)
-	}
+// 	if err := pipeline.LinkChains(cp, track); err != nil {
+// 		return nil, fmt.Errorf("failed to link webrtc track chain: %w", err)
+// 	}
 
-	return track, nil
-}
+// 	return track, nil
+// }
 
-func (cp *CameraPipeline) RemoveWebrtcTrack(ssrc uint32) error {
-	track, ok := cp.WebrtcIo.Tracks.Load(ssrc)
-	if !ok {
-		return fmt.Errorf("webrtc track with ssrc %d not found", ssrc)
-	}
+// func (cp *CameraPipeline) RemoveWebrtcTrack(ssrc uint32) error {
+// 	track, ok := cp.WebrtcIo.Tracks.Load(ssrc)
+// 	if !ok {
+// 		return fmt.Errorf("webrtc track with ssrc %d not found", ssrc)
+// 	}
 
-	if err := track.Close(); err != nil {
-		return fmt.Errorf("failed to close webrtc track with ssrc %d: %w", ssrc, err)
-	}
+// 	if err := track.Close(); err != nil {
+// 		return fmt.Errorf("failed to close webrtc track with ssrc %d: %w", ssrc, err)
+// 	}
 
-	var newTrack *WebrtcTrack
-	for s, t := range cp.WebrtcIo.Tracks.All() {
-		if s != ssrc {
-			newTrack = t
-			break
-		}
-	}
+// 	var newTrack *WebrtcTrack
+// 	for s, t := range cp.WebrtcIo.Tracks.All() {
+// 		if s != ssrc {
+// 			newTrack = t
+// 			break
+// 		}
+// 	}
 
-	if newTrack != nil {
-		if err := cp.DirtySwitchWebrtcInput(newTrack.SSRC); err != nil {
-			return fmt.Errorf("failed to switch webrtc input to ssrc %d: %w", newTrack.SSRC, err)
-		}
-	}
+// 	if newTrack != nil {
+// 		if err := cp.DirtySwitchWebrtcInput(newTrack.SSRC); err != nil {
+// 			return fmt.Errorf("failed to switch webrtc input to ssrc %d: %w", newTrack.SSRC, err)
+// 		}
+// 	}
 
-	return nil
-}
+// 	return nil
+// }
 
 func (cp *CameraPipeline) DirtySwitchWebrtcInput(ssrc uint32) error {
-	track, ok := cp.WebrtcIo.Tracks.Load(ssrc)
-	if !ok {
-		return fmt.Errorf("webrtc track with ssrc %d not found", ssrc)
-	}
-
-	if track.SelPad == nil {
-		return fmt.Errorf("webrtc track with ssrc %d has no sel pad", ssrc)
-	}
-
-	active, err := cp.WebrtcIo.InputSelector.GetProperty("active-pad")
-	if err == nil {
-		activePad, ok := active.(*gst.Pad)
-		if ok {
-			if activePad.GetName() == track.SelPad.GetName() {
-				cp.Log().Infow("webrtc input already set to desired ssrc", "ssrc", ssrc)
-				return nil
-			}
-		} else {
-			cp.Log().Errorw("active webrtc input pad is not a gst.Pad", nil,
-				"pad", active,
-			)
-		}
-	} else {
-		cp.Log().Errorw("failed to get active pad from webrtc input selector", err)
-	}
-
-	cp.Log().Infow("switching webrtc input to new ssrc", "ssrc", ssrc)
-
-	if err := cp.WebrtcIo.InputSelector.SetProperty("active-pad",
-		track.SelPad,
-	); err != nil {
-		return fmt.Errorf("failed to switch webrtc input to ssrc %d: %w", ssrc, err)
-	} else {
-		cp.Log().Infow("switched webrtc input to new ssrc", "ssrc", ssrc)
-		if err := cp.RequestTrackKeyframe(track); err != nil {
-			return fmt.Errorf("failed to request keyframe for webrtc track ssrc %d: %w", ssrc, err)
-		}
-	}
-
 	return nil
+	// track, ok := cp.WebrtcIo.Tracks.Load(ssrc)
+	// if !ok {
+	// 	return fmt.Errorf("webrtc track with ssrc %d not found", ssrc)
+	// }
+
+	// if track.SelPad == nil {
+	// 	return fmt.Errorf("webrtc track with ssrc %d has no sel pad", ssrc)
+	// }
+
+	// active, err := cp.WebrtcIo.InputSelector.GetProperty("active-pad")
+	// if err == nil {
+	// 	activePad, ok := active.(*gst.Pad)
+	// 	if ok {
+	// 		if activePad.GetName() == track.SelPad.GetName() {
+	// 			cp.Log().Infow("webrtc input already set to desired ssrc", "ssrc", ssrc)
+	// 			return nil
+	// 		}
+	// 	} else {
+	// 		cp.Log().Errorw("active webrtc input pad is not a gst.Pad", nil,
+	// 			"pad", active,
+	// 		)
+	// 	}
+	// } else {
+	// 	cp.Log().Errorw("failed to get active pad from webrtc input selector", err)
+	// }
+
+	// cp.Log().Infow("switching webrtc input to new ssrc", "ssrc", ssrc)
+
+	// if err := cp.WebrtcIo.InputSelector.SetProperty("active-pad",
+	// 	track.SelPad,
+	// ); err != nil {
+	// 	return fmt.Errorf("failed to switch webrtc input to ssrc %d: %w", ssrc, err)
+	// } else {
+	// 	cp.Log().Infow("switched webrtc input to new ssrc", "ssrc", ssrc)
+	// 	if err := cp.RequestTrackKeyframe(track); err != nil {
+	// 		return fmt.Errorf("failed to request keyframe for webrtc track ssrc %d: %w", ssrc, err)
+	// 	}
+	// }
+
+	// return nil
 }
 
 func (cp *CameraPipeline) RequestTrackKeyframe(wt *WebrtcTrack) error {
-	cp.Log().Infow("Requesting keyframe for webrtc track", "ssrc", wt.SSRC)
-
-	fkuStruct := gst.NewStructure("GstForceKeyUnit")
-	runtime.SetFinalizer(fkuStruct, nil)
-	fkuStruct.SetValue("ssrc", wt.SSRC)
-	// fkuStruct.SetValue("payload", uint(96))
-	fkuStruct.SetValue("running-time", gst.ClockTimeNone)
-	fkuStruct.SetValue("all-headers", false)
-	fkuStruct.SetValue("count", uint(0))
-
-	fkuEvent := gst.NewCustomEvent(gst.EventTypeCustomUpstream, fkuStruct)
-
-	srcPad := wt.BinPad
-	if srcPad == nil {
-		cp.Log().Warnw("Cannot send GstForceKeyUnit event upstream, bin pad is nil", nil, "ssrc", wt.SSRC)
-		return nil
-	}
-
-	if srcPad.SendEvent(fkuEvent) {
-		cp.Log().Infow("Sent GstForceKeyUnit event upstream", "ssrc", wt.SSRC)
-	} else {
-		cp.Log().Warnw("Failed to send GstForceKeyUnit event upstream", nil, "ssrc", wt.SSRC)
-	}
-
 	return nil
+	// cp.Log().Infow("Requesting keyframe for webrtc track", "ssrc", wt.SSRC)
+
+	// fkuStruct := gst.NewStructure("GstForceKeyUnit")
+	// runtime.SetFinalizer(fkuStruct, nil)
+	// fkuStruct.SetValue("ssrc", wt.SSRC)
+	// // fkuStruct.SetValue("payload", uint(96))
+	// fkuStruct.SetValue("running-time", gst.ClockTimeNone)
+	// fkuStruct.SetValue("all-headers", false)
+	// fkuStruct.SetValue("count", uint(0))
+
+	// fkuEvent := gst.NewCustomEvent(gst.EventTypeCustomUpstream, fkuStruct)
+
+	// srcPad := wt.BinPad
+	// if srcPad == nil {
+	// 	cp.Log().Warnw("Cannot send GstForceKeyUnit event upstream, bin pad is nil", nil, "ssrc", wt.SSRC)
+	// 	return nil
+	// }
+
+	// if srcPad.SendEvent(fkuEvent) {
+	// 	cp.Log().Infow("Sent GstForceKeyUnit event upstream", "ssrc", wt.SSRC)
+	// } else {
+	// 	cp.Log().Warnw("Failed to send GstForceKeyUnit event upstream", nil, "ssrc", wt.SSRC)
+	// }
+
+	// return nil
 }
 
 func (cp *CameraPipeline) SetRoomCallbacks(callbacks *lksdk.RoomCallback) error {

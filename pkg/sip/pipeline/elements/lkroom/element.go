@@ -151,11 +151,11 @@ func (*lkroom) ClassInit(klass *glib.ObjectClass) {
 		gst.PadPresenceAlways,
 		gst.NewCapsFromString("application/x-rtcp")))
 
-	// class.AddPadTemplate(gst.NewPadTemplate(
-	// 	"src_%u_%u",
-	// 	gst.PadDirectionSource,
-	// 	gst.PadPresenceSometimes,
-	// 	gst.NewCapsFromString("application/x-rtp")))
+	class.AddPadTemplate(gst.NewPadTemplate(
+		"src_%u_%u",
+		gst.PadDirectionSource,
+		gst.PadPresenceSometimes,
+		gst.NewCapsFromString("application/x-rtp")))
 
 	// class.AddPadTemplate(gst.NewPadTemplate(
 	// 	"src_rtcp_%u_%u",

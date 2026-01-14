@@ -39,5 +39,16 @@ func Register() bool {
 		&sinkCamera{},
 		// The base subclass this element extends
 		base.ExtendsBaseSink,
+	) && gst.RegisterElement(
+		// no plugin:
+		nil,
+		// The name of the element
+		"lkroom_srctrack",
+		// The rank of the element
+		gst.RankNone,
+		// The GoElement implementation for the element
+		&srcTrack{},
+		// The base subclass this element extends
+		base.ExtendsBaseSrc,
 	)
 }

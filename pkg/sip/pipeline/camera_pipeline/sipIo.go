@@ -33,9 +33,9 @@ var _ pipeline.GstChain = (*SipIo)(nil)
 func (sio *SipIo) Create() error {
 	var err error
 	sio.SipRtpBin, err = gst.NewElementWithProperties("rtpbin", map[string]interface{}{
-		"name":           "sip_rtp_bin",
-		"rtp-profile":    int(3), // GST_RTP_PROFILE_AVPF
-		"do-sync-events": true,
+		"name":        "sip_rtp_bin",
+		"rtp-profile": int(3), // GST_RTP_PROFILE_AVPF
+		// "do-sync-events": true,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create SIP rtpbin: %w", err)

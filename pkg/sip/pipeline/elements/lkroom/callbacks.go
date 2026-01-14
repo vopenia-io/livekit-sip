@@ -177,6 +177,7 @@ func (s *lkroom) OnConnectionQualityChanged(update *livekit.ConnectionQualityInf
 
 func (s *lkroom) OnTrackSubscribed(track *webrtc.TrackRemote, publication *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
 	s.self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Track subscribed: %s", publication.SID()))
+	s.SometimesTrackAdded(track, publication, rp)
 	s.callbacks.OnTrackSubscribed(track, publication, rp)
 }
 
