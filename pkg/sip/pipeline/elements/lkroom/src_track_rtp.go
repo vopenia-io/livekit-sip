@@ -14,6 +14,8 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
+const VP8CAPS = "application/x-rtp, media=(string)video, encoding-name=(string)VP8, payload=(int)96, clock-rate=(int)90000"
+
 type SrcTrackRtp struct {
 	parent *SrcTrack
 
@@ -40,7 +42,7 @@ func (*SrcTrackRtp) ClassInit(klass *glib.ObjectClass) {
 		"src",
 		gst.PadDirectionSource,
 		gst.PadPresenceAlways,
-		gst.NewCapsFromString("application/x-rtp, media=(string)video, encoding-name=(string)VP8, payload=(int)96")))
+		gst.NewCapsFromString(VP8CAPS)))
 }
 
 func (s *SrcTrackRtp) InstanceInit(instance *glib.Object) {
@@ -56,7 +58,7 @@ func (s *SrcTrackRtp) SetCaps(self *base.GstBaseSrc, caps *gst.Caps) bool {
 }
 
 func (s *SrcTrackRtp) GetCaps(self *base.GstBaseSrc, filter *gst.Caps) *gst.Caps {
-	caps := gst.NewCapsFromString("application/x-rtp, media=(string)video, encoding-name=(string)VP8, payload=(int)96")
+	caps := gst.NewCapsFromString(VP8CAPS)
 	if filter != nil && filter.Instance() != nil && !filter.IsEmpty() && !filter.IsAny() {
 		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("caps get filter: %s", filter.String()))
 		if intersect := caps.Intersect(filter); intersect != nil {

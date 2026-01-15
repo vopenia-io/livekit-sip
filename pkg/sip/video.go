@@ -17,6 +17,7 @@ import (
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/sip/pkg/sip/pipeline"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/activeselector"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/h264vp8"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/lkroom"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sinkwriter"
@@ -51,6 +52,10 @@ func init() {
 
 	if !lkroom.Register() {
 		panic("Failed to register lkroom")
+	}
+
+	if !activeselector.Register() {
+		panic("Failed to register active-selector")
 	}
 
 	mainLoop = glib.NewMainLoop(glib.MainContextDefault(), false)

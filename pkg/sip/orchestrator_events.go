@@ -3,7 +3,6 @@ package sip
 import (
 	"fmt"
 
-	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/webrtc/v4"
 )
@@ -83,36 +82,37 @@ func (o *MediaOrchestrator) WebrtcTrackUnsubscribed(track *webrtc.TrackRemote, p
 }
 
 func (o *MediaOrchestrator) activeParticipantChanged(p []lksdk.Participant) error {
-	if o.camera.Status() != VideoStatusStarted {
-		return nil
-	}
-	if len(p) == 0 {
-		o.log.Debugw("no active speakers found")
-		return nil
-	}
-	var pub *lksdk.RemoteTrackPublication = nil
-	var ok bool
-	for _, t := range p {
-		pub, ok = t.GetTrackPublication(livekit.TrackSource_CAMERA).(*lksdk.RemoteTrackPublication)
-		if pub != nil && ok {
-			break
-		} else {
-			pub = nil
-		}
-	}
-
-	if pub == nil {
-		o.log.Debugw("no active camera track found among active speakers")
-		return nil
-	}
-
-	ssrc := pub.TrackRemote().SSRC()
-
-	if err := o.camera.SwitchActiveWebrtcTrack(uint32(ssrc)); err != nil {
-		o.log.Warnw("could not switch active webrtc track", err, "ssrc", ssrc)
-		return nil
-	}
 	return nil
+	// if o.camera.Status() != VideoStatusStarted {
+	// 	return nil
+	// }
+	// if len(p) == 0 {
+	// 	o.log.Debugw("no active speakers found")
+	// 	return nil
+	// }
+	// var pub *lksdk.RemoteTrackPublication = nil
+	// var ok bool
+	// for _, t := range p {
+	// 	pub, ok = t.GetTrackPublication(livekit.TrackSource_CAMERA).(*lksdk.RemoteTrackPublication)
+	// 	if pub != nil && ok {
+	// 		break
+	// 	} else {
+	// 		pub = nil
+	// 	}
+	// }
+
+	// if pub == nil {
+	// 	o.log.Debugw("no active camera track found among active speakers")
+	// 	return nil
+	// }
+
+	// ssrc := pub.TrackRemote().SSRC()
+
+	// if err := o.camera.SwitchActiveWebrtcTrack(uint32(ssrc)); err != nil {
+	// 	o.log.Warnw("could not switch active webrtc track", err, "ssrc", ssrc)
+	// 	return nil
+	// }
+	// return nil
 }
 
 func (o *MediaOrchestrator) ActiveParticipantChanged(p []lksdk.Participant) error {
