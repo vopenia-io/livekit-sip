@@ -13,6 +13,16 @@ var CAT = gst.NewDebugCategory(
 	"vp8-h264 Element",
 )
 
+var properties = []*glib.ParamSpec{
+	glib.NewBoxedParam(
+		"h264-caps",
+		"H264 Caps",
+		"The caps of H264 RTP stream",
+		gst.TypeCaps,
+		glib.ParameterWritable,
+	),
+}
+
 type Vp8H264 struct {
 	self *gst.Bin
 
@@ -25,6 +35,7 @@ type Vp8H264 struct {
 	X264Enc    *gst.Element
 	H264Parse  *gst.Element
 	RtpH264Pay *gst.Element
+	H264Caps   *gst.Element
 }
 
 func (h *Vp8H264) New() glib.GoObjectSubclass {
@@ -55,6 +66,8 @@ func (h *Vp8H264) ClassInit(klass *glib.ObjectClass) {
 		gst.PadPresenceAlways,
 		gst.NewCapsFromString("application/x-rtp, media=(string)video, clock-rate=(int)90000, encoding-name=(string)H264"),
 	))
+
+	class.InstallProperties(properties)
 }
 
 func (h *Vp8H264) InstanceInit(self *glib.Object) {
@@ -134,6 +147,15 @@ func (h *Vp8H264) InstanceInit(self *glib.Object) {
 		return
 	}
 
+	h.H264Caps, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
+		"caps": gst.NewCapsFromString("application/x-rtp, media=(string)video, clock-rate=(int)90000, encoding-name=(string)H264"),
+	})
+	if err != nil {
+		h.self.Error("Failed to create H264 capsfilter element", err)
+		h.self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create H264 capsfilter element: %v", err))
+		return
+	}
+
 	// Add all elements to the bin
 	h.self.AddMany(
 		h.Vp8Depay,
@@ -144,6 +166,7 @@ func (h *Vp8H264) InstanceInit(self *glib.Object) {
 		h.X264Enc,
 		h.H264Parse,
 		h.RtpH264Pay,
+		h.H264Caps,
 	)
 
 	// Link the elements together
@@ -156,37 +179,43 @@ func (h *Vp8H264) InstanceInit(self *glib.Object) {
 		h.X264Enc,
 		h.H264Parse,
 		h.RtpH264Pay,
+		h.H264Caps,
 	); err != nil {
 		h.self.Error("Failed to link elements", err)
 		h.self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link elements: %v", err))
 		return
 	}
 
-	// h.X264Enc.GetStaticPad("src").AddProbe(gst.PadProbeTypeBuffer, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
-	// 	buffer := info.GetBuffer()
-	// 	if buffer == nil {
-	// 		return gst.PadProbeOK
-	// 	}
-
-	// 	// Check if the timestamp is near the 1000h offset (sanity check)
-	// 	// 3600 seconds * 1000 = 3,600,000 seconds
-	// 	if buffer.PresentationTimestamp() > gst.ClockTime(time.Hour*1000) {
-	// 		// Subtract 1000 hours
-	// 		newPts := buffer.PresentationTimestamp() - gst.ClockTime(time.Hour*1000)
-	// 		newDts := buffer.DecodingTimestamp() - gst.ClockTime(time.Hour*1000)
-
-	// 		buffer.SetPresentationTimestamp(newPts)
-	// 		buffer.SetDecodingTimestamp(newDts)
-	// 	}
-
-	// 	return gst.PadProbeOK
-	// })
-
 	elemClass := gst.ToElementClass(h.self.Class())
 
 	ghostSink := gst.NewGhostPadFromTemplate("sink", h.Vp8Depay.GetStaticPad("sink"), elemClass.GetPadTemplate("sink"))
 	h.self.AddPad(ghostSink.Pad)
 
-	ghostSrc := gst.NewGhostPadFromTemplate("src", h.RtpH264Pay.GetStaticPad("src"), elemClass.GetPadTemplate("src"))
+	ghostSrc := gst.NewGhostPadFromTemplate("src", h.H264Caps.GetStaticPad("src"), elemClass.GetPadTemplate("src"))
 	h.self.AddPad(ghostSrc.Pad)
+}
+
+func (h *Vp8H264) SetProperty(instance *glib.Object, id uint, value *glib.Value) {
+	self := gst.ToGstBin(instance)
+	param := properties[id]
+	switch param.Name() {
+	case "h264-caps":
+		val, err := value.GoValue()
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting caps property value: %v", err))
+			return
+		}
+		caps, ok := val.(*gst.Caps)
+		if !ok {
+			self.Log(CAT, gst.LevelError, "Invalid type for caps property")
+			return
+		}
+		if caps == nil {
+			self.Log(CAT, gst.LevelError, "Nil caps provided")
+			return
+		}
+		if err := h.H264Caps.SetProperty("caps", caps.Copy().Ref()); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set caps property: %v", err))
+		}
+	}
 }

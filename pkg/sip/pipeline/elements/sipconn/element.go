@@ -377,8 +377,16 @@ func (s *sipconn) SetProperty(instance *glib.Object, id uint, value *glib.Value)
 		}
 		s.props.caps = caps
 		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Element caps set to: %v", caps))
-		s.RtpSrc.SetProperty("caps", s.props.caps.Copy())
-		s.RtpFilter.SetProperty("caps", s.props.caps.Copy())
+		if err := s.RtpSrc.SetProperty("caps", s.props.caps.Copy().Ref()); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error setting RTP source caps: %v", err))
+			self.Error("Error setting RTP source caps", err)
+			return
+		}
+		if err := s.RtpFilter.SetProperty("caps", s.props.caps.Copy().Ref()); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error setting RTP filter caps: %v", err))
+			self.Error("Error setting RTP filter caps", err)
+			return
+		}
 	}
 }
 

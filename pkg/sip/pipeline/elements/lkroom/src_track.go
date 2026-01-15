@@ -4,8 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
-	"runtime/cgo"
 	"time"
 	"unsafe"
 
@@ -16,44 +14,19 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
-type RemoteTrackInfo struct {
+type SrcTrack struct {
+	parent *lkroom
+
 	track *webrtc.TrackRemote
 	pub   *lksdk.RemoteTrackPublication
 	rp    *lksdk.RemoteParticipant
 }
 
-type srcTrack struct {
-	parent *lkroom
-
-	*RemoteTrackInfo
+func (*SrcTrack) New() glib.GoObjectSubclass {
+	return &SrcTrack{}
 }
 
-var src_track_properties = []*glib.ParamSpec{
-	glib.NewUint64Param(
-		"parent",
-		"Parent Handle",
-		"cgo.Handle (uintptr) to a the lkroom parent element",
-		0,
-		math.MaxUint64,
-		0,
-		glib.ParameterWritable,
-	),
-	glib.NewUint64Param(
-		"track",
-		"Track Handle",
-		"cgo.Handle (uintptr) to a RemoteTrackInfo struct",
-		0,
-		math.MaxUint64,
-		0,
-		glib.ParameterWritable,
-	),
-}
-
-func (*srcTrack) New() glib.GoObjectSubclass {
-	return &srcTrack{}
-}
-
-func (*srcTrack) ClassInit(klass *glib.ObjectClass) {
+func (*SrcTrack) ClassInit(klass *glib.ObjectClass) {
 	class := gst.ToElementClass(klass)
 	class.SetMetadata(
 		"sink_camera",
@@ -68,64 +41,21 @@ func (*srcTrack) ClassInit(klass *glib.ObjectClass) {
 		gst.PadDirectionSource,
 		gst.PadPresenceAlways,
 		gst.NewCapsFromString("application/x-rtp, media=(string)video, encoding-name=(string)VP8, payload=(int)96")))
-
-	CAT.Log(gst.LevelDebug, "Installing properties")
-	class.InstallProperties(src_track_properties)
 }
 
-func (s *srcTrack) InstanceInit(instance *glib.Object) {
+func (s *SrcTrack) InstanceInit(instance *glib.Object) {
 	self := base.ToGstBaseSrc(instance)
 
 	self.SetLive(true)
 	self.SetFormat(gst.FormatTime)
 	self.SetAsync(true)
-	// self.SetDoTimestamp(true)
 }
 
-func (s *srcTrack) SetProperty(instance *glib.Object, id uint, value *glib.Value) {
-	self := base.ToGstBaseSrc(instance)
-	param := src_track_properties[id]
-	switch param.Name() {
-	case "parent":
-		gv, _ := value.GoValue()
-		val, _ := gv.(uint64)
-		h := cgo.Handle(uintptr(val))
-		if h == cgo.Handle(0) {
-			self.Log(CAT, gst.LevelError, "Invalid parent handle provided")
-			return
-		}
-		roomInterface := h.Value()
-		lkroom, ok := roomInterface.(*lkroom)
-		if !ok {
-			self.Log(CAT, gst.LevelError, "Parent handle does not contain a lkroom parent element")
-			return
-		}
-		s.parent = lkroom
-		self.Log(CAT, gst.LevelInfo, "Track set from handle")
-	case "track":
-		gv, _ := value.GoValue()
-		val, _ := gv.(uint64)
-		h := cgo.Handle(uintptr(val))
-		if h == cgo.Handle(0) {
-			self.Log(CAT, gst.LevelError, "Invalid track handle provided")
-			return
-		}
-		trackInterface := h.Value()
-		trackInfo, ok := trackInterface.(*RemoteTrackInfo)
-		if !ok {
-			self.Log(CAT, gst.LevelError, "Track handle does not contain a RemoteTrackInfo struct")
-			return
-		}
-		s.RemoteTrackInfo = trackInfo
-		self.Log(CAT, gst.LevelInfo, "Track set from handle")
-	}
-}
-
-func (s *srcTrack) SetCaps(self *base.GstBaseSrc, caps *gst.Caps) bool {
+func (s *SrcTrack) SetCaps(self *base.GstBaseSrc, caps *gst.Caps) bool {
 	return true
 }
 
-func (s *srcTrack) GetCaps(self *base.GstBaseSrc, filter *gst.Caps) *gst.Caps {
+func (s *SrcTrack) GetCaps(self *base.GstBaseSrc, filter *gst.Caps) *gst.Caps {
 	caps := gst.NewCapsFromString("application/x-rtp, media=(string)video, encoding-name=(string)VP8, payload=(int)96")
 	if filter != nil && filter.Instance() != nil && !filter.IsEmpty() && !filter.IsAny() {
 		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("caps get filter: %s", filter.String()))
@@ -137,17 +67,11 @@ func (s *srcTrack) GetCaps(self *base.GstBaseSrc, filter *gst.Caps) *gst.Caps {
 	return caps.Copy().Ref()
 }
 
-func (s *srcTrack) Start(self *base.GstBaseSrc) bool {
+func (s *SrcTrack) Start(self *base.GstBaseSrc) bool {
 	self.Log(CAT, gst.LevelDebug, "Starting")
 	if s.parent == nil {
 		self.Log(CAT, gst.LevelError, "Parent lkroom element is not set")
 		self.Error("Parent lkroom element is not set", errors.New("parent lkroom is nil"))
-		return false
-	}
-
-	if s.RemoteTrackInfo == nil {
-		self.Log(CAT, gst.LevelError, "RemoteTrackInfo is not set")
-		self.Error("RemoteTrackInfo is not set", errors.New("RemoteTrackInfo is nil"))
 		return false
 	}
 
@@ -162,7 +86,7 @@ func (s *srcTrack) Start(self *base.GstBaseSrc) bool {
 	return true
 }
 
-func (s *srcTrack) Stop(self *base.GstBaseSrc) bool {
+func (s *SrcTrack) Stop(self *base.GstBaseSrc) bool {
 	self.Log(CAT, gst.LevelDebug, "Stopping")
 
 	if err := s.pub.SetSubscribed(false); err != nil {
@@ -178,7 +102,7 @@ func (s *srcTrack) Stop(self *base.GstBaseSrc) bool {
 	return true
 }
 
-func (s *srcTrack) Fill(self *base.GstBaseSrc, offset uint64, length uint, buffer *gst.Buffer) gst.FlowReturn {
+func (s *SrcTrack) Fill(self *base.GstBaseSrc, offset uint64, length uint, buffer *gst.Buffer) gst.FlowReturn {
 	self.Log(CAT, gst.LevelTrace, fmt.Sprintf("Fill called: offset=%d, length=%d", offset, length))
 
 	mapInfo := buffer.Map(gst.MapWrite)
@@ -206,7 +130,7 @@ func (s *srcTrack) Fill(self *base.GstBaseSrc, offset uint64, length uint, buffe
 	return gst.FlowOK
 }
 
-func (s *srcTrack) Unlock(self *base.GstBaseSrc) bool {
+func (s *SrcTrack) Unlock(self *base.GstBaseSrc) bool {
 	self.Log(CAT, gst.LevelInfo, "unlocked")
 
 	if err := s.track.SetReadDeadline(time.Now()); err != nil {

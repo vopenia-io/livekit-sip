@@ -2,7 +2,6 @@ package lkroom
 
 import (
 	"fmt"
-	"runtime/cgo"
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/livekit"
@@ -11,12 +10,6 @@ import (
 )
 
 func (s *lkroom) SometimesTrackAdded(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
-	trackinfo := &RemoteTrackInfo{
-		track: track,
-		pub:   pub,
-		rp:    rp,
-	}
-
 	kind := uint(pub.Source())
 	if kind == uint(livekit.TrackSource_UNKNOWN) {
 		s.self.Log(CAT, gst.LevelWarning, "SometimesTrackAdded called with unknown track source")
@@ -32,18 +25,21 @@ func (s *lkroom) SometimesTrackAdded(track *webrtc.TrackRemote, pub *lksdk.Remot
 	padname := fmt.Sprintf("src_%d_%d", kind, ssrc)
 	s.self.Log(CAT, gst.LevelInfo, "Creating sometimes pad "+padname)
 
-	sHnd := cgo.NewHandle(s)
-	defer sHnd.Delete()
-	tHnd := cgo.NewHandle(trackinfo)
-	defer tHnd.Delete()
-
-	srcTrack, err := gst.NewElementWithProperties("lkroom_srctrack", map[string]interface{}{
-		"parent": uint64(sHnd),
-		"track":  uint64(tHnd),
-	})
+	srcTrack, err := gst.NewElement("lkroom_srctrack")
 	if err != nil {
 		s.self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating srcTrack element: %v", err))
 		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error creating srcTrack element", err.Error())
+		return
+	}
+
+	if obj, ok := gst.SubclassFromElement[*SrcTrack](srcTrack); ok {
+		obj.track = track
+		obj.pub = pub
+		obj.rp = rp
+		obj.parent = s
+	} else {
+		s.self.Log(CAT, gst.LevelError, "Error casting srcTrack to SrcTrack subclass")
+		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error casting srcTrack to SrcTrack subclass", "type assertion failed")
 		return
 	}
 

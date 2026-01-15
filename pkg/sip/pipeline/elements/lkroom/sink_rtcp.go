@@ -3,8 +3,6 @@ package lkroom
 import (
 	"errors"
 	"fmt"
-	"math"
-	"runtime/cgo"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
@@ -17,18 +15,6 @@ type sinkRtcp struct {
 	parent *lkroom
 
 	pc *webrtc.PeerConnection
-}
-
-var sink_rtcp_properties = []*glib.ParamSpec{
-	glib.NewUint64Param(
-		"parent",
-		"Parent Handle",
-		"cgo.Handle (uintptr) to a the lkroom parent element",
-		0,
-		math.MaxUint64,
-		0,
-		glib.ParameterWritable,
-	),
 }
 
 func (*sinkRtcp) New() glib.GoObjectSubclass {
@@ -51,8 +37,8 @@ func (*sinkRtcp) ClassInit(klass *glib.ObjectClass) {
 		gst.PadPresenceAlways,
 		gst.NewCapsFromString("application/x-rtcp")))
 
-	CAT.Log(gst.LevelDebug, "Installing properties")
-	class.InstallProperties(sink_rtcp_properties)
+	// CAT.Log(gst.LevelDebug, "Installing properties")
+	// class.InstallProperties(sink_rtcp_properties)
 }
 
 func (s *sinkRtcp) InstanceInit(instance *glib.Object) {
@@ -61,29 +47,6 @@ func (s *sinkRtcp) InstanceInit(instance *glib.Object) {
 	self.SetSync(false)
 	self.SetAsyncEnabled(false)
 	self.SetMaxBitrate(500_000)
-}
-
-func (s *sinkRtcp) SetProperty(instance *glib.Object, id uint, value *glib.Value) {
-	self := base.ToGstBaseSink(instance)
-	param := sink_rtcp_properties[id]
-	switch param.Name() {
-	case "parent":
-		gv, _ := value.GoValue()
-		val, _ := gv.(uint64)
-		h := cgo.Handle(uintptr(val))
-		if h == cgo.Handle(0) {
-			self.Log(CAT, gst.LevelError, "Invalid parent handle provided")
-			return
-		}
-		roomInterface := h.Value()
-		lkroom, ok := roomInterface.(*lkroom)
-		if !ok {
-			self.Log(CAT, gst.LevelError, "Parent handle does not contain a lkroom parent element")
-			return
-		}
-		s.parent = lkroom
-		self.Log(CAT, gst.LevelInfo, "Track set from handle")
-	}
 }
 
 func (s *sinkRtcp) SetCaps(self *base.GstBaseSink, caps *gst.Caps) bool {

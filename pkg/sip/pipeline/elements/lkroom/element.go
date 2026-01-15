@@ -186,16 +186,17 @@ func (s *lkroom) InstanceInit(instance *glib.Object) {
 
 	s.room = lksdk.NewRoom(s.toCallbacks())
 
-	sHnd := cgo.NewHandle(s)
-	defer sHnd.Delete()
-
-	sinkRTCP, err := gst.NewElementWithProperties("lkroom_sinkrtcp", map[string]interface{}{
-		"parent": uint64(uintptr(sHnd)),
-	})
+	sinkRTCP, err := gst.NewElement("lkroom_sinkrtcp")
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating sink_rtcp %v", err))
 		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error creating sink_rtcp", err.Error())
 		return
+	}
+
+	if obj, ok := gst.SubclassFromElement[*sinkRtcp](sinkRTCP); ok {
+		obj.parent = s
+	} else {
+		self.Log(CAT, gst.LevelError, "Error casting sink_rtcp to sinkRtcp subclass")
 	}
 
 	if err := self.AddMany(sinkRTCP); err != nil {
@@ -452,12 +453,11 @@ func (s *lkroom) startCamera(self *gst.Bin) *gst.Pad {
 		return nil
 	}
 
-	sHnd := cgo.NewHandle(s)
-	defer sHnd.Delete()
-
-	if err := camera.SetProperty("parent", uint64(uintptr(sHnd))); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error setting handle property on sink_camera: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error setting handle property on sink_camera", err.Error())
+	if obj, ok := gst.SubclassFromElement[*sinkCamera](camera); ok {
+		obj.parent = s
+	} else {
+		self.Log(CAT, gst.LevelError, "Error casting sink_camera to sinkCamera subclass")
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error casting sink_camera to sinkCamera subclass", "type assertion failed")
 		return nil
 	}
 

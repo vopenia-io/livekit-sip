@@ -1,7 +1,6 @@
 package camera_pipeline
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"net/netip"
@@ -10,7 +9,6 @@ import (
 	"github.com/go-gst/go-gst/gst"
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
 	lksdk "github.com/livekit/server-sdk-go/v2"
-	"github.com/livekit/sip/pkg/sip/pipeline/event"
 )
 
 // func (cp *CameraPipeline) checkReady() error {
@@ -62,12 +60,12 @@ func (cp *CameraPipeline) Configure(remote netip.Addr, media *sdpv2.SDPMedia) er
 		"caps", h264Caps,
 	)
 
-	if _, err := cp.SipRtpBin.Connect("request-pt-map", event.RegisterCallback(context.TODO(), cp.Loop(), func(self *gst.Element, session uint, sipPt uint) *gst.Caps {
+	if _, err := cp.SipRtpBin.Connect("request-pt-map", func(self *gst.Element, session uint, sipPt uint) *gst.Caps {
 		if sipPt == uint(pt) {
 			return gst.NewCapsFromString(h264Caps)
 		}
 		return nil
-	})); err != nil {
+	}); err != nil {
 		return fmt.Errorf("failed to connect to rtpbin request-pt-map signal: %w", err)
 	}
 
@@ -82,40 +80,11 @@ func (cp *CameraPipeline) Configure(remote netip.Addr, media *sdpv2.SDPMedia) er
 	); err != nil {
 		return fmt.Errorf("failed to set sip rtp in caps (pt: %d): %w", pt, err)
 	}
-	if err := cp.SipConn.SetProperty("caps",
-		gst.NewCapsFromString(h264Caps), //+",rtcp-fb-nack-pli=1,rtcp-fb-nack=1,rtcp-fb-ccm-fir=1"),
+
+	if err := cp.Vp8H264.SetProperty("h264-caps",
+		gst.NewCapsFromString(h264Caps),
 	); err != nil {
-		return fmt.Errorf("failed to set sip rtp in caps (pt: %d): %w", pt, err)
-	}
-	if err := cp.SipConn.SetProperty("caps",
-		gst.NewCapsFromString(h264Caps), //+",rtcp-fb-nack-pli=1,rtcp-fb-nack=1,rtcp-fb-ccm-fir=1"),
-	); err != nil {
-		return fmt.Errorf("failed to set sip rtp in caps (pt: %d): %w", pt, err)
-	}
-	if err := cp.SipConn.SetProperty("caps",
-		gst.NewCapsFromString(h264Caps), //+",rtcp-fb-nack-pli=1,rtcp-fb-nack=1,rtcp-fb-ccm-fir=1"),
-	); err != nil {
-		return fmt.Errorf("failed to set sip rtp in caps (pt: %d): %w", pt, err)
-	}
-	if err := cp.SipConn.SetProperty("caps",
-		gst.NewCapsFromString(h264Caps), //+",rtcp-fb-nack-pli=1,rtcp-fb-nack=1,rtcp-fb-ccm-fir=1"),
-	); err != nil {
-		return fmt.Errorf("failed to set sip rtp in caps (pt: %d): %w", pt, err)
-	}
-	if err := cp.SipConn.SetProperty("caps",
-		gst.NewCapsFromString(h264Caps+",rtcp-fb-nack-pli=1,rtcp-fb-nack=1,rtcp-fb-ccm-fir=1"),
-	); err != nil {
-		return fmt.Errorf("failed to set sip rtp in caps (pt: %d): %w", pt, err)
-	}
-	if err := cp.SipConn.SetProperty("caps",
-		gst.NewCapsFromString(h264Caps), //+",rtcp-fb-nack-pli=1,rtcp-fb-nack=1,rtcp-fb-ccm-fir=1"),
-	); err != nil {
-		return fmt.Errorf("failed to set sip rtp in caps (pt: %d): %w", pt, err)
-	}
-	if err := cp.SipConn.SetProperty("caps",
-		gst.NewCapsFromString(h264Caps), //+",rtcp-fb-nack-pli=1,rtcp-fb-nack=1,rtcp-fb-ccm-fir=1"),
-	); err != nil {
-		return fmt.Errorf("failed to set sip rtp in caps (pt: %d): %w", pt, err)
+		return fmt.Errorf("failed to set vp8h264 h264 caps filter caps (pt: %d): %w", pt, err)
 	}
 
 	if err := cp.SipConn.SetProperty("remote-ip", remote.String()); err != nil {

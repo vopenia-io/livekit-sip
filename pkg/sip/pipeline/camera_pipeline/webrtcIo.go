@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"weak"
 
 	"github.com/go4org/hashtriemap"
 
@@ -158,8 +159,9 @@ func (wio *WebrtcIo) Link() error {
 
 	// link rtp in
 
+	rtpfunnel := weak.Make(wio.RtpFunnel)
 	if _, err := wio.LkRoom.Connect("pad-added", func(rtpbin *gst.Element, pad *gst.Pad) {
-		wio.log.Debugw("LKROOM PAD ADDED", "pad", pad.GetName())
+		// wio.log.Debugw("LKROOM PAD ADDED", "pad", pad.GetName())
 		padName := pad.GetName()
 		if !strings.HasPrefix(padName, "src_") {
 			return
@@ -168,27 +170,33 @@ func (wio *WebrtcIo) Link() error {
 		var kind livekit.TrackSource
 		var ssrc uint32
 		if _, err := fmt.Sscanf(padName, "src_%d_%d", &kind, &ssrc); err != nil {
-			wio.log.Warnw("Invalid LKROOM pad format", err, "pad", padName)
+			// wio.log.Warnw("Invalid LKROOM pad format", err, "pad", padName)
 			return
 		}
-		wio.log.Infow("LKROOM pad added", "pad", padName, "ssrc", ssrc, "kind", kind)
+		// wio.log.Infow("LKROOM pad added", "pad", padName, "ssrc", ssrc, "kind", kind)
 
-		track := NewWebrtcTrack(wio.log, wio, ssrc)
-		wio.Tracks.Store(ssrc, track)
+		// track := NewWebrtcTrack(wio.log, wio, ssrc)
+		// wio.Tracks.Store(ssrc, track)
 
-		fpad := wio.RtpFunnel.GetRequestPad("sink_%u")
+		funnel := rtpfunnel.Value()
+		if funnel == nil {
+			// wio.log.Errorw("RTP funnel is nil", nil, "pad", padName)
+			return
+		}
+
+		fpad := funnel.GetRequestPad("sink_%u")
 		if fpad == nil {
-			wio.log.Errorw("Failed to get rtp funnel request pad", nil, "pad", padName)
+			// wio.log.Errorw("Failed to get rtp funnel request pad", nil, "pad", padName)
 			return
 		}
 
 		if err := pipeline.LinkPad(
 			pad,
 			fpad); err != nil {
-			wio.log.Errorw("Failed to link lkroom pad to rtp funnel", err, "pad", padName)
+			// wio.log.Errorw("Failed to link lkroom pad to rtp funnel", err, "pad", padName)
 			return
 		}
-		wio.log.Infow("Linked LKROOM pad", "pad", padName)
+		// wio.log.Infow("Linked LKROOM pad", "pad", padName)
 	}); err != nil {
 		return fmt.Errorf("failed to connect to lkroom pad-added signal: %w", err)
 	}
@@ -206,16 +214,29 @@ func (wio *WebrtcIo) Link() error {
 		}
 		wio.log.Infow("RTP pad added", "pad", padName, "ssrc", ssrc, "payloadType", payloadType)
 
-		track, ok := wio.Tracks.Load(ssrc)
-		if !ok {
-			wio.log.Warnw("No track found for RTP pad", nil, "ssrc", ssrc)
+		selPad := wio.InputSelector.GetRequestPad("sink_%u")
+		if selPad == nil {
+			wio.log.Errorw("Failed to get input selector request pad", nil, "pad", padName)
 			return
 		}
 
-		if err := track.LinkParent(pad); err != nil {
-			wio.log.Errorw("Failed to link track parent", err)
+		if err := pipeline.LinkPad(
+			pad,
+			selPad); err != nil {
+			wio.log.Errorw("Failed to link rtpbin pad to input selector", err, "pad", padName)
 			return
 		}
+
+		// track, ok := wio.Tracks.Load(ssrc)
+		// if !ok {
+		// 	wio.log.Warnw("No track found for RTP pad", nil, "ssrc", ssrc)
+		// 	return
+		// }
+
+		// if err := track.LinkParent(pad); err != nil {
+		// 	wio.log.Errorw("Failed to link track parent", err)
+		// 	return
+		// }
 		wio.log.Infow("Linked RTP pad", "pad", padName)
 	})); err != nil {
 		return fmt.Errorf("failed to connect to rtpbin pad-added signal: %w", err)

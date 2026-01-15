@@ -3,8 +3,6 @@ package lkroom
 import (
 	"errors"
 	"fmt"
-	"math"
-	"runtime/cgo"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
@@ -18,18 +16,6 @@ type sinkCamera struct {
 
 	track *webrtc.TrackLocalStaticRTP
 	pt    *lksdk.LocalTrackPublication
-}
-
-var sink_camera_properties = []*glib.ParamSpec{
-	glib.NewUint64Param(
-		"parent",
-		"Parent Handle",
-		"cgo.Handle (uintptr) to a the lkroom parent element",
-		0,
-		math.MaxUint64,
-		0,
-		glib.ParameterWritable,
-	),
 }
 
 func (*sinkCamera) New() glib.GoObjectSubclass {
@@ -51,9 +37,6 @@ func (*sinkCamera) ClassInit(klass *glib.ObjectClass) {
 		gst.PadDirectionSink,
 		gst.PadPresenceAlways,
 		gst.NewCapsFromString("application/x-rtp, media=(string)video, encoding-name=(string)VP8, payload=(int)96")))
-
-	CAT.Log(gst.LevelDebug, "Installing properties")
-	class.InstallProperties(sink_camera_properties)
 }
 
 func (s *sinkCamera) InstanceInit(instance *glib.Object) {
@@ -62,29 +45,6 @@ func (s *sinkCamera) InstanceInit(instance *glib.Object) {
 	self.SetSync(false)
 	self.SetAsyncEnabled(false)
 	self.SetMaxBitrate(1_500_000)
-}
-
-func (s *sinkCamera) SetProperty(instance *glib.Object, id uint, value *glib.Value) {
-	self := base.ToGstBaseSink(instance)
-	param := sink_camera_properties[id]
-	switch param.Name() {
-	case "parent":
-		gv, _ := value.GoValue()
-		val, _ := gv.(uint64)
-		h := cgo.Handle(uintptr(val))
-		if h == cgo.Handle(0) {
-			self.Log(CAT, gst.LevelError, "Invalid parent handle provided")
-			return
-		}
-		roomInterface := h.Value()
-		lkroom, ok := roomInterface.(*lkroom)
-		if !ok {
-			self.Log(CAT, gst.LevelError, "Parent handle does not contain a lkroom parent element")
-			return
-		}
-		s.parent = lkroom
-		self.Log(CAT, gst.LevelInfo, "Track set from handle")
-	}
 }
 
 func (s *sinkCamera) SetCaps(self *base.GstBaseSink, caps *gst.Caps) bool {

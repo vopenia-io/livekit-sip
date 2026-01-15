@@ -47,7 +47,7 @@ func Register() bool {
 		// The rank of the element
 		gst.RankNone,
 		// The GoElement implementation for the element
-		&srcTrack{},
+		&SrcTrack{},
 		// The base subclass this element extends
 		base.ExtendsBaseSrc,
 	)
