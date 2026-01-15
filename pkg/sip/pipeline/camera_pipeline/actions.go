@@ -210,6 +210,67 @@ func (cp *CameraPipeline) WebrtcOutput(rtp, rtcp io.WriteCloser) error {
 
 func (cp *CameraPipeline) DirtySwitchWebrtcInput(ssrc uint32) error {
 	return nil
+
+	// var dstPad *gst.Pad = nil
+	// pads, err := cp.WebrtcIo.InputSelector.GetSinkPads()
+	// if err == nil {
+	// 	for _, pad := range pads {
+	// 		ssrcVal, err := pad.GetProperty("ssrc")
+	// 		if err != nil {
+	// 			cp.Log().Errorw("failed to get ssrc property from webrtc input selector pad", err, "pad", pad.GetName())
+	// 			continue
+	// 		}
+	// 		ssrcPad, ok := ssrcVal.(uint32)
+	// 		if !ok {
+	// 			cp.Log().Errorw("webrtc input selector pad ssrc property is not uint32", nil,
+	// 				"pad", pad.GetName(),
+	// 				"value", ssrcVal,
+	// 			)
+	// 			continue
+	// 		}
+	// 		if ssrcPad == ssrc {
+	// 			cp.Log().Infow("found webrtc input selector pad for desired ssrc", "ssrc", ssrc, "pad", pad.GetName())
+	// 			dstPad = pad
+	// 			break
+	// 		}
+	// 		cp.Log().Debugw("webrtc input selector pad ssrc does not match desired ssrc", nil,
+	// 			"pad", pad.GetName(),
+	// 			"ssrcPad", ssrcPad,
+	// 			"desiredSsrc", ssrc,
+	// 		)
+	// 	}
+	// } else {
+	// 	cp.Log().Errorw("failed to get sink pads from webrtc input selector", err)
+	// }
+
+	// if dstPad == nil {
+	// 	return fmt.Errorf("failed to get input selector sink pad for ssrc %d", ssrc)
+	// }
+
+	// active, err := cp.WebrtcIo.InputSelector.GetProperty("active-pad")
+	// if err == nil {
+	// 	activePad, ok := active.(*gst.Pad)
+	// 	if ok {
+	// 		if activePad.GetName() == dstPad.GetName() {
+	// 			cp.Log().Infow("webrtc input already set to desired ssrc", "ssrc", ssrc)
+	// 			return nil
+	// 		}
+	// 	} else {
+	// 		cp.Log().Errorw("active webrtc input pad is not a gst.Pad", nil,
+	// 			"pad", active,
+	// 		)
+	// 	}
+	// } else {
+	// 	cp.Log().Errorw("failed to get active pad from webrtc input selector", err)
+	// }
+
+	// cp.Log().Infow("switching webrtc input to new ssrc", "ssrc", ssrc)
+
+	// if err := cp.WebrtcIo.InputSelector.SetProperty("active-pad", dstPad); err != nil {
+	// 	return fmt.Errorf("failed to switch webrtc input to ssrc %d: %w", ssrc, err)
+	// }
+
+	// return nil
 	// track, ok := cp.WebrtcIo.Tracks.Load(ssrc)
 	// if !ok {
 	// 	return fmt.Errorf("webrtc track with ssrc %d not found", ssrc)
@@ -252,7 +313,7 @@ func (cp *CameraPipeline) DirtySwitchWebrtcInput(ssrc uint32) error {
 	// return nil
 }
 
-func (cp *CameraPipeline) RequestTrackKeyframe(wt *WebrtcTrack) error {
+func (cp *CameraPipeline) RequestTrackKeyframe(ssrc uint32) error {
 	return nil
 	// cp.Log().Infow("Requesting keyframe for webrtc track", "ssrc", wt.SSRC)
 

@@ -6,8 +6,6 @@ import (
 	"strings"
 	"weak"
 
-	"github.com/go4org/hashtriemap"
-
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
@@ -31,7 +29,7 @@ type WebrtcIo struct {
 	WebrtcRtpBin *gst.Element
 
 	// Tracks map[uint32]*WebrtcTrack
-	Tracks hashtriemap.HashTrieMap[uint32, *WebrtcTrack]
+	// Tracks hashtriemap.HashTrieMap[uint32, *WebrtcTrack]
 
 	RtpFunnel     *gst.Element
 	InputSelector *gst.Element
@@ -344,16 +342,16 @@ func (wio *WebrtcIo) Link() error {
 
 // Close implements [pipeline.GstChain].
 func (wio *WebrtcIo) Close() error {
-	var errs []error
-	for _, track := range wio.Tracks.All() {
-		if err := track.Close(); err != nil {
-			wio.log.Errorw("Failed to close webrtc track", err, "ssrc", track.SSRC)
-			errs = append(errs, err)
-		}
-	}
-	for k := range wio.Tracks.All() {
-		wio.Tracks.Delete(k)
-	}
+	// var errs []error
+	// for _, track := range wio.Tracks.All() {
+	// 	if err := track.Close(); err != nil {
+	// 		wio.log.Errorw("Failed to close webrtc track", err, "ssrc", track.SSRC)
+	// 		errs = append(errs, err)
+	// 	}
+	// }
+	// for k := range wio.Tracks.All() {
+	// 	wio.Tracks.Delete(k)
+	// }
 
 	if err := wio.pipeline.Pipeline().RemoveMany(
 		wio.WebrtcRtpBin,
@@ -364,12 +362,13 @@ func (wio *WebrtcIo) Close() error {
 		wio.RtcpFilter,
 		// wio.WebrtcRtpOut,
 	); err != nil {
-		errs = append(errs, fmt.Errorf("failed to remove WebRTC IO elements from pipeline: %w", err))
+		// errs = append(errs, fmt.Errorf("failed to remove WebRTC IO elements from pipeline: %w", err))
+		return fmt.Errorf("errors occurred while closing webrtc io: %w", err)
 	}
 
-	if len(errs) > 0 {
-		return fmt.Errorf("errors occurred while closing webrtc io: %v", errs)
-	}
+	// if len(errs) > 0 {
+	// 	return fmt.Errorf("errors occurred while closing webrtc io: %v", errs)
+	// }
 
 	return nil
 }
