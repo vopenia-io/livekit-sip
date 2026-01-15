@@ -3,14 +3,11 @@ package lkroom
 import (
 	"errors"
 	"fmt"
-	"io"
-	"time"
-	"unsafe"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
-	"github.com/go-gst/go-gst/gst/base"
 	lksdk "github.com/livekit/server-sdk-go/v2"
+	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -20,6 +17,8 @@ type SrcTrack struct {
 	track *webrtc.TrackRemote
 	pub   *lksdk.RemoteTrackPublication
 	rp    *lksdk.RemoteParticipant
+
+	src *gst.Element
 }
 
 func (*SrcTrack) New() glib.GoObjectSubclass {
@@ -29,9 +28,9 @@ func (*SrcTrack) New() glib.GoObjectSubclass {
 func (*SrcTrack) ClassInit(klass *glib.ObjectClass) {
 	class := gst.ToElementClass(klass)
 	class.SetMetadata(
-		"sink_camera",
-		"sink/video",
-		"Sends video packets to a WebRTC PeerConnection",
+		"lkroom_srctrack",
+		"src",
+		"Receives packets from a WebRTC PeerConnection",
 		"Maxime SENARD <senard.maxime@gmail.com>",
 	)
 
@@ -40,146 +39,233 @@ func (*SrcTrack) ClassInit(klass *glib.ObjectClass) {
 		"src",
 		gst.PadDirectionSource,
 		gst.PadPresenceAlways,
-		gst.NewCapsFromString("application/x-rtp, media=(string)video, encoding-name=(string)VP8, payload=(int)96")))
+		gst.NewAnyCaps()))
+
+	class.AddPadTemplate(gst.NewPadTemplate(
+		"src_rtcp",
+		gst.PadDirectionSource,
+		gst.PadPresenceAlways,
+		gst.NewCapsFromString("application/x-rtcp")))
 }
 
 func (s *SrcTrack) InstanceInit(instance *glib.Object) {
-	self := base.ToGstBaseSrc(instance)
+	self := gst.ToGstBin(instance)
+	class := gst.ToElementClass(self.Class())
 
-	self.SetLive(true)
-	self.SetFormat(gst.FormatTime)
-	self.SetAsync(true)
-}
+	var err error
 
-func (s *SrcTrack) SetCaps(self *base.GstBaseSrc, caps *gst.Caps) bool {
-	return true
-}
-
-func (s *SrcTrack) GetCaps(self *base.GstBaseSrc, filter *gst.Caps) *gst.Caps {
-	caps := gst.NewCapsFromString("application/x-rtp, media=(string)video, encoding-name=(string)VP8, payload=(int)96")
-	if filter != nil && filter.Instance() != nil && !filter.IsEmpty() && !filter.IsAny() {
-		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("caps get filter: %s", filter.String()))
-		if intersect := caps.Intersect(filter); intersect != nil {
-			return intersect
-		}
+	s.src, err = gst.NewElement("lkroom_srctrack_rtp")
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating srctrack_rtp: %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error creating srctrack_rtp", err.Error())
+		return
 	}
-	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("caps get: %s", caps.String()))
-	return caps.Copy().Ref()
+
+	if err := self.Add(s.src); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error adding srctrack_rtp: %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error adding srctrack_rtp", err.Error())
+		return
+	}
+
+	gsrcPad := gst.NewGhostPadFromTemplate("src", s.src.GetStaticPad("src"), class.GetPadTemplate("src"))
+	self.AddPad(gsrcPad.Pad)
+
+	// rtcp
+	rtcpPad := gst.NewPadFromTemplate(class.GetPadTemplate("src_rtcp"), "src_rtcp")
+	rtcpPad.UseFixedCaps()
+	gst.ToElement(instance).AddPad(rtcpPad)
 }
 
-func (s *SrcTrack) Start(self *base.GstBaseSrc) bool {
-	self.Log(CAT, gst.LevelDebug, "Starting")
+func (s *SrcTrack) open(self *gst.Bin) gst.StateChangeReturn {
+	self.Log(CAT, gst.LevelDebug, "Opening SrcTrack element")
+
 	if s.parent == nil {
 		self.Log(CAT, gst.LevelError, "Parent lkroom element is not set")
-		self.Error("Parent lkroom element is not set", errors.New("parent lkroom is nil"))
-		return false
+		self.Error("Parent lkroom element is not set", fmt.Errorf("parent lkroom is nil"))
+		return gst.StateChangeFailure
 	}
 
-	if !s.parent.state.IsJoined() {
-		if !s.parent.state.WaitJoined() {
-			self.Log(CAT, gst.LevelError, "Parent lkroom element failed to join room before starting src_track")
-			self.Error("Parent lkroom element failed to join room", errors.New("parent lkroom not joined"))
-			return false
+	if obj, ok := gst.SubclassFromElement[*SrcTrackRtp](s.src); ok {
+		obj.parent = s
+		obj.track = s.track
+		obj.pub = s.pub
+		obj.rp = s.rp
+	} else {
+		self.Log(CAT, gst.LevelError, "Error casting srctrack_rtp")
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error casting srctrack_rtp", "Internal error")
+		return gst.StateChangeFailure
+	}
+
+	// rtcp
+	rtcpPad := self.GetStaticPad("src_rtcp")
+	if rtcpPad == nil {
+		self.Log(CAT, gst.LevelError, "Failed to get src_rtcp pad")
+		self.Error("Failed to get src_rtcp pad", errors.New("src_rtcp pad is nil"))
+		return gst.StateChangeFailure
+	}
+
+	if !rtcpPad.SetActive(true) {
+		self.Log(CAT, gst.LevelError, "Error activating src_rtcp pad for srcTrack element")
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error activating src_rtcp pad for srcTrack element", "failed to activate src_rtcp pad")
+		return gst.StateChangeFailure
+	}
+
+	streamID := rtcpPad.CreateStreamID(self.Element, "rtcp")
+	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Created RTCP stream ID: %s", streamID))
+	evt := gst.NewStreamStartEvent(streamID)
+	evt.SetGroupID(gst.NextGroupID())
+	if !rtcpPad.PushEvent(evt) && !rtcpPad.IsLinked() {
+		self.Log(CAT, gst.LevelError, "Failed to push StreamStart event on src_rtcp pad")
+		self.Error("Failed to push StreamStart event on src_rtcp pad", errors.New("push event failed"))
+		return gst.StateChangeFailure
+	}
+
+	caps := gst.NewCapsFromString("application/x-rtcp")
+	if !rtcpPad.PushEvent(gst.NewCapsEvent(caps)) {
+		self.Log(CAT, gst.LevelWarning, "Failed to push caps event on rtcp pad")
+		if rtcpPad.IsLinked() {
+			self.Log(CAT, gst.LevelWarning, "Failed to push Caps event on RTCP pad")
 		}
 	}
 
-	return true
-}
-
-func (s *SrcTrack) Stop(self *base.GstBaseSrc) bool {
-	self.Log(CAT, gst.LevelDebug, "Stopping")
-
-	if err := s.pub.SetSubscribed(false); err != nil {
-		if err.Error() == "transport is not connected" {
-			self.Log(CAT, gst.LevelWarning, "Transport is not connected, skipping unsubscribe")
-			return true
+	segment := gst.NewFormattedSegment(gst.FormatTime)
+	if !rtcpPad.PushEvent(gst.NewSegmentEvent(segment)) {
+		if rtcpPad.IsLinked() {
+			self.Log(CAT, gst.LevelWarning, "Failed to push Segment event on RTCP pad")
 		}
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error unsubscribing from track: %T::%v", err, err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error unsubscribing from track", err.Error())
-		return true // return true to avoid blocking shutdown
 	}
 
-	return true
+	return gst.StateChangeSuccess
 }
 
-func (s *SrcTrack) Fill(self *base.GstBaseSrc, offset uint64, length uint, buffer *gst.Buffer) gst.FlowReturn {
-	self.Log(CAT, gst.LevelTrace, fmt.Sprintf("Fill called: offset=%d, length=%d", offset, length))
+func (s *SrcTrack) start(self *gst.Bin) gst.StateChangeReturn {
+	self.Log(CAT, gst.LevelDebug, "Starting SrcTrack element")
 
-	mapInfo := buffer.Map(gst.MapWrite)
-	defer buffer.Unmap()
+	rtcpPad := self.GetStaticPad("src_rtcp")
+	if rtcpPad == nil {
+		self.Log(CAT, gst.LevelError, "Failed to get src_rtcp pad")
+		self.Error("Failed to get src_rtcp pad", errors.New("src_rtcp pad is nil"))
+		return gst.StateChangeFailure
+	}
 
-	ptr := mapInfo.Data()
-	data := unsafe.Slice((*byte)(ptr), length)
+	s.pub.OnRTCP(s.onRtcp(self, rtcpPad))
 
-	n, _, err := s.track.Read(data)
-	if err != nil {
-		if err == io.EOF {
-			self.Log(CAT, gst.LevelInfo, "reached EOF")
-			return gst.FlowEOS
+	return gst.StateChangeSuccess
+}
+
+func (s *SrcTrack) stop(self *gst.Bin) gst.StateChangeReturn {
+	self.Log(CAT, gst.LevelDebug, "Stopping SrcTrack element")
+
+	s.pub.OnRTCP(nil)
+
+	return gst.StateChangeSuccess
+}
+
+func (s *SrcTrack) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
+	self := gst.ToGstBin(instance)
+	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("ChangeState: %v", transition))
+
+	switch transition {
+	case gst.StateChangeNullToReady:
+		if ret := s.open(self); ret != gst.StateChangeSuccess {
+			return ret
 		}
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error reading from io.Reader: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorRead, "Error reading from io.Reader", err.Error())
-		return gst.FlowError
+	case gst.StateChangePausedToPlaying:
+		if ret := s.start(self); ret != gst.StateChangeSuccess {
+			return ret
+		}
+	case gst.StateChangePlayingToPaused:
+		if ret := s.stop(self); ret != gst.StateChangeSuccess {
+			return ret
+		}
 	}
 
-	if uint(n) < length {
-		buffer.SetSize(int64(n))
+	ret := self.ParentChangeState(transition)
+	if ret == gst.StateChangeFailure {
+		return ret
 	}
-	self.Log(CAT, gst.LevelTrace, fmt.Sprintf("filled buffer with %d bytes", n))
 
-	return gst.FlowOK
+	return ret
 }
 
-func (s *SrcTrack) Unlock(self *base.GstBaseSrc) bool {
-	self.Log(CAT, gst.LevelInfo, "unlocked")
-
-	if err := s.track.SetReadDeadline(time.Now()); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error setting read deadline on track: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error setting read deadline on track", err.Error())
-		return false
+func filterSSRC(pkt rtcp.Packet, ssrc uint32) rtcp.Packet {
+	switch p := pkt.(type) {
+	case *rtcp.SenderReport:
+		if p.SSRC != ssrc {
+			return nil
+		}
+		return pkt
+	case *rtcp.ReceiverReport:
+		if p.SSRC != ssrc {
+			return nil
+		}
+		return pkt
+	case *rtcp.Goodbye:
+		res := &rtcp.Goodbye{
+			Sources: []uint32{},
+			Reason:  p.Reason,
+		}
+		for _, s := range p.Sources {
+			if s == ssrc {
+				res.Sources = append(res.Sources, s)
+			}
+		}
+		if len(res.Sources) == 0 {
+			return nil
+		}
+		return res
+	case *rtcp.SourceDescription:
+		res := &rtcp.SourceDescription{
+			Chunks: []rtcp.SourceDescriptionChunk{},
+		}
+		for _, c := range p.Chunks {
+			if c.Source == ssrc {
+				res.Chunks = append(res.Chunks, c)
+			}
+		}
+		if len(res.Chunks) == 0 {
+			return nil
+		}
+		return res
+	case *rtcp.PictureLossIndication:
+		if p.SenderSSRC != ssrc {
+			return nil
+		}
+		return p
+	case *rtcp.FullIntraRequest:
+		if p.SenderSSRC != ssrc {
+			return nil
+		}
+		return p
+	case *rtcp.ExtendedReport:
+		if p.SenderSSRC != ssrc {
+			return nil
+		}
+		return p
 	}
-
-	return true
+	return nil
 }
 
-// func (s *srcTrack) startAsync(self *base.GstBaseSrc, transition gst.StateChange) gst.StateChangeReturn {
-// 	if s.parent.state.IsJoined() {
-// 		ret := self.ParentChangeState(transition)
-// 		return ret
-// 	}
+func (s *SrcTrack) onRtcp(self *gst.Bin, rtcpPad *gst.Pad) func(p rtcp.Packet) {
+	return func(p rtcp.Packet) {
+		filtered := filterSSRC(p, uint32(s.track.SSRC()))
+		if filtered == nil {
+			return
+		}
 
-// 	go func() {
-// 		if !s.parent.state.WaitJoined() {
-// 			self.Log(CAT, gst.LevelError, "Parent lkroom element failed to join room before starting sink_camera")
-// 			self.ContinueState(gst.StateChangeFailure)
-// 			return
-// 		}
-// 		self.Log(CAT, gst.LevelInfo, "Parent lkroom element joined room, continuing sink_camera state change")
-// 		ret := s.startAsync(self, transition)
-// 		self.ContinueState(ret)
-// 	}()
-// 	return gst.StateChangeAsync
-// }
+		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Pushing RTCP packet: %T", filtered))
 
-// func (s *srcTrack) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
-// 	self := base.ToGstBaseSrc(instance)
+		raw, err := filtered.Marshal()
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to marshal RTCP packet: %v", err))
+			self.Error("Failed to marshal RTCP packet", err)
+			return
+		}
 
-// 	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Changing state: %s", transition.String()))
-
-// 	if s.parent == nil {
-// 		self.Log(CAT, gst.LevelError, "Parent lkroom element is not set in sink_camera")
-// 		self.Error("Parent lkroom element is not set", errors.New("parent lkroom is nil"))
-// 		return gst.StateChangeFailure
-// 	}
-
-// 	if transition == gst.StateChangeReadyToPaused {
-// 		return s.startAsync(self, transition)
-// 	}
-
-// 	ret := self.ParentChangeState(transition)
-
-// 	if transition == gst.StateChangeReadyToNull {
-// 		s.parent = nil
-// 	}
-// 	return ret
-// }
+		buf := gst.NewBufferFromBytes(raw)
+		if ret := rtcpPad.Push(buf); ret != gst.FlowOK {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to push RTCP buffer: %v", ret))
+			self.Error("Failed to push RTCP buffer", errors.New("push buffer failed"))
+		}
+	}
+}

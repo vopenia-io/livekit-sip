@@ -161,42 +161,56 @@ func (wio *WebrtcIo) Link() error {
 
 	rtpfunnel := weak.Make(wio.RtpFunnel)
 	if _, err := wio.LkRoom.Connect("pad-added", func(rtpbin *gst.Element, pad *gst.Pad) {
-		// wio.log.Debugw("LKROOM PAD ADDED", "pad", pad.GetName())
 		padName := pad.GetName()
-		if !strings.HasPrefix(padName, "src_") {
-			return
-		}
-
 		var kind livekit.TrackSource
 		var ssrc uint32
 		if _, err := fmt.Sscanf(padName, "src_%d_%d", &kind, &ssrc); err != nil {
-			// wio.log.Warnw("Invalid LKROOM pad format", err, "pad", padName)
 			return
 		}
-		// wio.log.Infow("LKROOM pad added", "pad", padName, "ssrc", ssrc, "kind", kind)
-
-		// track := NewWebrtcTrack(wio.log, wio, ssrc)
-		// wio.Tracks.Store(ssrc, track)
 
 		funnel := rtpfunnel.Value()
 		if funnel == nil {
-			// wio.log.Errorw("RTP funnel is nil", nil, "pad", padName)
 			return
 		}
 
 		fpad := funnel.GetRequestPad("sink_%u")
 		if fpad == nil {
-			// wio.log.Errorw("Failed to get rtp funnel request pad", nil, "pad", padName)
 			return
 		}
 
 		if err := pipeline.LinkPad(
 			pad,
 			fpad); err != nil {
-			// wio.log.Errorw("Failed to link lkroom pad to rtp funnel", err, "pad", padName)
 			return
 		}
-		// wio.log.Infow("Linked LKROOM pad", "pad", padName)
+	}); err != nil {
+		return fmt.Errorf("failed to connect to lkroom pad-added signal: %w", err)
+	}
+
+	rtcpfunnel := weak.Make(wio.RtcpFunnel)
+	if _, err := wio.LkRoom.Connect("pad-added", func(rtpbin *gst.Element, pad *gst.Pad) {
+		padName := pad.GetName()
+		var kind livekit.TrackSource
+		var ssrc uint32
+		if _, err := fmt.Sscanf(padName, "src_%d_%d_rtcp", &kind, &ssrc); err != nil {
+			return
+		}
+
+		funnel := rtcpfunnel.Value()
+		if funnel == nil {
+			return
+		}
+
+		fpad := funnel.GetRequestPad("sink_%u")
+		if fpad == nil {
+			return
+		}
+
+		if err := pipeline.LinkPad(
+			pad,
+			fpad); err != nil {
+			return
+		}
 	}); err != nil {
 		return fmt.Errorf("failed to connect to lkroom pad-added signal: %w", err)
 	}

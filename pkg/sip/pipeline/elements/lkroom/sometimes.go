@@ -75,6 +75,32 @@ func (s *lkroom) SometimesTrackAdded(track *webrtc.TrackRemote, pub *lksdk.Remot
 		return
 	}
 
+	rtcpPad := srcTrack.GetStaticPad("src_rtcp")
+	if rtcpPad == nil {
+		s.self.Log(CAT, gst.LevelError, "Error getting rtcp src pad from srcTrack element")
+		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error getting rtcp src pad from srcTrack element", "pad is nil")
+		return
+	}
+
+	rtcpGPad := gst.NewGhostPad(padname+"_rtcp", rtcpPad)
+	if rtcpGPad == nil {
+		s.self.Log(CAT, gst.LevelError, "Error creating ghost rtcp pad for srcTrack element")
+		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error creating ghost rtcp pad for srcTrack element", "ghost pad is nil")
+		return
+	}
+
+	if !rtcpGPad.SetActive(true) {
+		s.self.Log(CAT, gst.LevelError, "Error activating ghost rtcp pad for srcTrack element")
+		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error activating ghost rtcp pad for srcTrack element", "failed to activate ghost pad")
+		return
+	}
+
+	if !s.self.AddPad(rtcpGPad.Pad) {
+		s.self.Log(CAT, gst.LevelError, "Error adding ghost rtcp pad to lkroom element")
+		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error adding ghost rtcp pad to lkroom element", "failed to add ghost pad")
+		return
+	}
+
 	if !srcTrack.SyncStateWithParent() {
 		s.self.Log(CAT, gst.LevelError, "Error syncing state of srcTrack element")
 		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error syncing state of srcTrack element", "failed to sync state")

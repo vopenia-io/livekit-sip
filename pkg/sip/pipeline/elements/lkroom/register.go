@@ -49,6 +49,17 @@ func Register() bool {
 		// The GoElement implementation for the element
 		&SrcTrack{},
 		// The base subclass this element extends
+		gst.ExtendsBin,
+	) && gst.RegisterElement(
+		// no plugin:
+		nil,
+		// The name of the element
+		"lkroom_srctrack_rtp",
+		// The rank of the element
+		gst.RankNone,
+		// The GoElement implementation for the element
+		&SrcTrackRtp{},
+		// The base subclass this element extends
 		base.ExtendsBaseSrc,
 	)
 }
