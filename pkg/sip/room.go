@@ -191,11 +191,6 @@ type RoomConfig struct {
 }
 
 type RoomCallbacks interface {
-	WebrtcTrackSubscribed(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) error
-	WebrtcTrackUnsubscribed(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) error
-	ActiveParticipantChanged(p []lksdk.Participant) error
-	LocalParticipantReady(p *lksdk.LocalParticipant) error
-	Disconnect() error
 	JoinRoom(wsUrl, token string, callbacks *lksdk.RoomCallback, opts ...lksdk.ConnectOption) (*lksdk.Room, error)
 }
 
@@ -222,12 +217,6 @@ func NewRoom(log logger.Logger, st *RoomStats) *Room {
 				resolve.Resolve("room", r.room.Name(), "roomID", r.room.SID())
 			} else {
 				resolve.Resolve()
-			}
-			cb := r.callbackHandler.Load()
-			if cb != nil {
-				if err := (*cb).LocalParticipantReady(r.room.LocalParticipant); err != nil {
-					r.log.Errorw("local participant ready callback error", err)
-				}
 			}
 		case <-r.stopped.Watch():
 			resolve.Resolve()
@@ -322,14 +311,6 @@ func (r *Room) Connect(conf *config.Config, rconf RoomConfig) error {
 		OnParticipantDisconnected: func(rp *lksdk.RemoteParticipant) {
 			r.participantLeft(rp)
 		},
-		OnActiveSpeakersChanged: func(p []lksdk.Participant) {
-			cb := r.callbackHandler.Load()
-			if cb != nil {
-				if err := (*cb).ActiveParticipantChanged(p); err != nil {
-					r.log.Errorw("active participant changed callback error", err)
-				}
-			}
-		},
 		ParticipantCallback: lksdk.ParticipantCallback{
 			OnTrackPublished: func(pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
 				log := r.roomLog.WithValues("participant", rp.Identity(), "pID", rp.SID(), "trackID", pub.SID(), "trackName", pub.Name())
@@ -345,27 +326,11 @@ func (r *Room) Connect(conf *config.Config, rconf RoomConfig) error {
 					r.participantAudioTrackSubscribed(track, pub, rp, conf)
 					return
 				}
-				cb := r.callbackHandler.Load()
-				if cb != nil {
-					if err := (*cb).WebrtcTrackSubscribed(track, pub, rp); err != nil {
-						r.log.Errorw("track subscribed callback error", err)
-					}
-				} else {
-					r.log.Warnw("no track subscribed callback set", nil)
-				}
 			},
 			OnTrackUnsubscribed: func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
 				r.log.Debugw("track unsubscribed", "kind", pub.Kind(), "participant", rp.Identity(), "pID", rp.SID(), "trackID", pub.SID(), "trackName", pub.Name())
 				if pub.Kind() == lksdk.TrackKindAudio && pub.Source() == livekit.TrackSource_MICROPHONE {
 					return // nothing to do
-				}
-				cb := r.callbackHandler.Load()
-				if cb != nil {
-					if err := (*cb).WebrtcTrackUnsubscribed(track, pub, rp); err != nil {
-						r.log.Errorw("track unsubscribed callback error", err)
-					}
-				} else {
-					r.log.Warnw("no track unsubscribed callback set", nil)
 				}
 			},
 			OnDataPacket: func(data lksdk.DataPacket, params lksdk.DataReceiveParams) {
@@ -379,12 +344,6 @@ func (r *Room) Connect(conf *config.Config, rconf RoomConfig) error {
 			},
 		},
 		OnDisconnected: func() {
-			cb := r.callbackHandler.Load()
-			if cb != nil {
-				if err := (*cb).Disconnect(); err != nil {
-					r.log.Errorw("disconnect callback error", err)
-				}
-			}
 			r.stopped.Break()
 		},
 	}

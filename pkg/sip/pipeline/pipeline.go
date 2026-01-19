@@ -13,23 +13,18 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/event"
 )
 
-type BasePipeline struct {
-	log      logger.Logger
+type Pipeline struct {
+	Log      logger.Logger
 	pipeline *gst.Pipeline
 	loop     *event.EventLoop
 	ctx      context.Context
 	closed   core.Fuse
 	cleanup  func() error
-}
 
-type GstPipeline interface {
-	Pipeline() *gst.Pipeline
-	Log() logger.Logger
-	Loop() *event.EventLoop
-	SetState(state gst.State) error
-	SetStateWait(state gst.State) error
-	Close() error
-	Closed() bool
+	*SipIo
+	*WebrtcIo
+	*SipToWebrtc
+	*WebrtcToSip
 }
 
 type GstChain interface {
@@ -39,19 +34,15 @@ type GstChain interface {
 	Close() error
 }
 
-func (p *BasePipeline) Log() logger.Logger {
-	return p.log
-}
-
-func (p *BasePipeline) Loop() *event.EventLoop {
+func (p *Pipeline) Loop() *event.EventLoop {
 	return p.loop
 }
 
-func (p *BasePipeline) Pipeline() *gst.Pipeline {
+func (p *Pipeline) Pipeline() *gst.Pipeline {
 	return p.pipeline
 }
 
-func (p *BasePipeline) SetState(state gst.State) error {
+func (p *Pipeline) SetState(state gst.State) error {
 	if p.Closed() {
 		return fmt.Errorf("cannot set state on closed pipeline")
 	}
@@ -67,7 +58,7 @@ func (p *BasePipeline) SetState(state gst.State) error {
 	return nil
 }
 
-func (p *BasePipeline) SetStateWait(state gst.State) error {
+func (p *Pipeline) SetStateWait(state gst.State) error {
 	if p.Closed() {
 		return fmt.Errorf("cannot set state on closed pipeline")
 	}
@@ -93,23 +84,22 @@ func (p *BasePipeline) SetStateWait(state gst.State) error {
 
 var pid = os.Getpid()
 
-func (p *BasePipeline) Close() error {
+func (p *Pipeline) Close() error {
 	if p.Closed() {
-		p.log.Debugw("Pipeline already closed")
+		p.Log.Debugw("Pipeline already closed")
 		return nil
 	}
 	p.closed.Break()
-	p.log.Debugw("Closing pipeline")
-
+	p.Log.Debugw("Closing pipeline")
 	defer p.loop.Stop()
 
 	done := make(chan struct{})
 	var err error
 	go func() {
 		defer close(done)
-		p.log.Debugw("Setting pipeline to null state", "pid", pid)
+		p.Log.Debugw("Setting pipeline to null state", "pid", pid)
 		err = p.Pipeline().SetState(gst.StateNull)
-		p.log.Debugw("Pipeline set to null state complete", "pid", pid, "err", err)
+		p.Log.Debugw("Pipeline set to null state complete", "pid", pid, "err", err)
 	}()
 
 	closed := false
@@ -119,7 +109,7 @@ func (p *BasePipeline) Close() error {
 	case <-time.After(10 * time.Second):
 	}
 	if !closed {
-		p.Log().Warnw("Timeout waiting for pipeline to set to null state, sending flush event", nil)
+		p.Log.Warnw("Timeout waiting for pipeline to set to null state, sending flush event", nil)
 		go func() {
 			p.Pipeline().SendEvent(gst.NewFlushStartEvent())
 		}()
@@ -130,7 +120,7 @@ func (p *BasePipeline) Close() error {
 		}
 	}
 	if !closed {
-		p.Log().Warnw("Timeout waiting for pipeline to set to null state after flush start, sending flush stop event", nil)
+		p.Log.Warnw("Timeout waiting for pipeline to set to null state after flush start, sending flush stop event", nil)
 		go func() {
 			p.Pipeline().SendEvent(gst.NewFlushStopEvent(true))
 		}()
@@ -141,7 +131,7 @@ func (p *BasePipeline) Close() error {
 		}
 	}
 	if !closed {
-		p.Log().Warnw("Timeout waiting for pipeline to set to null state after flush stop, trying to break clock", nil)
+		p.Log.Warnw("Timeout waiting for pipeline to set to null state after flush stop, trying to break clock", nil)
 		go func() {
 			p.Pipeline().SetBaseTime(0)
 			p.Pipeline().SetStartTime(gst.ClockTimeNone)
@@ -154,11 +144,9 @@ func (p *BasePipeline) Close() error {
 	}
 
 	if !closed && p.cleanup != nil {
-		p.Log().Warnw("Failed to set pipeline to null state after breaking clock, trying early cleanup", nil)
-		// earlyCleanup = true
-		// cleanupfn()
+		p.Log.Warnw("Failed to set pipeline to null state after breaking clock, trying early cleanup", nil)
 		if err := p.cleanup(); err != nil {
-			p.Log().Errorw("Failed timeout cleanup before setting pipeline to null state", err)
+			p.Log.Errorw("Failed timeout cleanup before setting pipeline to null state", err)
 		}
 		p.cleanup = nil // prevent double cleanup
 		select {
@@ -169,85 +157,155 @@ func (p *BasePipeline) Close() error {
 	}
 
 	if !closed {
-		p.Log().Errorw("Failed to set pipeline to null state after breaking clock", nil)
+		p.Log.Errorw("Failed to set pipeline to null state after breaking clock", nil)
 		return fmt.Errorf("failed to set pipeline to null state")
 	}
 
-	p.log.Debugw("Pipeline set to null state")
+	p.Log.Debugw("Pipeline set to null state")
 
 	if p.cleanup != nil {
-		p.log.Debugw("Running pipeline cleanup")
+		p.Log.Debugw("Running pipeline cleanup")
 		if err := p.cleanup(); err != nil {
-			p.Log().Errorw("Failed timeout cleanup before setting pipeline to null state", err)
+			p.Log.Errorw("Failed timeout cleanup before setting pipeline to null state", err)
 		}
-		p.log.Debugw("Pipeline cleanup complete")
+		p.Log.Debugw("Pipeline cleanup complete")
 	}
 
-	// if p.cleanup != nil || earlyCleanup {
-	// 	var cleanupErr error
-	// 	select {
-	// 	case cleanupErr = <-cleanupErrCH:
-	// 	case <-time.After(10 * time.Second):
-	// 		p.Log().Warnw("Timeout waiting for pipeline cleanup to complete", nil)
-	// 		cleanupErr = fmt.Errorf("timeout waiting for pipeline cleanup to complete")
-	// 	}
-	// 	if cleanupErr != nil {
-	// 		// return fmt.Errorf("failed to cleanup pipeline: %w", cleanupErr)
-	// 	} else {
-	// 	}
-	// }
-
 	time.Sleep(100 * time.Millisecond) // give some time to settle
-	p.log.Debugw("Pipeline closed")
+	p.Log.Debugw("Pipeline closed")
 
 	return nil
 }
 
-func (p *BasePipeline) Closed() bool {
+func (p *Pipeline) Closed() bool {
 	return p.closed.IsBroken()
 }
 
-func New(ctx context.Context, log logger.Logger, cleanup func() error) (*BasePipeline, error) {
+func New(ctx context.Context, log logger.Logger) (*Pipeline, error) {
+	log.Debugw("Creating pipeline")
 	pipeline, err := gst.NewPipeline("")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create gst pipeline: %w", err)
 	}
 
-	gp := &BasePipeline{
-		log:      log,
+	p := &Pipeline{
+		Log:      log.WithComponent("pipeline"),
 		pipeline: pipeline,
-		cleanup:  cleanup,
 		loop:     event.NewEventLoop(ctx, log),
 	}
+	p.cleanup = p.cleanupChains
 
-	go gp.Loop().Run()
+	go p.Loop().Run()
 
-	return gp, nil
+	p.Log.Debugw("Setting bus to flushing")
+	p.Pipeline().GetBus().SetFlushing(true)
+
+	p.Log.Debugw("Adding SIP IO chain")
+	p.SipIo, err = AddChain(p, NewSipInput(log, p))
+	if err != nil {
+		p.Log.Errorw("Failed to add SIP IO chain", err)
+		return nil, err
+	}
+
+	p.Log.Debugw("Adding Webrtc IO chain")
+	p.WebrtcIo, err = AddChain(p, NewWebrtcIo(log, p))
+	if err != nil {
+		p.Log.Errorw("Failed to add WebRTC IO chain", err)
+		return nil, err
+	}
+
+	p.Log.Debugw("Adding SIP to WebRTC chain")
+	p.SipToWebrtc, err = AddChain(p, NewSipToWebrtcChain(log, p))
+	if err != nil {
+		p.Log.Errorw("Failed to add SIP to WebRTC chain", err)
+		return nil, err
+	}
+
+	p.Log.Debugw("Adding WebRTC to SIP chain")
+	p.WebrtcToSip, err = AddChain(p, NewWebrtcToSipChain(log, p))
+	if err != nil {
+		p.Log.Errorw("Failed to add WebRTC to SIP chain", err)
+		return nil, err
+	}
+
+	p.Log.Debugw("Linking chains")
+	if err := LinkChains(p,
+		p.SipIo,
+		p.WebrtcIo,
+		p.SipToWebrtc,
+		p.WebrtcToSip,
+	); err != nil {
+		p.Log.Errorw("Failed to link chains", err)
+		return nil, err
+	}
+
+	p.Log.Debugw("Pipeline created")
+
+	return p, nil
 }
 
-func AddChain[C GstChain](p GstPipeline, chain C) (C, error) {
+func (p *Pipeline) cleanupChains() error {
+	p.Log.Debugw("Closing pipeline chains")
+
+	p.Log.Debugw("Closing SIP IO")
+	if p.SipIo != nil {
+		if err := p.SipIo.Close(); err != nil {
+			return fmt.Errorf("failed to close SIP IO: %w", err)
+		}
+		p.SipIo = nil
+	}
+
+	p.Log.Debugw("Closing WebRTC IO")
+	if p.WebrtcIo != nil {
+		if err := p.WebrtcIo.Close(); err != nil {
+			return fmt.Errorf("failed to close WebRTC IO: %w", err)
+		}
+		p.WebrtcIo = nil
+	}
+
+	p.Log.Debugw("Closing SIP to WebRTC chain")
+	if p.SipToWebrtc != nil {
+		if err := p.SipToWebrtc.Close(); err != nil {
+			return fmt.Errorf("failed to close SIP to WebRTC chain: %w", err)
+		}
+		p.SipToWebrtc = nil
+	}
+
+	p.Log.Debugw("Closing WebRTC to SIP chain")
+	if p.WebrtcToSip != nil {
+		if err := p.WebrtcToSip.Close(); err != nil {
+			return fmt.Errorf("failed to close WebRTC to SIP chain: %w", err)
+		}
+		p.WebrtcToSip = nil
+	}
+
+	p.Log.Debugw("Pipeline chains closed")
+	return nil
+}
+
+func AddChain[C GstChain](p *Pipeline, chain C) (C, error) {
 	var zero C
 
-	p.Log().Debugw("Adding chain to pipeline")
+	p.Log.Debugw("Adding chain to pipeline")
 	if err := chain.Create(); err != nil {
 		return zero, fmt.Errorf("failed to create chain: %w", err)
 	}
 
-	p.Log().Debugw("Adding chain elements to pipeline")
+	p.Log.Debugw("Adding chain elements to pipeline")
 	if err := chain.Add(); err != nil {
 		return zero, fmt.Errorf("failed to add chain to pipeline: %w", err)
 	}
 
-	p.Log().Debugw("Chain added to pipeline")
+	p.Log.Debugw("Chain added to pipeline")
 	return chain, nil
 }
 
-func LinkChains(p GstPipeline, chains ...GstChain) error {
+func LinkChains(p *Pipeline, chains ...GstChain) error {
 	for i, chain := range chains {
-		p.Log().Debugw("Linking chain in pipeline", "chain_index", i)
+		p.Log.Debugw("Linking chain in pipeline", "chain_index", i)
 		if err := chain.Link(); err != nil {
 			typ := reflect.TypeOf(chain)
-			p.Log().Errorw("Failed to link chain in pipeline", err, "index", i, "chain_type", typ.String())
+			p.Log.Errorw("Failed to link chain in pipeline", err, "index", i, "chain_type", typ.String())
 			return fmt.Errorf("failed to link chain %s in pipeline: %w", typ.String(), err)
 		}
 	}

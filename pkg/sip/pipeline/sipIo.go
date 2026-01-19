@@ -1,4 +1,4 @@
-package camera_pipeline
+package pipeline
 
 import (
 	"context"
@@ -7,11 +7,10 @@ import (
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/logger"
-	"github.com/livekit/sip/pkg/sip/pipeline"
 	"github.com/livekit/sip/pkg/sip/pipeline/event"
 )
 
-func NewSipInput(log logger.Logger, parent *CameraPipeline) *SipIo {
+func NewSipInput(log logger.Logger, parent *Pipeline) *SipIo {
 	return &SipIo{
 		log:      log.WithComponent("sip_input"),
 		pipeline: parent,
@@ -20,16 +19,16 @@ func NewSipInput(log logger.Logger, parent *CameraPipeline) *SipIo {
 
 type SipIo struct {
 	log      logger.Logger
-	pipeline *CameraPipeline
+	pipeline *Pipeline
 
 	SipRtpBin *gst.Element
 
 	SipConn *gst.Element
 }
 
-var _ pipeline.GstChain = (*SipIo)(nil)
+var _ GstChain = (*SipIo)(nil)
 
-// Create implements [pipeline.GstChain].
+// Create implements [GstChain].
 func (sio *SipIo) Create() error {
 	var err error
 	sio.SipRtpBin, err = gst.NewElementWithProperties("rtpbin", map[string]interface{}{
@@ -51,7 +50,7 @@ func (sio *SipIo) Create() error {
 	return nil
 }
 
-// Add implements [pipeline.GstChain].
+// Add implements [GstChain].
 func (sio *SipIo) Add() error {
 	return sio.pipeline.Pipeline().AddMany(
 		sio.SipRtpBin,
@@ -59,7 +58,7 @@ func (sio *SipIo) Add() error {
 	)
 }
 
-// Link implements [pipeline.GstChain].
+// Link implements [GstChain].
 func (sio *SipIo) Link() error {
 	// link rtp in
 	if _, err := sio.SipRtpBin.Connect("pad-added", event.RegisterCallback(context.TODO(), sio.pipeline.Loop(), func(rtpbin *gst.Element, pad *gst.Pad) {
@@ -74,7 +73,7 @@ func (sio *SipIo) Link() error {
 			return
 		}
 		sio.log.Infow("RTP pad added", "pad", padName, "ssrc", ssrc, "payloadType", payloadType)
-		if err := pipeline.LinkPad(
+		if err := LinkPad(
 			pad,
 			sio.pipeline.SipToWebrtc.H264Vp8.GetStaticPad("sink"),
 		); err != nil {
@@ -86,7 +85,7 @@ func (sio *SipIo) Link() error {
 		return fmt.Errorf("failed to connect to rtpbin pad-added signal: %w", err)
 	}
 
-	if err := pipeline.LinkPad(
+	if err := LinkPad(
 		sio.SipConn.GetStaticPad("src"),
 		sio.SipRtpBin.GetRequestPad("recv_rtp_sink_0"),
 	); err != nil {
@@ -100,7 +99,7 @@ func (sio *SipIo) Link() error {
 		if padName != "send_rtp_src_0" {
 			return
 		}
-		if err := pipeline.LinkPad(
+		if err := LinkPad(
 			pad,
 			sio.SipConn.GetStaticPad("sink"),
 		); err != nil {
@@ -112,7 +111,7 @@ func (sio *SipIo) Link() error {
 		return fmt.Errorf("failed to connect to sip rtpbin pad-added signal: %w", err)
 	}
 
-	if err := pipeline.LinkPad(
+	if err := LinkPad(
 		sio.pipeline.WebrtcToSip.Vp8H264.GetStaticPad("src"),
 		sio.SipRtpBin.GetRequestPad("send_rtp_sink_0"),
 	); err != nil {
@@ -120,7 +119,7 @@ func (sio *SipIo) Link() error {
 	}
 
 	// link rtcp in
-	if err := pipeline.LinkPad(
+	if err := LinkPad(
 		sio.SipConn.GetStaticPad("src_rtcp"),
 		sio.SipRtpBin.GetRequestPad("recv_rtcp_sink_0"),
 	); err != nil {
@@ -128,7 +127,7 @@ func (sio *SipIo) Link() error {
 	}
 
 	// link rtcp out
-	if err := pipeline.LinkPad(
+	if err := LinkPad(
 		sio.SipRtpBin.GetRequestPad("send_rtcp_src_0"),
 		sio.SipConn.GetStaticPad("sink_rtcp"),
 	); err != nil {
@@ -156,7 +155,7 @@ func (sio *SipIo) Link() error {
 	return nil
 }
 
-// Close implements [pipeline.GstChain].
+// Close implements [GstChain].
 func (sio *SipIo) Close() error {
 	if err := sio.pipeline.Pipeline().RemoveMany(
 		sio.SipRtpBin,

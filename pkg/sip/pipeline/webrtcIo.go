@@ -1,4 +1,4 @@
-package camera_pipeline
+package pipeline
 
 import (
 	"context"
@@ -9,11 +9,10 @@ import (
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
-	"github.com/livekit/sip/pkg/sip/pipeline"
 	"github.com/livekit/sip/pkg/sip/pipeline/event"
 )
 
-func NewWebrtcIo(log logger.Logger, parent *CameraPipeline) *WebrtcIo {
+func NewWebrtcIo(log logger.Logger, parent *Pipeline) *WebrtcIo {
 	return &WebrtcIo{
 		log:      log.WithComponent("webrtc_io"),
 		pipeline: parent,
@@ -21,7 +20,7 @@ func NewWebrtcIo(log logger.Logger, parent *CameraPipeline) *WebrtcIo {
 }
 
 type WebrtcIo struct {
-	pipeline *CameraPipeline
+	pipeline *Pipeline
 	log      logger.Logger
 
 	LkRoom *gst.Element
@@ -39,7 +38,7 @@ type WebrtcIo struct {
 	// WebrtcRtcpOut *gst.Element
 }
 
-var _ pipeline.GstChain = (*WebrtcIo)(nil)
+var _ GstChain = (*WebrtcIo)(nil)
 
 const VP8CAPS = "application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,payload=96,rtcp-fb-nack-pli=1,rtcp-fb-nack=1,rtcp-fb-ccm-fir=1"
 
@@ -47,7 +46,7 @@ var webrtcCaps = map[uint]string{
 	96: VP8CAPS,
 }
 
-// Create implements [pipeline.GstChain].
+// Create implements [GstChain].
 func (wio *WebrtcIo) Create() error {
 	var err error
 	wio.WebrtcRtpBin, err = gst.NewElementWithProperties("rtpbin", map[string]interface{}{
@@ -122,7 +121,7 @@ func (wio *WebrtcIo) Create() error {
 	return nil
 }
 
-// Add implements [pipeline.GstChain].
+// Add implements [GstChain].
 func (wio *WebrtcIo) Add() error {
 	if err := wio.pipeline.Pipeline().AddMany(
 		wio.WebrtcRtpBin,
@@ -139,7 +138,7 @@ func (wio *WebrtcIo) Add() error {
 	return nil
 }
 
-// Link implements [pipeline.GstChain].
+// Link implements [GstChain].
 func (wio *WebrtcIo) Link() error {
 	// pt map
 	if _, err := wio.WebrtcRtpBin.Connect("request-pt-map", event.RegisterCallback(context.TODO(), wio.pipeline.Loop(), func(self *gst.Element, session uint, pt uint) *gst.Caps {
@@ -178,7 +177,7 @@ func (wio *WebrtcIo) Link() error {
 			return
 		}
 
-		if err := pipeline.LinkPad(
+		if err := LinkPad(
 			pad,
 			fpad); err != nil {
 			return
@@ -195,7 +194,7 @@ func (wio *WebrtcIo) Link() error {
 		}
 
 		fpad = funnel.GetRequestPad("sink_%u")
-		if err := pipeline.LinkPad(
+		if err := LinkPad(
 			rtcpOutPad,
 			fpad); err != nil {
 			return
@@ -224,7 +223,7 @@ func (wio *WebrtcIo) Link() error {
 			return
 		}
 
-		if err := pipeline.LinkPad(
+		if err := LinkPad(
 			pad,
 			fpad); err != nil {
 			return
@@ -252,7 +251,7 @@ func (wio *WebrtcIo) Link() error {
 			return
 		}
 
-		if err := pipeline.LinkPad(
+		if err := LinkPad(
 			pad,
 			selPad); err != nil {
 			wio.log.Errorw("Failed to link rtpbin pad to input selector", err, "pad", padName)
@@ -265,7 +264,7 @@ func (wio *WebrtcIo) Link() error {
 		// 	return
 		// }
 
-		// if err := pipeline.LinkPad(
+		// if err := LinkPad(
 		// 	rtcpOutPad,
 		// 	wio.RtcpFunnel.GetRequestPad("sink_%u")); err != nil {
 		// 	wio.log.Errorw("Failed to link rtcpbin pad to rtcp funnel", err, "pad", padName)
@@ -289,7 +288,7 @@ func (wio *WebrtcIo) Link() error {
 		return fmt.Errorf("failed to connect to rtpbin pad-added signal: %w", err)
 	}
 
-	// if err := pipeline.LinkPad(
+	// if err := LinkPad(
 	// 	wio.RtpFunnel.GetStaticPad("src"),
 	// 	wio.WebrtcRtpBin.GetRequestPad("recv_rtp_sink_0"),
 	// ); err != nil {
@@ -310,7 +309,7 @@ func (wio *WebrtcIo) Link() error {
 		if padName != "send_rtp_src_0" {
 			return
 		}
-		if err := pipeline.LinkPad(
+		if err := LinkPad(
 			pad,
 			wio.LkRoom.GetRequestPad("sink_camera"),
 		); err != nil {
@@ -322,7 +321,7 @@ func (wio *WebrtcIo) Link() error {
 		return fmt.Errorf("failed to connect to webrtc rtpbin pad-added signal: %w", err)
 	}
 
-	if err := pipeline.LinkPad(
+	if err := LinkPad(
 		wio.pipeline.SipToWebrtc.H264Vp8.GetStaticPad("src"),
 		wio.WebrtcRtpBin.GetRequestPad("send_rtp_sink_0"),
 	); err != nil {
@@ -333,7 +332,7 @@ func (wio *WebrtcIo) Link() error {
 	// if err := wio.RtcpFunnel.Link(wio.RtcpFilter); err != nil {
 	// 	return fmt.Errorf("failed to link webrtc rtcp funnel to filter: %w", err)
 	// }
-	// if err := pipeline.LinkPad(
+	// if err := LinkPad(
 	// 	wio.RtcpFilter.GetStaticPad("src"),
 	// 	wio.WebrtcRtpBin.GetRequestPad("recv_rtcp_sink_0"),
 	// ); err != nil {
@@ -347,7 +346,7 @@ func (wio *WebrtcIo) Link() error {
 	// }
 
 	// link rtcp out
-	if err := pipeline.LinkPad(
+	if err := LinkPad(
 		wio.RtcpFunnel.GetStaticPad("src"),
 		wio.LkRoom.GetStaticPad("sink_rtcp"),
 	); err != nil {
@@ -375,7 +374,7 @@ func (wio *WebrtcIo) Link() error {
 	return nil
 }
 
-// Close implements [pipeline.GstChain].
+// Close implements [GstChain].
 func (wio *WebrtcIo) Close() error {
 	// var errs []error
 	// for _, track := range wio.Tracks.All() {

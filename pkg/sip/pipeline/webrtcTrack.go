@@ -1,11 +1,10 @@
-package camera_pipeline
+package pipeline
 
 // import (
 // 	"fmt"
 
 // 	"github.com/go-gst/go-gst/gst"
 // 	"github.com/livekit/protocol/logger"
-// 	"github.com/livekit/sip/pkg/sip/pipeline"
 // )
 
 // func NewWebrtcTrack(log logger.Logger, parent *WebrtcIo, ssrc uint32) *WebrtcTrack {
@@ -30,7 +29,7 @@ package camera_pipeline
 // 	// WebrtcRtcpIn *gst.Element
 // }
 
-// var _ pipeline.GstChain = (*WebrtcTrack)(nil)
+// var _ GstChain = (*WebrtcTrack)(nil)
 
 // // Create implements GstChain.
 // func (wt *WebrtcTrack) Create() error {
@@ -109,7 +108,7 @@ package camera_pipeline
 // // Link implements GstChain.
 // func (wt *WebrtcTrack) Link() error {
 // 	return nil
-// 	// if err := pipeline.LinkPad(
+// 	// if err := LinkPad(
 // 	// 	wt.WebrtcRtpIn.GetStaticPad("src"),
 // 	// 	wt.parent.RtpFunnel.GetRequestPad("sink_%u"),
 // 	// ); err != nil {
@@ -118,14 +117,14 @@ package camera_pipeline
 
 // 	// rtcpPad := wt.WebrtcRtcpIn.GetStaticPad("src")
 // 	// rtcpPad.AddProbe(gst.PadProbeTypeBuffer, NewRtcpSsrcFilter(wt.SSRC))
-// 	// if err := pipeline.LinkPad(
+// 	// if err := LinkPad(
 // 	// 	rtcpPad,
 // 	// 	wt.parent.RtcpFunnel.GetRequestPad("sink_%u"),
 // 	// ); err != nil {
 // 	// 	return fmt.Errorf("failed to link webrtc rtcp queue to rtcp funnel: %w", err)
 // 	// }
 
-// 	// return pipeline.SyncElements(
+// 	// return SyncElements(
 // 	// 	wt.WebrtcRtpIn,
 // 	// 	wt.WebrtcRtcpIn,
 // 	// )
@@ -134,7 +133,7 @@ package camera_pipeline
 // func (wt *WebrtcTrack) LinkParent(rtpbinPad *gst.Pad) error {
 // 	wt.BinPad = rtpbinPad
 // 	wt.SelPad = wt.parent.InputSelector.GetRequestPad("sink_%u")
-// 	if err := pipeline.LinkPad(
+// 	if err := LinkPad(
 // 		wt.BinPad,
 // 		wt.SelPad,
 // 	); err != nil {

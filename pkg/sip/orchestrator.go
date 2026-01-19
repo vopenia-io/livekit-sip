@@ -75,8 +75,7 @@ type MediaOrchestrator struct {
 	wg         sync.WaitGroup
 
 	audioinfo AudioInfo
-	camera    *CameraManager
-	tracks    *TrackManager
+	video     *VideoManager
 	bfcp      *BFCPManager
 
 	sdp   *sdpv2.SDP
@@ -116,13 +115,11 @@ func (o *MediaOrchestrator) init(room *Room) error {
 		return err
 	}
 
-	o.tracks = NewTrackManager(o.log.WithComponent("track_manager"))
-
-	camera, err := NewCameraManager(o.log.WithComponent("camera"), o.ctx, o.opts, o.tracks)
+	video, err := NewVideoManager(o.log.WithComponent("video"), o.ctx, o.opts)
 	if err != nil {
 		return fmt.Errorf("could not create video manager: %w", err)
 	}
-	o.camera = camera
+	o.video = video
 
 	o.bfcp = NewBFCPManager(o.ctx, o.log, o.opts, o.inbound)
 
@@ -212,8 +209,7 @@ func (o *MediaOrchestrator) close() error {
 		bfcpErr = o.bfcp.Close()
 	}
 	err := errors.Join(
-		o.camera.Close(),
-		o.tracks.Close(),
+		o.video.Close(),
 		bfcpErr,
 	)
 	o.cancel()
@@ -236,10 +232,10 @@ func (o *MediaOrchestrator) Close() error {
 // GetRoom implements [RoomCallbacks].
 func (o *MediaOrchestrator) JoinRoom(wsUrl, token string, callbacks *lksdk.RoomCallback, opts ...lksdk.ConnectOption) (*lksdk.Room, error) {
 	var errs []error
-	room, err := o.camera.GetRoom()
+	room, err := o.video.GetRoom()
 	errs = append(errs, err)
-	errs = append(errs, o.camera.SetRoomCallbacks(callbacks))
-	errs = append(errs, o.camera.SetRoomOptions(wsUrl, token, opts...))
+	errs = append(errs, o.video.SetRoomCallbacks(callbacks))
+	errs = append(errs, o.video.SetRoomOptions(wsUrl, token, opts...))
 	if err := errors.Join(errs...); err != nil {
 		return nil, fmt.Errorf("could not join room: %w", err)
 	}
@@ -340,9 +336,9 @@ func (o *MediaOrchestrator) offerSDP(camera bool, bfcp bool, screenshare bool) (
 
 	if camera {
 		builder.SetVideo(func(b *sdpv2.SDPMediaBuilder) (*sdpv2.SDPMedia, error) {
-			codec := o.camera.Codec()
+			codec := o.video.Codec()
 			if codec == nil {
-				for _, c := range o.camera.SupportedCodecs() {
+				for _, c := range o.video.SupportedCodecs() {
 					b.AddCodec(func(_ *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
 						return c, nil
 					}, false)
@@ -352,11 +348,11 @@ func (o *MediaOrchestrator) offerSDP(camera bool, bfcp bool, screenshare bool) (
 					return codec, nil
 				}, true)
 			}
-			b.SetDisabled(o.camera.Status() < VideoStatusReady)
+			b.SetDisabled(o.video.Status() < VideoStatusReady)
 			// b.SetDisabled(false)
-			b.SetRTPPort(uint16(o.camera.RtpPort()))
-			b.SetRTCPPort(uint16(o.camera.RtcpPort()))
-			b.SetDirection(o.camera.Direction())
+			b.SetRTPPort(uint16(o.video.RtpPort()))
+			b.SetRTCPPort(uint16(o.video.RtcpPort()))
+			b.SetDirection(o.video.Direction())
 			return b.Build()
 		})
 	}
@@ -374,7 +370,7 @@ func (o *MediaOrchestrator) setupSDP(sdp *sdpv2.SDP) error {
 	o.log.Debugw("setting up sdp", "sdp", sdp)
 
 	o.log.Debugw("reconciling camera")
-	if _, err := o.camera.Reconcile(sdp.Addr, sdp.Video); err != nil {
+	if _, err := o.video.Reconcile(sdp.Addr, sdp.Video); err != nil {
 		o.log.Errorw("could not reconcile video sdp", err)
 		return fmt.Errorf("could not reconcile video sdp: %w", err)
 	}
@@ -382,9 +378,9 @@ func (o *MediaOrchestrator) setupSDP(sdp *sdpv2.SDP) error {
 }
 
 func (o *MediaOrchestrator) start() error {
-	if o.camera.Status() == VideoStatusReady {
+	if o.video.Status() == VideoStatusReady {
 		o.log.Debugw("starting camera")
-		if err := o.camera.Start(); err != nil {
+		if err := o.video.Start(); err != nil {
 			o.log.Errorw("could not start camera", err)
 			return fmt.Errorf("could not start camera: %w", err)
 		}

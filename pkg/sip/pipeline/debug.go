@@ -18,7 +18,7 @@ func sanitizeDot(dot string) string {
 	return runningTimeRegex.ReplaceAllString(dot, "running-time=XXX")
 }
 
-func (p *BasePipeline) Monitor() {
+func (p *Pipeline) Monitor() {
 	name := p.Pipeline().GetName()
 
 	dotFile, err := os.Create(fmt.Sprintf("%s_pipeline_live.dot", name))

@@ -1,15 +1,14 @@
-package camera_pipeline
+package pipeline
 
 import (
 	"fmt"
 
-	"github.com/livekit/sip/pkg/sip/pipeline"
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/logger"
 )
 
-func NewSipToWebrtcChain(log logger.Logger, parent *CameraPipeline) *SipToWebrtc {
+func NewSipToWebrtcChain(log logger.Logger, parent *Pipeline) *SipToWebrtc {
 	return &SipToWebrtc{
 		log:      log,
 		pipeline: parent,
@@ -17,15 +16,15 @@ func NewSipToWebrtcChain(log logger.Logger, parent *CameraPipeline) *SipToWebrtc
 }
 
 type SipToWebrtc struct {
-	pipeline *CameraPipeline
+	pipeline *Pipeline
 	log      logger.Logger
 
 	H264Vp8 *gst.Element
 }
 
-var _ pipeline.GstChain = (*SipToWebrtc)(nil)
+var _ GstChain = (*SipToWebrtc)(nil)
 
-// Create implements [pipeline.GstChain].
+// Create implements [GstChain].
 func (stw *SipToWebrtc) Create() error {
 	var err error
 
