@@ -31,7 +31,6 @@ type Vp8H264 struct {
 	VideoScale *gst.Element
 	VideoRate  *gst.Element
 	Filter     *gst.Element
-	Queue      *gst.Element
 	X264Enc    *gst.Element
 	H264Parse  *gst.Element
 	RtpH264Pay *gst.Element

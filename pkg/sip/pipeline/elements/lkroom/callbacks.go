@@ -107,6 +107,7 @@ func (s *lkroom) OnParticipantDisconnected(p *lksdk.RemoteParticipant) {
 
 func (s *lkroom) OnActiveSpeakersChanged(participants []lksdk.Participant) {
 	s.self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Active speakers changed: %d participants", len(participants)))
+	s.SelectActiveSpeaker(participants)
 	s.callbacks.OnActiveSpeakersChanged(participants)
 }
 

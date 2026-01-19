@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 	"unsafe"
 
@@ -84,7 +85,7 @@ func (s *SrcTrackRtp) Stop(self *base.GstBaseSrc) bool {
 	self.Log(CAT, gst.LevelDebug, "Stopping")
 
 	if err := s.pub.SetSubscribed(false); err != nil {
-		if err.Error() == "transport is not connected" {
+		if strings.Contains(err.Error(), "transport is not connected") {
 			self.Log(CAT, gst.LevelWarning, "Transport is not connected, skipping unsubscribe")
 			return true
 		}
