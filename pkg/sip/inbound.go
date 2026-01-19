@@ -397,9 +397,38 @@ func (s *Server) processInvite(req *sip.Request, tx sip.ServerTransaction) (retE
 	existing := s.byCallID[sipCallID]
 	s.cmu.RUnlock()
 	if existing != nil && existing.cc.InviteCSeq() < cc.InviteCSeq() {
-		log.Infow("accepting reinvite", "content-type", req.ContentType(), "content-length", req.ContentLength())
+		log.Infow("processing reinvite with SDP negotiation", "content-type", req.ContentType(), "content-length", req.ContentLength())
 		existing.log().Infow("reinvite", "content-type", req.ContentType(), "content-length", req.ContentLength(), "cseq", cc.InviteCSeq())
-		cc.AcceptAsKeepAlive(existing.cc.OwnSDP())
+
+		offerData := req.Body()
+		if len(offerData) > 0 {
+			// Process new offer through async channel
+			resultCh, err := existing.cc.OfferSDP(offerData)
+			if err != nil {
+				log.Errorw("failed to initiate SDP processing", err)
+				cc.AcceptAsKeepAlive(existing.cc.OwnSDP())
+				return nil
+			}
+
+			// Wait for answer (with timeout)
+			select {
+			case result := <-resultCh:
+				if result.Err != nil {
+					log.Errorw("SDP processing failed", result.Err)
+					cc.AcceptAsKeepAlive(existing.cc.OwnSDP())
+					return nil
+				}
+				existing.cc.UpdateSDP(result.SDP)
+				cc.AcceptAsKeepAlive(result.SDP)
+			case <-time.After(10 * time.Second):
+				log.Errorw("SDP processing timeout", nil)
+				cc.AcceptAsKeepAlive(existing.cc.OwnSDP())
+			case <-ctx.Done():
+				cc.AcceptAsKeepAlive(existing.cc.OwnSDP())
+			}
+		} else {
+			cc.AcceptAsKeepAlive(existing.cc.OwnSDP())
+		}
 		return nil
 	}
 
@@ -717,6 +746,39 @@ func (c *inboundCall) mediaTimeout() error {
 	}
 	c.closeWithTimeout(false)
 	return nil // logged as a warning in close
+}
+
+// triggerDelayedReInvite sends a complete re-invite after initial call setup
+// NOTE: This requires MediaOrchestrator.GenerateFullOffer() to be implemented
+func (c *inboundCall) triggerDelayedReInvite() {
+	go func() {
+		// Wait for call to be fully established
+		select {
+		case <-c.started.Watch():
+		case <-c.ctx.Done():
+			return
+		}
+
+		// Small delay after call starts
+		time.Sleep(100 * time.Millisecond)
+
+		if c.medias == nil {
+			c.log().Warnw("cannot trigger re-invite: media orchestrator not initialized", nil)
+			return
+		}
+
+		// Generate full SDP offer with all capabilities
+		// NOTE: GenerateFullOffer() must be implemented in MediaOrchestrator
+		offer, err := c.medias.GenerateFullOffer()
+		if err != nil {
+			c.log().Warnw("failed to generate re-invite offer", err)
+			return
+		}
+
+		if err := c.cc.SendReInvite(c.ctx, offer); err != nil {
+			c.log().Warnw("failed to send re-invite", err)
+		}
+	}()
 }
 
 func (c *inboundCall) handleInvite(ctx context.Context, tid traceid.ID, req *sip.Request, trunkID string, conf *config.Config) error {
@@ -1533,6 +1595,9 @@ type sipInbound struct {
 	legTr      Transport
 	referDone  chan error
 
+	// SDP interface for re-invite handling
+	mediaHandler MediaSdpInterface
+
 	mu              sync.RWMutex
 	lastSDP         []byte
 	inviteOk        *sip.Response
@@ -2017,5 +2082,87 @@ func (c *sipInbound) CloseWithStatus(code sip.StatusCode, status string) {
 		c.sendStatus(code, status)
 	} else {
 		c.drop()
+	}
+}
+
+// OfferSDP implements SipSdpInterface - handles incoming SDP offers (for re-invites received from remote)
+func (c *sipInbound) OfferSDP(offer []byte) (chan SdpResult, error) {
+	if c.mediaHandler == nil {
+		return nil, fmt.Errorf("media handler not set")
+	}
+	return c.mediaHandler.OnOffer(offer)
+}
+
+// AnswerSDP implements SipSdpInterface - handles SDP answers (when we initiate re-invite)
+func (c *sipInbound) AnswerSDP(answer []byte) error {
+	c.mu.Lock()
+	c.lastSDP = answer
+	c.mu.Unlock()
+
+	if c.mediaHandler != nil {
+		return c.mediaHandler.OnAnswer(answer)
+	}
+	return nil
+}
+
+// SetMediaHandler sets the media handler for SDP processing
+func (c *sipInbound) SetMediaHandler(handler MediaSdpInterface) {
+	c.mediaHandler = handler
+}
+
+// UpdateSDP updates the stored SDP without notifying the media handler
+func (c *sipInbound) UpdateSDP(sdp []byte) {
+	c.mu.Lock()
+	c.lastSDP = sdp
+	c.mu.Unlock()
+}
+
+// SendReInvite sends a re-INVITE with new SDP offer
+func (c *sipInbound) SendReInvite(ctx context.Context, offer []byte) error {
+	c.mu.Lock()
+	if c.inviteOk == nil {
+		c.mu.Unlock()
+		return fmt.Errorf("call not established")
+	}
+	if c.invite == nil {
+		c.mu.Unlock()
+		return fmt.Errorf("no original invite")
+	}
+	c.mu.Unlock()
+
+	// Build re-INVITE request
+	req := sip.NewRequest(sip.INVITE, c.invite.Recipient)
+	req.SetBody(offer)
+	req.AppendHeader(&contentTypeHeaderSDP)
+	req.AppendHeader(c.contact)
+	callIDHeader := sip.CallIDHeader(c.sipCallID)
+	req.AppendHeader(&callIDHeader)
+
+	c.mu.Lock()
+	c.setCSeq(req)
+	c.swapSrcDst(req)
+	c.mu.Unlock()
+
+	tx, err := c.s.sipSrv.TransactionLayer().Request(req)
+	if err != nil {
+		return fmt.Errorf("failed to send re-invite: %w", err)
+	}
+
+	select {
+	case resp := <-tx.Responses():
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			// Send ACK for 2xx response
+			ack := sip.NewAckRequest(req, resp, nil)
+			if err := c.s.sipSrv.TransportLayer().WriteMsg(ack); err != nil {
+				c.log.Warnw("failed to send ACK for re-invite", err)
+			}
+			// Process answer
+			return c.AnswerSDP(resp.Body())
+		}
+		return fmt.Errorf("re-invite failed with status %d: %s", resp.StatusCode, resp.Reason)
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(30 * time.Second):
+		return fmt.Errorf("re-invite timeout")
 	}
 }

@@ -104,6 +104,21 @@ func (cp *CameraPipeline) Configure(remote netip.Addr, media *sdpv2.SDPMedia) er
 	return nil
 }
 
+// ConfigureFromSDPBytes prepares for future direct SDP byte handling in GStreamer
+// This is a preparation method for when video management migrates to GStreamer
+func (cp *CameraPipeline) ConfigureFromSDPBytes(sdpBytes []byte) error {
+	// For now, parse and delegate to existing Configure method
+	// Future: Pass bytes directly to custom GStreamer element
+	parsed, err := sdpv2.NewSDP(sdpBytes)
+	if err != nil {
+		return fmt.Errorf("failed to parse SDP bytes: %w", err)
+	}
+	if parsed.Video == nil {
+		return fmt.Errorf("no video in SDP")
+	}
+	return cp.Configure(parsed.Addr, parsed.Video)
+}
+
 func (cp *CameraPipeline) SipRtpPort() uint16 {
 	sipConnPortVal, err := cp.SipConn.GetProperty("rtp-port")
 	if err != nil {
