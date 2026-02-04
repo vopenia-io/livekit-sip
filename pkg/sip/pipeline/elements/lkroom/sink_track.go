@@ -7,27 +7,81 @@ import (
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/base"
+	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/webrtc/v4"
 )
 
-type sinkCamera struct {
+type TrackCfg struct {
+	Kind livekit.TrackSource
+	ID   uint
+}
+
+func (t TrackCfg) CapsString() string {
+	switch t.Kind {
+	case livekit.TrackSource_CAMERA:
+		return "application/x-rtp, media=(string)video, encoding-name=(string)VP8, payload=(int)96"
+	case livekit.TrackSource_MICROPHONE:
+		return "application/x-rtp, media=(string)audio, encoding-name=(string)OPUS, payload=(int)111"
+	default:
+		return "application/x-rtp"
+	}
+}
+
+func (t TrackCfg) MimeType() string {
+	switch t.Kind {
+	case livekit.TrackSource_CAMERA:
+		return webrtc.MimeTypeVP8
+	case livekit.TrackSource_MICROPHONE:
+		return webrtc.MimeTypeOpus
+	default:
+		return ""
+	}
+}
+
+func (t TrackCfg) Label() string {
+	switch t.Kind {
+	case livekit.TrackSource_CAMERA:
+		return fmt.Sprintf("camera_%d", t.ID)
+	case livekit.TrackSource_MICROPHONE:
+		return fmt.Sprintf("microphone_%d", t.ID)
+	default:
+		return fmt.Sprintf("track_%d", t.ID)
+	}
+}
+
+type sinkTrack struct {
 	parent *lkroom
+	TrackCfg
 
 	track *webrtc.TrackLocalStaticRTP
 	pt    *lksdk.LocalTrackPublication
 }
 
-func (*sinkCamera) New() glib.GoObjectSubclass {
-	return &sinkCamera{}
+func NewTrackSink(parent *lkroom, cfg TrackCfg) (*gst.Element, error) {
+	element, err := gst.NewElement("lkroom_sinktrack")
+	if err != nil {
+		return nil, err
+	}
+	sink, ok := gst.SubclassFromElement[*sinkTrack](element)
+	if !ok {
+		return nil, fmt.Errorf("failed to cast element to sinkTrack")
+	}
+	sink.parent = parent
+	sink.TrackCfg = cfg
+	return element, nil
 }
 
-func (*sinkCamera) ClassInit(klass *glib.ObjectClass) {
+func (*sinkTrack) New() glib.GoObjectSubclass {
+	return &sinkTrack{}
+}
+
+func (*sinkTrack) ClassInit(klass *glib.ObjectClass) {
 	class := gst.ToElementClass(klass)
 	class.SetMetadata(
-		"sink_camera",
-		"sink/video",
-		"Sends video packets to a WebRTC PeerConnection",
+		"sink_track",
+		"sink",
+		"Sends packets to a WebRTC PeerConnection",
 		"Maxime SENARD <senard.maxime@gmail.com>",
 	)
 
@@ -36,10 +90,10 @@ func (*sinkCamera) ClassInit(klass *glib.ObjectClass) {
 		"sink",
 		gst.PadDirectionSink,
 		gst.PadPresenceAlways,
-		gst.NewCapsFromString("application/x-rtp, media=(string)video, encoding-name=(string)VP8, payload=(int)96")))
+		gst.NewCapsFromString("application/x-rtp")))
 }
 
-func (s *sinkCamera) InstanceInit(instance *glib.Object) {
+func (s *sinkTrack) InstanceInit(instance *glib.Object) {
 	self := base.ToGstBaseSink(instance)
 
 	self.SetSync(false)
@@ -47,12 +101,12 @@ func (s *sinkCamera) InstanceInit(instance *glib.Object) {
 	self.SetMaxBitrate(1_500_000)
 }
 
-func (s *sinkCamera) SetCaps(self *base.GstBaseSink, caps *gst.Caps) bool {
+func (s *sinkTrack) SetCaps(self *base.GstBaseSink, caps *gst.Caps) bool {
 	return true
 }
 
-func (s *sinkCamera) GetCaps(self *base.GstBaseSink, filter *gst.Caps) *gst.Caps {
-	caps := gst.NewCapsFromString("application/x-rtp, media=(string)video, encoding-name=(string)VP8, payload=(int)96")
+func (s *sinkTrack) GetCaps(self *base.GstBaseSink, filter *gst.Caps) *gst.Caps {
+	caps := gst.NewCapsFromString(s.CapsString())
 	if filter != nil && filter.Instance() != nil && !filter.IsEmpty() && !filter.IsAny() {
 		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("caps get filter: %s", filter.String()))
 		if intersect := caps.Intersect(filter); intersect != nil {
@@ -63,7 +117,7 @@ func (s *sinkCamera) GetCaps(self *base.GstBaseSink, filter *gst.Caps) *gst.Caps
 	return caps.Copy().Ref()
 }
 
-func (s *sinkCamera) Start(self *base.GstBaseSink) bool {
+func (s *sinkTrack) Start(self *base.GstBaseSink) bool {
 	self.Log(CAT, gst.LevelDebug, "Starting")
 	if s.parent.room == nil {
 		self.Log(CAT, gst.LevelError, "Room is not set")
@@ -74,7 +128,7 @@ func (s *sinkCamera) Start(self *base.GstBaseSink) bool {
 	return true
 }
 
-func (s *sinkCamera) Stop(self *base.GstBaseSink) bool {
+func (s *sinkTrack) Stop(self *base.GstBaseSink) bool {
 	self.Log(CAT, gst.LevelDebug, "Stopping")
 
 	s.track = nil
@@ -84,7 +138,7 @@ func (s *sinkCamera) Stop(self *base.GstBaseSink) bool {
 	return true
 }
 
-func (s *sinkCamera) Render(self *base.GstBaseSink, buffer *gst.Buffer) gst.FlowReturn {
+func (s *sinkTrack) Render(self *base.GstBaseSink, buffer *gst.Buffer) gst.FlowReturn {
 	self.Log(CAT, gst.LevelTrace, fmt.Sprintf("Rendering RTCP buffer of size %d", buffer.GetSize()))
 
 	if s.track == nil {
@@ -102,10 +156,10 @@ func (s *sinkCamera) Render(self *base.GstBaseSink, buffer *gst.Buffer) gst.Flow
 	return gst.FlowOK
 }
 
-func (s *sinkCamera) publishTrack(self *base.GstBaseSink) bool {
+func (s *sinkTrack) publishTrack(self *base.GstBaseSink) bool {
 	track, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{
-		MimeType: webrtc.MimeTypeVP8,
-	}, "video", "pion")
+		MimeType: s.MimeType(),
+	}, s.Label(), "pion")
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create new local track: %v", err))
 		self.Error("Failed to create new local track", err)
@@ -121,7 +175,7 @@ func (s *sinkCamera) publishTrack(self *base.GstBaseSink) bool {
 	}
 
 	pt, err := p.PublishTrack(track, &lksdk.TrackPublicationOptions{
-		Name: p.Identity(),
+		Name: fmt.Sprintf("%s_%s", p.Identity(), s.Label()),
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to publish track: %v", err))
@@ -136,7 +190,7 @@ func (s *sinkCamera) publishTrack(self *base.GstBaseSink) bool {
 	return true
 }
 
-func (s *sinkCamera) startAsync(self *base.GstBaseSink, transition gst.StateChange) gst.StateChangeReturn {
+func (s *sinkTrack) startAsync(self *base.GstBaseSink, transition gst.StateChange) gst.StateChangeReturn {
 	if s.parent.state.IsJoined() {
 		if !s.publishTrack(self) {
 			self.Log(CAT, gst.LevelError, "Failed to publish track after joining room")
@@ -161,7 +215,7 @@ func (s *sinkCamera) startAsync(self *base.GstBaseSink, transition gst.StateChan
 	return gst.StateChangeAsync
 }
 
-func (s *sinkCamera) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
+func (s *sinkTrack) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
 	self := base.ToGstBaseSink(instance)
 
 	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Changing state: %s", transition.String()))

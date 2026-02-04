@@ -36,8 +36,6 @@ import (
 	"github.com/livekit/media-sdk/dtmf"
 	"github.com/livekit/media-sdk/rtp"
 	"github.com/livekit/media-sdk/sdp"
-	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
-	"github.com/livekit/media-sdk/tones"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/protocol/rpc"
@@ -638,7 +636,7 @@ type inboundCall struct {
 	cancel      func()
 	closeReason atomic.Pointer[ReasonHeader]
 	call        *rpc.SIPCall
-	media       *MediaPort
+	// media       *MediaPort
 	medias      *MediaOrchestrator
 	dtmf        chan dtmf.Event // buffered
 	lkRoom      RoomInterface   // LiveKit room; only active after correct pin is entered
@@ -859,8 +857,8 @@ func (c *inboundCall) handleInvite(ctx context.Context, tid traceid.ID, req *sip
 			// Start this timer right after the Accept.
 			ackTimeout = time.After(inviteOkAckLateTimeout)
 		}
-		c.media.EnableTimeout(true)
-		c.media.EnableOut()
+		// c.media.EnableTimeout(true)
+		// c.media.EnableOut()
 		if ok, err := c.waitMedia(ctx); !ok {
 			return false, err
 		}
@@ -914,11 +912,11 @@ func (c *inboundCall) handleInvite(ctx context.Context, tid traceid.ID, req *sip
 	}
 
 	// Publish our own track.
-	if err := c.publishTrack(); err != nil {
-		c.log().Errorw("Cannot publish track", err)
-		c.close(true, callDropped, "publish-failed")
-		return errors.Wrap(err, "publishing track to room failed")
-	}
+	// if err := c.publishTrack(); err != nil {
+	// 	c.log().Errorw("Cannot publish track", err)
+	// 	c.close(true, callDropped, "publish-failed")
+	// 	return errors.Wrap(err, "publishing track to room failed")
+	// }
 	c.lkRoom.Subscribe()
 	if err := c.medias.Start(); err != nil {
 		c.log().Errorw("Cannot start media orchestrator", err)
@@ -968,8 +966,8 @@ func (c *inboundCall) handleInvite(ctx context.Context, tid traceid.ID, req *sip
 			})
 			c.close(false, callDropped, "removed")
 			return nil
-		case <-c.media.Timeout():
-			return c.mediaTimeout()
+		// case <-c.media.Timeout():
+		// 	return c.mediaTimeout()
 		case <-ackReceived:
 			ackTimeout = nil // all good, disable timeout
 			ackReceived = nil
@@ -977,7 +975,7 @@ func (c *inboundCall) handleInvite(ctx context.Context, tid traceid.ID, req *sip
 			// Only warn, the other side still thinks the call is active, media may be flowing.
 			c.log().Warnw("Call accepted, but no ACK received", errNoACK)
 			// We don't need to wait for a full media timeout initially, we already know something is not quite right.
-			c.media.SetTimeout(min(inviteOkAckLateTimeout, c.s.conf.MediaTimeoutInitial), c.s.conf.MediaTimeout)
+			// c.media.SetTimeout(min(inviteOkAckLateTimeout, c.s.conf.MediaTimeoutInitial), c.s.conf.MediaTimeout)
 		}
 	}
 }
@@ -1003,18 +1001,18 @@ func (c *inboundCall) runMediaConn(tid traceid.ID, offerData []byte, enc livekit
 		NoInputResample:     !RoomResample,
 	}
 
-	mp, err := NewMediaPort(tid, c.log(), c.mon, opts, RoomSampleRate)
-	if err != nil {
-		return nil, err
-	}
-	c.media = mp
-	c.media.EnableTimeout(false) // enabled once we accept the call
-	c.media.DisableOut()         // disabled until we send 200
-	c.media.SetDTMFAudio(conf.AudioDTMF)
+	// mp, err := NewMediaPort(tid, c.log(), c.mon, opts, RoomSampleRate)
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// c.media = mp
+	// c.media.EnableTimeout(false) // enabled once we accept the call
+	// c.media.DisableOut()         // disabled until we send 200
+	// c.media.SetDTMFAudio(conf.AudioDTMF)
 
-	audioinfo := NewAudioInfo(c.media)
+	// audioinfo := NewAudioInfo(c.media)
 
-	orchestrator, err := NewMediaOrchestrator(c.log(), c.ctx, c.cc, c.lkRoom.(*Room), audioinfo, opts)
+	orchestrator, err := NewMediaOrchestrator(c.log(), c.ctx, c.cc, c.lkRoom.(*Room), opts)
 	if err != nil {
 		c.log().Errorw("Cannot create media orchestrator", err)
 		return nil, err
@@ -1022,18 +1020,18 @@ func (c *inboundCall) runMediaConn(tid traceid.ID, offerData []byte, enc livekit
 	c.medias = orchestrator
 	c.lkRoom.(*Room).SetCallbacks(orchestrator)
 
-	offer, err := sdpv2.NewSDP(offerData)
-	if err != nil {
-		c.log().Errorw("Cannot parse SDP offer", err)
-		return nil, err
-	}
+	// offer, err := sdpv2.NewSDP(offerData)
+	// if err != nil {
+	// 	c.log().Errorw("Cannot parse SDP offer", err)
+	// 	return nil, err
+	// }
 
-	if offer.Audio == nil {
-		c.log().Errorw("No audio in SDP offer", err)
-		return nil, sdp.ErrNoCommonMedia
-	}
+	// if offer.Audio == nil {
+	// 	c.log().Errorw("No audio in SDP offer", err)
+	// 	return nil, sdp.ErrNoCommonMedia
+	// }
 
-	answer, err := c.medias.AnswerSDP(offer)
+	answerData, err = c.medias.AnswerSDP(offerData)
 	if err != nil {
 		c.log().Errorw("Cannot create SDP answer", err)
 		return nil, err
@@ -1052,37 +1050,37 @@ func (c *inboundCall) runMediaConn(tid traceid.ID, offerData []byte, enc livekit
 	// 	return nil, SDPError{Err: err}
 	// }
 
-	mc, err := answer.V1MediaConfig(netip.AddrPortFrom(offer.Addr, offer.Audio.Port))
-	if err != nil {
-		return nil, err
-	}
+	// mc, err := answer.V1MediaConfig(netip.AddrPortFrom(offer.Addr, offer.Audio.Port))
+	// if err != nil {
+	// 	return nil, err
+	// }
 
-	mconf := &MediaConf{MediaConfig: mc}
-	answerData, err = answer.Marshal()
-	if err != nil {
-		return nil, err
-	}
+	// mconf := &MediaConf{MediaConfig: mc}
+	// answerData, err = answer.Marshal()
+	// if err != nil {
+	// 	return nil, err
+	// }
 	c.mon.SDPSize(len(answerData), false)
 	c.log().Debugw("SDP answer", "sdp", string(answerData))
 
-	mconf.Processor = c.s.handler.GetMediaProcessor(features)
-	if err = c.media.SetConfig(mconf); err != nil {
-		return nil, err
-	}
-	if mconf.Audio.DTMFType != 0 {
-		c.media.HandleDTMF(c.handleDTMF)
-	}
+	// mconf.Processor = c.s.handler.GetMediaProcessor(features)
+	// if err = c.media.SetConfig(mconf); err != nil {
+	// 	return nil, err
+	// }
+	// if mconf.Audio.DTMFType != 0 {
+	// 	c.media.HandleDTMF(c.handleDTMF)
+	// }
 
 	// Must be set earlier to send the pin prompts.
-	if w := c.lkRoom.SwapOutput(c.media.GetAudioWriter()); w != nil {
-		_ = w.Close()
-	}
-	if mconf.Audio.DTMFType != 0 {
-		c.lkRoom.SetDTMFOutput(c.media)
-	}
-	c.state.DeferUpdate(func(info *livekit.SIPCallInfo) {
-		info.AudioCodec = mconf.Audio.Codec.Info().SDPName
-	})
+	// if w := c.lkRoom.SwapOutput(c.media.GetAudioWriter()); w != nil {
+	// 	_ = w.Close()
+	// }
+	// if mconf.Audio.DTMFType != 0 {
+	// 	c.lkRoom.SetDTMFOutput(c.media)
+	// }
+	// c.state.DeferUpdate(func(info *livekit.SIPCallInfo) {
+	// 	info.AudioCodec = mconf.Audio.Codec.Info().SDPName
+	// })
 	return answerData, nil
 }
 
@@ -1108,9 +1106,9 @@ func (c *inboundCall) waitMedia(ctx context.Context) (bool, error) {
 	case <-c.lkRoom.Closed():
 		c.closeWithHangup()
 		return false, psrpc.NewErrorf(psrpc.Canceled, "room closed")
-	case <-c.media.Timeout():
-		return false, c.mediaTimeout()
-	case <-c.media.Received():
+	// case <-c.media.Timeout():
+	// 	return false, c.mediaTimeout()
+	// case <-c.media.Received():
 	case <-delay.C:
 	}
 	return true, nil
@@ -1131,8 +1129,8 @@ func (c *inboundCall) waitSubscribe(ctx context.Context, timeout time.Duration) 
 	case <-c.lkRoom.Closed():
 		c.closeWithHangup()
 		return false, psrpc.NewErrorf(psrpc.Canceled, "room closed")
-	case <-c.media.Timeout():
-		return false, c.mediaTimeout()
+	// case <-c.media.Timeout():
+	// 	return false, c.mediaTimeout()
 	case <-timer.C:
 		c.close(false, callDropped, "cannot-subscribe")
 		return false, psrpc.NewErrorf(psrpc.DeadlineExceeded, "room subscription timed out")
@@ -1157,8 +1155,8 @@ func (c *inboundCall) pinPrompt(ctx context.Context, trunkID string) (disp CallD
 		case <-ctx.Done():
 			c.closeWithHangup()
 			return disp, false, nil
-		case <-c.media.Timeout():
-			return disp, false, c.mediaTimeout()
+		// case <-c.media.Timeout():
+		// 	return disp, false, c.mediaTimeout()
 		case b, ok := <-c.dtmf:
 			if !ok {
 				c.Close()
@@ -1325,9 +1323,9 @@ func (c *inboundCall) Close() error {
 
 func (c *inboundCall) closeMedia() {
 	c.lkRoom.Close()
-	if c.media != nil {
-		c.media.Close()
-	}
+	// if c.media != nil {
+	// 	c.media.Close()
+	// }
 }
 
 func (c *inboundCall) setStatus(v CallStatus) {
@@ -1378,15 +1376,15 @@ func (c *inboundCall) createLiveKitParticipant(ctx context.Context, rconf RoomCo
 	return nil
 }
 
-func (c *inboundCall) publishTrack() error {
-	local, err := c.lkRoom.NewParticipantTrack(RoomSampleRate)
-	if err != nil {
-		_ = c.lkRoom.Close()
-		return err
-	}
-	c.media.WriteAudioTo(local)
-	return nil
-}
+// func (c *inboundCall) publishTrack() error {
+// 	local, err := c.lkRoom.NewParticipantTrack(RoomSampleRate)
+// 	if err != nil {
+// 		_ = c.lkRoom.Close()
+// 		return err
+// 	}
+// 	c.media.WriteAudioTo(local)
+// 	return nil
+// }
 
 func (c *inboundCall) joinRoom(ctx context.Context, rconf RoomConfig, status CallStatus) error {
 	if c.joinDur != nil {
@@ -1449,28 +1447,28 @@ func (c *inboundCall) transferCall(ctx context.Context, transferTo string, heade
 
 	if dialtone && c.started.IsBroken() && !c.done.Load() {
 		const ringVolume = math.MaxInt16 / 2
-		rctx, rcancel := context.WithCancel(ctx)
-		defer rcancel()
+		// rctx, rcancel := context.WithCancel(ctx)
+		// defer rcancel()
 
 		// mute the room audio to the SIP participant
-		w := c.lkRoom.SwapOutput(nil)
+		// w := c.lkRoom.SwapOutput(nil)
 
-		defer func() {
-			if retErr != nil && !c.done.Load() {
-				c.lkRoom.SwapOutput(w)
-			} else if w != nil {
-				w.Close()
-			}
-		}()
+		// defer func() {
+		// 	if retErr != nil && !c.done.Load() {
+		// 		c.lkRoom.SwapOutput(w)
+		// 	} else if w != nil {
+		// 		w.Close()
+		// 	}
+		// }()
 
-		go func() {
-			aw := c.media.GetAudioWriter()
+		// go func() {
+		// 	aw := c.media.GetAudioWriter()
 
-			err := tones.Play(rctx, aw, ringVolume, tones.ETSIRinging)
-			if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-				c.log().Infow("cannot play dial tone", "error", err)
-			}
-		}()
+		// 	err := tones.Play(rctx, aw, ringVolume, tones.ETSIRinging)
+		// 	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		// 		c.log().Infow("cannot play dial tone", "error", err)
+		// 	}
+		// }()
 	}
 
 	err = c.cc.TransferCall(ctx, transferTo, headers)

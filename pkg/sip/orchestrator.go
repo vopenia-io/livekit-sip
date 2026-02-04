@@ -9,15 +9,26 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/go-gst/go-gst/gst"
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
 	"github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/livekit/sip/pkg/sip/pipeline"
+	"github.com/vopenia-io/go-pjmedia/pj"
 )
 
 var (
 	ErrWrongState = errors.New("media orchestrator in wrong state")
 )
+
+var doInitCodecs sync.Once
+
+func initCodecs() {
+	doInitCodecs.Do(func() {
+		pj.RegisterG711Codec(pj.DefaultPjEndpt())
+		pj.RegisterH264Codec(pj.DefaultPjEndpt())
+	})
+}
 
 const (
 	ScreenshareMSTreamID = 2
@@ -74,15 +85,16 @@ type MediaOrchestrator struct {
 	dispatchOK atomic.Bool
 	wg         sync.WaitGroup
 
-	audioinfo AudioInfo
-	video     *VideoManager
-	bfcp      *BFCPManager
+	pjpool *pj.PjPool
 
-	sdp   *sdpv2.SDP
+	pipeline *pipeline.Pipeline
+	// bfcp     *BFCPManager
+
 	state MediaState
 }
 
-func NewMediaOrchestrator(log logger.Logger, ctx context.Context, inbound *sipInbound, room *Room, audioinfo AudioInfo, opts *MediaOptions) (*MediaOrchestrator, error) {
+func NewMediaOrchestrator(log logger.Logger, ctx context.Context, inbound *sipInbound, room *Room, opts *MediaOptions) (*MediaOrchestrator, error) {
+	initCodecs()
 	ctx, cancel := context.WithCancel(ctx)
 	o := &MediaOrchestrator{
 		ctx:        ctx,
@@ -91,7 +103,6 @@ func NewMediaOrchestrator(log logger.Logger, ctx context.Context, inbound *sipIn
 		opts:       opts,
 		inbound:    inbound,
 		dispatchCH: make(chan dispatchOperation, 1),
-		audioinfo:  audioinfo,
 		state:      MediaStateNew,
 	}
 
@@ -115,13 +126,23 @@ func (o *MediaOrchestrator) init(room *Room) error {
 		return err
 	}
 
-	video, err := NewVideoManager(o.log.WithComponent("video"), o.ctx, o.opts)
+	pipeline, err := pipeline.New(o.ctx, o.log, pipeline.SipOpt{
+		IP:        o.opts.IP.String(),
+		PortStart: uint16(o.opts.Ports.Start),
+		PortEnd:   uint16(o.opts.Ports.End),
+	})
 	if err != nil {
-		return fmt.Errorf("could not create video manager: %w", err)
+		return fmt.Errorf("could not create pipeline: %w", err)
 	}
-	o.video = video
+	o.pipeline = pipeline
 
-	o.bfcp = NewBFCPManager(o.ctx, o.log, o.opts, o.inbound)
+	pipeline.Monitor()
+
+	// o.bfcp = NewBFCPManager(o.ctx, o.log, o.opts, o.inbound)
+
+	if err := o.pipeline.SetStateWait(gst.StateReady); err != nil {
+		return fmt.Errorf("failed to set pipeline to ready state: %w", err)
+	}
 
 	o.state = MediaStateOK
 
@@ -205,11 +226,11 @@ func (o *MediaOrchestrator) dispatchLoop() {
 
 func (o *MediaOrchestrator) close() error {
 	var bfcpErr error
-	if o.bfcp != nil {
-		bfcpErr = o.bfcp.Close()
-	}
+	// if o.bfcp != nil {
+	// 	bfcpErr = o.bfcp.Close()
+	// }
 	err := errors.Join(
-		o.video.Close(),
+		o.pipeline.Close(),
 		bfcpErr,
 	)
 	o.cancel()
@@ -232,17 +253,20 @@ func (o *MediaOrchestrator) Close() error {
 // GetRoom implements [RoomCallbacks].
 func (o *MediaOrchestrator) JoinRoom(wsUrl, token string, callbacks *lksdk.RoomCallback, opts ...lksdk.ConnectOption) (*lksdk.Room, error) {
 	var errs []error
-	room, err := o.video.GetRoom()
+	room, err := o.pipeline.GetRoom()
+	if err != nil || room == nil {
+		return nil, fmt.Errorf("could not get room from pipeline: %w", err)
+	}
 	errs = append(errs, err)
-	errs = append(errs, o.video.SetRoomCallbacks(callbacks))
-	errs = append(errs, o.video.SetRoomOptions(wsUrl, token, opts...))
+	errs = append(errs, o.pipeline.SetRoomCallbacks(callbacks))
+	errs = append(errs, o.pipeline.SetRoomOptions(wsUrl, token, opts...))
 	if err := errors.Join(errs...); err != nil {
 		return nil, fmt.Errorf("could not join room: %w", err)
 	}
 	return room, nil
 }
 
-func (o *MediaOrchestrator) AnswerSDP(offer *sdpv2.SDP) (answer *sdpv2.SDP, err error) {
+func (o *MediaOrchestrator) AnswerSDP(offer []byte) (answer []byte, err error) {
 	if err := o.okStates(MediaStateFailed, MediaStateOK, MediaStateReady, MediaStateStarted); err != nil {
 		return nil, err
 	}
@@ -254,137 +278,120 @@ func (o *MediaOrchestrator) AnswerSDP(offer *sdpv2.SDP) (answer *sdpv2.SDP, err 
 	}
 	return answer, nil
 }
-func (o *MediaOrchestrator) answerSDP(offer *sdpv2.SDP) (*sdpv2.SDP, error) {
-	o.log.Debugw("answering sdp", "offer", offer)
-	if offer.Audio == nil {
-		return nil, fmt.Errorf("no audio in offer")
-	}
 
-	if err := offer.Audio.SelectCodec(); err != nil {
-		return nil, fmt.Errorf("could not select audio codec: %w", err)
-	}
-	o.log.Debugw("selected audio codec", "codec", offer.Audio.Codec)
-
-	o.audioinfo.SetMedia(offer.Audio)
-
-	if offer.Video != nil {
-		if err := offer.Video.SelectCodec(); err != nil {
-			return nil, fmt.Errorf("could not select video codec: %w", err)
-		}
-		o.log.Debugw("selected video codec", "codec", offer.Video.Codec)
-	}
-
-	o.sdp = offer
-
-	if err := o.setupSDP(offer); err != nil {
-		o.log.Errorw("could not setup sdp", err)
-		return nil, fmt.Errorf("could not setup sdp: %w", err)
-	}
-	o.log.Debugw("setup sdp complete")
-
-	answer, err := o.offerSDP(offer.Video != nil, offer.BFCP != nil, (offer.Screenshare != nil || (offer.Video != nil && offer.BFCP != nil)))
+func (o *MediaOrchestrator) answerSDP(offerData []byte) ([]byte, error) {
+	res, err := o.pipeline.SipManager.Emit("on-remote-offer", string(offerData))
 	if err != nil {
-		return nil, fmt.Errorf("could not create answer sdp: %w", err)
+		o.log.Errorw("failed to emit on-remote-offer", err)
+		return nil, fmt.Errorf("failed to emit on-remote-offer: %w", err)
 	}
-	o.log.Debugw("created answer sdp", "answer", answer)
+	answerStr, ok := res.(string)
+	if !ok {
+		o.log.Errorw("on-remote-offer did not return a string", nil, "value", res)
+		return nil, fmt.Errorf("on-remote-offer did not return a string")
+	}
+	if answerStr == "" {
+		o.log.Errorw("on-remote-offer returned an empty answer", nil)
+		return nil, fmt.Errorf("on-remote-offer returned an empty answer")
+	}
 
 	o.state = MediaStateReady
 
-	return answer, nil
+	return []byte(answerStr), nil
 }
 
-func (o *MediaOrchestrator) offerSDP(camera bool, bfcp bool, screenshare bool) (*sdpv2.SDP, error) {
-	builder := (&sdpv2.SDP{}).Builder()
+// func (o *MediaOrchestrator) offerSDP(camera bool, bfcp bool, screenshare bool) (*sdpv2.SDP, error) {
+// 	builder := (&sdpv2.SDP{}).Builder()
 
-	builder.SetAddress(o.opts.IP)
+// 	builder.SetAddress(o.opts.IP)
 
-	// audio is required anyway
-	builder.SetAudio(func(b *sdpv2.SDPMediaBuilder) (*sdpv2.SDPMedia, error) {
-		codec := o.audioinfo.Codec()
-		if codec == nil {
-			for _, c := range o.audioinfo.AvailableCodecs() {
-				b.AddCodec(func(_ *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
-					return c, nil
-				}, false)
-			}
-		} else {
-			b.AddCodec(func(_ *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
-				return codec, nil
-			}, true)
-		}
-		return b.
-			SetRTPPort(uint16(o.audioinfo.Port())).
-			Build()
-	}).Build()
+// 	// audio is required anyway
+// 	// builder.SetAudio(func(b *sdpv2.SDPMediaBuilder) (*sdpv2.SDPMedia, error) {
+// 	// 	codec := o.audioinfo.Codec()
+// 	// 	if codec == nil {
+// 	// 		for _, c := range o.audioinfo.AvailableCodecs() {
+// 	// 			b.AddCodec(func(_ *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
+// 	// 				return c, nil
+// 	// 			}, false)
+// 	// 		}
+// 	// 	} else {
+// 	// 		b.AddCodec(func(_ *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
+// 	// 			return codec, nil
+// 	// 		}, true)
+// 	// 	}
+// 	// 	return b.
+// 	// 		SetRTPPort(uint16(o.audioinfo.Port())).
+// 	// 		Build()
+// 	// }).Build()
 
-	if bfcp && o.bfcp != nil {
-		if screenshare {
-			builder.SetBFCP(func(b *sdpv2.SDPBfcpBuilder) (*sdpv2.SDPBfcp, error) {
-				return b.
-					SetPort(o.bfcp.Port()).
-					SetConnection(sdpv2.BfcpConnectionNew).
-					SetProto(sdpv2.BfcpProtoTCP).
-					SetFloorCtrl(sdpv2.BfcpFloorCtrlServer).
-					SetSetup(sdpv2.BfcpSetupPassive).
-					SetConfID(o.bfcp.config.ConferenceID).
-					SetUserID(1).
-					SetMStreamID(ScreenshareMSTreamID).
-					Build()
-			})
-		}
-	}
+// 	// if bfcp && o.bfcp != nil {
+// 	// 	if screenshare {
+// 	// 		builder.SetBFCP(func(b *sdpv2.SDPBfcpBuilder) (*sdpv2.SDPBfcp, error) {
+// 	// 			return b.
+// 	// 				SetPort(o.bfcp.Port()).
+// 	// 				SetConnection(sdpv2.BfcpConnectionNew).
+// 	// 				SetProto(sdpv2.BfcpProtoTCP).
+// 	// 				SetFloorCtrl(sdpv2.BfcpFloorCtrlServer).
+// 	// 				SetSetup(sdpv2.BfcpSetupPassive).
+// 	// 				SetConfID(o.bfcp.config.ConferenceID).
+// 	// 				SetUserID(1).
+// 	// 				SetMStreamID(ScreenshareMSTreamID).
+// 	// 				Build()
+// 	// 		})
+// 	// 	}
+// 	// }
 
-	if camera {
-		builder.SetVideo(func(b *sdpv2.SDPMediaBuilder) (*sdpv2.SDPMedia, error) {
-			codec := o.video.Codec()
-			if codec == nil {
-				for _, c := range o.video.SupportedCodecs() {
-					b.AddCodec(func(_ *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
-						return c, nil
-					}, false)
-				}
-			} else {
-				b.AddCodec(func(_ *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
-					return codec, nil
-				}, true)
-			}
-			b.SetDisabled(o.video.Status() < VideoStatusReady)
-			// b.SetDisabled(false)
-			b.SetRTPPort(uint16(o.video.RtpPort()))
-			b.SetRTCPPort(uint16(o.video.RtcpPort()))
-			b.SetDirection(o.video.Direction())
-			return b.Build()
-		})
-	}
+// 	// if camera {
+// 	// 	builder.SetVideo(func(b *sdpv2.SDPMediaBuilder) (*sdpv2.SDPMedia, error) {
+// 	// 		codec := o.video.Codec()
+// 	// 		if codec == nil {
+// 	// 			for _, c := range o.video.SupportedCodecs() {
+// 	// 				b.AddCodec(func(_ *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
+// 	// 					return c, nil
+// 	// 				}, false)
+// 	// 			}
+// 	// 		} else {
+// 	// 			b.AddCodec(func(_ *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
+// 	// 				return codec, nil
+// 	// 			}, true)
+// 	// 		}
+// 	// 		b.SetDisabled(o.video.Status() < VideoStatusReady)
+// 	// 		// b.SetDisabled(false)
+// 	// 		b.SetRTPPort(uint16(o.video.RtpPort()))
+// 	// 		b.SetRTCPPort(uint16(o.video.RtcpPort()))
+// 	// 		b.SetDirection(o.video.Direction())
+// 	// 		return b.Build()
+// 	// 	})
+// 	// }
 
-	offer, err := builder.Build()
-	if err != nil {
-		return nil, fmt.Errorf("could create a new sdp: %w", err)
-	}
-	o.log.Debugw("created offer sdp", "offer", offer)
+// 	// offer, err := builder.Build()
+// 	// if err != nil {
+// 	// 	return nil, fmt.Errorf("could create a new sdp: %w", err)
+// 	// }
+// 	// o.log.Debugw("created offer sdp", "offer", offer)
 
-	return offer, nil
-}
+// 	return nil, nil
+// }
 
-func (o *MediaOrchestrator) setupSDP(sdp *sdpv2.SDP) error {
-	o.log.Debugw("setting up sdp", "sdp", sdp)
+// func (o *MediaOrchestrator) setupSDP(sdp *sdpv2.SDP) error {
+// 	o.log.Debugw("setting up sdp", "sdp", sdp)
 
-	o.log.Debugw("reconciling camera")
-	if _, err := o.video.Reconcile(sdp.Addr, sdp.Video); err != nil {
-		o.log.Errorw("could not reconcile video sdp", err)
-		return fmt.Errorf("could not reconcile video sdp: %w", err)
-	}
-	return nil
-}
+// 	o.log.Debugw("reconciling camera")
+// 	if _, err := o.video.Reconcile(sdp.Addr, sdp.Video); err != nil {
+// 		o.log.Errorw("could not reconcile video sdp", err)
+// 		return fmt.Errorf("could not reconcile video sdp: %w", err)
+// 	}
+// 	return nil
+// }
 
 func (o *MediaOrchestrator) start() error {
-	if o.video.Status() == VideoStatusReady {
-		o.log.Debugw("starting camera")
-		if err := o.video.Start(); err != nil {
-			o.log.Errorw("could not start camera", err)
-			return fmt.Errorf("could not start camera: %w", err)
-		}
-	}
+	// if o.video.Status() == VideoStatusReady {
+	// 	o.log.Debugw("starting camera")
+	// 	if err := o.video.Start(); err != nil {
+	// 		o.log.Errorw("could not start camera", err)
+	// 		return fmt.Errorf("could not start camera: %w", err)
+	// 	}
+	// }
 
 	o.state = MediaStateStarted
 	return nil

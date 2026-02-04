@@ -3,7 +3,6 @@ package pipeline
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"regexp"
 	"time"
 
@@ -33,7 +32,7 @@ func (p *Pipeline) Monitor() {
 		prevDot := ""
 
 		for !p.closed.IsBroken() {
-			dotData := p.Pipeline().DebugBinToDotData(gst.DebugGraphShowCapsDetails | gst.DebugGraphShowStates)
+			dotData := p.Pipeline().DebugBinToDotData(gst.DebugGraphShowVerbose)
 			dotData = sanitizeDot(dotData)
 
 			if dotData != prevDot {
@@ -45,12 +44,6 @@ func (p *Pipeline) Monitor() {
 				dotFile.Sync()
 
 				time.Sleep(100 * time.Millisecond)
-
-				err := exec.Command("dot", "-Tsvg", fmt.Sprintf("%s_pipeline_live.dot", name), "-o", fmt.Sprintf("%s_pipeline_live.svg", name)).Run()
-				if err != nil {
-					fmt.Printf("failed to generate svg from dot: %v\n", err)
-					continue
-				}
 			}
 
 			time.Sleep(500 * time.Millisecond)

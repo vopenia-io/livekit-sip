@@ -16,10 +16,10 @@ func (s *lkroom) SometimesTrackAdded(track *webrtc.TrackRemote, pub *lksdk.Remot
 		return
 	}
 
-	if kind == uint(livekit.TrackSource_MICROPHONE) {
-		s.self.Log(CAT, gst.LevelInfo, "SometimesTrackAdded called for audio track - ignoring")
-		return
-	}
+	// if kind == uint(livekit.TrackSource_MICROPHONE) {
+	// 	s.self.Log(CAT, gst.LevelInfo, "SometimesTrackAdded called for audio track - ignoring")
+	// 	return
+	// }
 
 	ssrc := track.SSRC()
 	padname := fmt.Sprintf("src_%d_%d", kind, ssrc)

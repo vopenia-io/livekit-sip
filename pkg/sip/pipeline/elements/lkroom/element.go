@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
+	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/webrtc/v4"
 )
@@ -139,11 +140,19 @@ func (*lkroom) ClassInit(klass *glib.ObjectClass) {
 	)
 
 	CAT.Log(gst.LevelDebug, "Adding pad template")
-	class.AddPadTemplate(gst.NewPadTemplate(
-		"sink_camera",
-		gst.PadDirectionSink,
-		gst.PadPresenceRequest,
-		gst.NewCapsFromString("application/x-rtp")))
+
+	for _, kind := range []livekit.TrackSource{ // dirty hack to allow auto id with static kind
+		livekit.TrackSource_CAMERA,
+		livekit.TrackSource_MICROPHONE,
+		livekit.TrackSource_SCREEN_SHARE,
+		livekit.TrackSource_SCREEN_SHARE_AUDIO,
+	} {
+		class.AddPadTemplate(gst.NewPadTemplate(
+			fmt.Sprintf("sink_%d_%%u", kind),
+			gst.PadDirectionSink,
+			gst.PadPresenceRequest,
+			gst.NewCapsFromString("application/x-rtp")))
+	}
 
 	class.AddPadTemplate(gst.NewPadTemplate(
 		"sink_rtcp",
@@ -322,9 +331,7 @@ func (s *lkroom) Constructed(instance *glib.Object) {
 		self := gst.ToGstBin(instance)
 		err := s.joinRoom(self)
 		if err := self.SetLockedState(false); err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Could not unlock element state: %v", err))
-			self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Could not unlock element state", err.Error())
-			return false
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Could not unlock element state: %v", err))
 		}
 		if err == nil {
 			self.ParentChangeState(gst.StateChangeReadyToPaused)
@@ -450,24 +457,16 @@ func (s *lkroom) ChangeState(instance *gst.Element, transition gst.StateChange) 
 	return ret
 }
 
-func (s *lkroom) startCamera(self *gst.Bin) *gst.Pad {
+func (s *lkroom) startTrack(self *gst.Bin, cfg TrackCfg) *gst.Pad {
 	self.Log(CAT, gst.LevelDebug, "startCamera")
-	camera, err := gst.NewElement("lkroom_sinkcamera")
+	sink, err := NewTrackSink(s, cfg)
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating sink_camera %v", err))
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating sink_camera: %v", err))
 		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error creating sink_camera", err.Error())
 		return nil
 	}
 
-	if obj, ok := gst.SubclassFromElement[*sinkCamera](camera); ok {
-		obj.parent = s
-	} else {
-		self.Log(CAT, gst.LevelError, "Error casting sink_camera to sinkCamera subclass")
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error casting sink_camera to sinkCamera subclass", "type assertion failed")
-		return nil
-	}
-
-	if err := self.Add(camera); err != nil {
+	if err := self.Add(sink); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error adding sink_camera to bin: %v", err))
 		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error adding sink_camera to bin", err.Error())
 		return nil
@@ -475,29 +474,63 @@ func (s *lkroom) startCamera(self *gst.Bin) *gst.Pad {
 
 	class := gst.ToElementClass(self.Class())
 
-	pad := camera.GetStaticPad("sink")
+	pname := fmt.Sprintf("sink_%d_%d", cfg.Kind, cfg.ID)
+	tmplname := fmt.Sprintf("sink_%d_%%u", cfg.Kind)
+	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Creating ghost pad %s", pname))
 
-	gsinkCamera := gst.NewGhostPadFromTemplate("sink_camera", pad, class.GetPadTemplate("sink_camera"))
-	self.AddPad(gsinkCamera.Pad)
+	pad := sink.GetStaticPad("sink")
+	gsinkSink := gst.NewGhostPadFromTemplate(pname, pad, class.GetPadTemplate(tmplname))
+	self.AddPad(gsinkSink.Pad)
 
-	if !camera.SyncStateWithParent() {
-		self.Log(CAT, gst.LevelError, "Failed to sync sink_camera state with parent")
+	if !sink.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelError, "Failed to sync sink_sink state with parent")
 	}
 
-	return gsinkCamera.Pad
+	return gsinkSink.Pad
 }
 
 func (s *lkroom) RequestNewPad(instance *gst.Element, templ *gst.PadTemplate, name string, caps *gst.Caps) *gst.Pad {
 	self := gst.ToGstBin(instance)
-	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("RequestNewPad: %s", name))
 
-	switch templ.Name() {
-	case "sink_camera":
-		return s.startCamera(self)
+	if name != "" {
+		return self.GetStaticPad(name)
 	}
 
-	self.Log(CAT, gst.LevelError, fmt.Sprintf("Unknown pad template requested: %s", templ.Name()))
-	return nil
+	name = templ.Name()
+
+	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("RequestNewPad: %s (%d) => %+v", name, len(name), []byte(name)))
+
+	var kindID int
+	if _, err := fmt.Sscanf(name, "sink_%d_%%u", &kindID); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to parse track config from pad name %q: %v", name, err))
+		return nil
+	}
+
+	kind := livekit.TrackSource(kindID)
+	switch kind {
+	case livekit.TrackSource_CAMERA,
+		livekit.TrackSource_MICROPHONE:
+	default:
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unsupported track source %d (%s) for pad %s", kind, kind.String(), name))
+		return nil
+	}
+
+	id := 0
+	for {
+		if self.GetStaticPad(fmt.Sprintf("sink_%d_%d", kindID, id)) == nil {
+			break
+		}
+		id++
+	}
+
+	fmt.Printf("RequestNewPad: kind=%d id=%d\n", kindID, id)
+
+	cfg := TrackCfg{
+		Kind: kind,
+		ID:   uint(id),
+	}
+
+	return s.startTrack(self, cfg)
 }
 
 func (s *lkroom) ReleasePad(instance *gst.Element, pad *gst.Pad) {

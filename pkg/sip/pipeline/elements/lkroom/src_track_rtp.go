@@ -11,18 +11,32 @@ import (
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/base"
-	lksdk "github.com/livekit/server-sdk-go/v2"
-	"github.com/pion/webrtc/v4"
 )
 
-const VP8CAPS = "application/x-rtp, media=(string)video, encoding-name=(string)VP8, payload=(int)96, clock-rate=(int)90000"
+func NewSrcTrackRtp(parent *SrcTrack) (*gst.Element, error) {
+	// println("Creating new SrcTrackRtp element")
+	element, err := gst.NewElement("lkroom_srctrack_rtp")
+	// println("Created element")
+	if err != nil {
+		// println("Error creating element:", err.Error())
+		return nil, err
+	}
+	// println("Casting element to SrcTrackRtp subclass")
+	src, ok := gst.SubclassFromElement[*SrcTrackRtp](element)
+	// println("Casted element to SrcTrackRtp subclass")
+	if !ok {
+		// println("Failed to cast element to SrcTrackRtp subclass")
+		return nil, fmt.Errorf("failed to cast element to sinkTrack")
+	}
+	// println("Setting parent SrcTrack")
+	src.parent = parent
+	// println("Returning SrcTrackRtp element")
+
+	return element, nil
+}
 
 type SrcTrackRtp struct {
 	parent *SrcTrack
-
-	track *webrtc.TrackRemote
-	pub   *lksdk.RemoteTrackPublication
-	rp    *lksdk.RemoteParticipant
 }
 
 func (*SrcTrackRtp) New() glib.GoObjectSubclass {
@@ -43,7 +57,7 @@ func (*SrcTrackRtp) ClassInit(klass *glib.ObjectClass) {
 		"src",
 		gst.PadDirectionSource,
 		gst.PadPresenceAlways,
-		gst.NewCapsFromString(VP8CAPS)))
+		gst.NewCapsFromString("application/x-rtp")))
 }
 
 func (s *SrcTrackRtp) InstanceInit(instance *glib.Object) {
@@ -59,7 +73,24 @@ func (s *SrcTrackRtp) SetCaps(self *base.GstBaseSrc, caps *gst.Caps) bool {
 }
 
 func (s *SrcTrackRtp) GetCaps(self *base.GstBaseSrc, filter *gst.Caps) *gst.Caps {
-	caps := gst.NewCapsFromString(VP8CAPS)
+	codec := s.parent.track.Codec()
+
+	media, enc, ok := strings.Cut(codec.MimeType, "/")
+	if !ok {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid codec mime type: %s", codec.MimeType))
+		return nil
+	}
+
+	capsStr := "application/x-rtp"
+	capsStr += fmt.Sprintf(", media=(string)%s", strings.ToLower(media))
+	capsStr += fmt.Sprintf(", encoding-name=(string)%s", strings.ToUpper(enc))
+	capsStr += fmt.Sprintf(", payload=(int)%d", codec.PayloadType)
+	capsStr += fmt.Sprintf(", clock-rate=(int)%d", codec.ClockRate)
+	if codec.Channels > 0 {
+		capsStr += fmt.Sprintf(", channels=(int)%d", codec.Channels)
+	}
+
+	caps := gst.NewCapsFromString(capsStr)
 	if filter != nil && filter.Instance() != nil && !filter.IsEmpty() && !filter.IsAny() {
 		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("caps get filter: %s", filter.String()))
 		if intersect := caps.Intersect(filter); intersect != nil {
@@ -84,7 +115,7 @@ func (s *SrcTrackRtp) Start(self *base.GstBaseSrc) bool {
 func (s *SrcTrackRtp) Stop(self *base.GstBaseSrc) bool {
 	self.Log(CAT, gst.LevelDebug, "Stopping")
 
-	if err := s.pub.SetSubscribed(false); err != nil {
+	if err := s.parent.pub.SetSubscribed(false); err != nil {
 		if strings.Contains(err.Error(), "transport is not connected") {
 			self.Log(CAT, gst.LevelWarning, "Transport is not connected, skipping unsubscribe")
 			return true
@@ -106,7 +137,7 @@ func (s *SrcTrackRtp) Fill(self *base.GstBaseSrc, offset uint64, length uint, bu
 	ptr := mapInfo.Data()
 	data := unsafe.Slice((*byte)(ptr), length)
 
-	n, _, err := s.track.Read(data)
+	n, _, err := s.parent.track.Read(data)
 	if err != nil {
 		if err == io.EOF {
 			self.Log(CAT, gst.LevelInfo, "reached EOF")
@@ -128,7 +159,7 @@ func (s *SrcTrackRtp) Fill(self *base.GstBaseSrc, offset uint64, length uint, bu
 func (s *SrcTrackRtp) Unlock(self *base.GstBaseSrc) bool {
 	self.Log(CAT, gst.LevelInfo, "unlocked")
 
-	if err := s.track.SetReadDeadline(time.Now()); err != nil {
+	if err := s.parent.track.SetReadDeadline(time.Now()); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error setting read deadline on track: %v", err))
 		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error setting read deadline on track", err.Error())
 		return false

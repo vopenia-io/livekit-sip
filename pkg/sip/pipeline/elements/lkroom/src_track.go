@@ -53,8 +53,7 @@ func (s *SrcTrack) InstanceInit(instance *glib.Object) {
 	class := gst.ToElementClass(self.Class())
 
 	var err error
-
-	s.src, err = gst.NewElement("lkroom_srctrack_rtp")
+	s.src, err = NewSrcTrackRtp(s)
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating srctrack_rtp: %v", err))
 		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error creating srctrack_rtp", err.Error())
@@ -73,7 +72,7 @@ func (s *SrcTrack) InstanceInit(instance *glib.Object) {
 	// rtcp
 	rtcpPad := gst.NewPadFromTemplate(class.GetPadTemplate("src_rtcp"), "src_rtcp")
 	rtcpPad.UseFixedCaps()
-	gst.ToElement(instance).AddPad(rtcpPad)
+	self.AddPad(rtcpPad)
 }
 
 func (s *SrcTrack) open(self *gst.Bin) gst.StateChangeReturn {
@@ -85,22 +84,10 @@ func (s *SrcTrack) open(self *gst.Bin) gst.StateChangeReturn {
 		return gst.StateChangeFailure
 	}
 
-	if obj, ok := gst.SubclassFromElement[*SrcTrackRtp](s.src); ok {
-		obj.parent = s
-		obj.track = s.track
-		obj.pub = s.pub
-		obj.rp = s.rp
-	} else {
-		self.Log(CAT, gst.LevelError, "Error casting srctrack_rtp")
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error casting srctrack_rtp", "Internal error")
-		return gst.StateChangeFailure
-	}
-
-	// rtcp
 	rtcpPad := self.GetStaticPad("src_rtcp")
 	if rtcpPad == nil {
-		self.Log(CAT, gst.LevelError, "Failed to get src_rtcp pad")
-		self.Error("Failed to get src_rtcp pad", errors.New("src_rtcp pad is nil"))
+		self.Log(CAT, gst.LevelError, "Error getting src_rtcp pad from srcTrack element")
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error getting src_rtcp pad from srcTrack element", "pad is nil")
 		return gst.StateChangeFailure
 	}
 
@@ -253,7 +240,7 @@ func (s *SrcTrack) onRtcp(self *gst.Bin, rtcpPad *gst.Pad) func(p rtcp.Packet) {
 			return
 		}
 
-		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Pushing RTCP packet: %T", filtered))
+		self.Log(CAT, gst.LevelTrace, fmt.Sprintf("Pushing RTCP packet: %T", filtered))
 
 		raw, err := filtered.Marshal()
 		if err != nil {
@@ -264,6 +251,10 @@ func (s *SrcTrack) onRtcp(self *gst.Bin, rtcpPad *gst.Pad) func(p rtcp.Packet) {
 
 		buf := gst.NewBufferFromBytes(raw)
 		if ret := rtcpPad.Push(buf); ret != gst.FlowOK {
+			if ret == gst.FlowNotLinked {
+				self.Log(CAT, gst.LevelDebug, "RTCP pad is not linked, dropping RTCP packet")
+				return
+			}
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to push RTCP buffer: %v", ret))
 			self.Error("Failed to push RTCP buffer", errors.New("push buffer failed"))
 		}

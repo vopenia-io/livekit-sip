@@ -10,14 +10,11 @@ import (
 	"github.com/frostbyte73/core"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/logger"
-	"github.com/livekit/sip/pkg/sip/pipeline/event"
 )
 
 type Pipeline struct {
 	Log      logger.Logger
 	pipeline *gst.Pipeline
-	loop     *event.EventLoop
-	ctx      context.Context
 	closed   core.Fuse
 	cleanup  func() error
 
@@ -32,10 +29,6 @@ type GstChain interface {
 	Add() error
 	Link() error
 	Close() error
-}
-
-func (p *Pipeline) Loop() *event.EventLoop {
-	return p.loop
 }
 
 func (p *Pipeline) Pipeline() *gst.Pipeline {
@@ -91,7 +84,6 @@ func (p *Pipeline) Close() error {
 	}
 	p.closed.Break()
 	p.Log.Debugw("Closing pipeline")
-	defer p.loop.Stop()
 
 	done := make(chan struct{})
 	var err error
@@ -181,7 +173,7 @@ func (p *Pipeline) Closed() bool {
 	return p.closed.IsBroken()
 }
 
-func New(ctx context.Context, log logger.Logger) (*Pipeline, error) {
+func New(ctx context.Context, log logger.Logger, sipOpt SipOpt) (*Pipeline, error) {
 	log.Debugw("Creating pipeline")
 	pipeline, err := gst.NewPipeline("")
 	if err != nil {
@@ -191,17 +183,14 @@ func New(ctx context.Context, log logger.Logger) (*Pipeline, error) {
 	p := &Pipeline{
 		Log:      log.WithComponent("pipeline"),
 		pipeline: pipeline,
-		loop:     event.NewEventLoop(ctx, log),
 	}
 	p.cleanup = p.cleanupChains
-
-	go p.Loop().Run()
 
 	p.Log.Debugw("Setting bus to flushing")
 	p.Pipeline().GetBus().SetFlushing(true)
 
 	p.Log.Debugw("Adding SIP IO chain")
-	p.SipIo, err = AddChain(p, NewSipInput(log, p))
+	p.SipIo, err = AddChain(p, NewSipInput(log, p, sipOpt))
 	if err != nil {
 		p.Log.Errorw("Failed to add SIP IO chain", err)
 		return nil, err

@@ -45,7 +45,6 @@ func NewUDPConnPair(portMin, portMax uint16, ip net.IP) (*net.UDPConn, *net.UDPC
 	if i == 0 {
 		i = 1
 	}
-	// Ensure we start on an even port
 	if i%2 != 0 {
 		i++
 	}
@@ -59,7 +58,6 @@ func NewUDPConnPair(portMin, portMax uint16, ip net.IP) (*net.UDPConn, *net.UDPC
 		return nil, nil, ErrListenFailed
 	}
 
-	// Start from a random even port
 	portRange := (j - i) / 2
 	if portRange <= 0 {
 		portRange = 1
@@ -72,19 +70,16 @@ func NewUDPConnPair(portMin, portMax uint16, ip net.IP) (*net.UDPConn, *net.UDPC
 	portCurrent := portStart
 
 	for {
-		// Try to allocate RTP on even port
 		rtpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: ip, Port: int(portCurrent)})
 		if err == nil {
-			// Try to allocate RTCP on next port (RTP+1)
 			rtcpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: ip, Port: int(portCurrent + 1)})
 			if err == nil {
 				return rtpConn, rtcpConn, nil
 			}
-			// Failed to allocate RTCP, close RTP and try next pair
 			rtpConn.Close()
 		}
 
-		portCurrent += 2 // Move to next even port
+		portCurrent += 2
 		if portCurrent > j {
 			portCurrent = i
 			if portCurrent%2 != 0 {
@@ -98,23 +93,16 @@ func NewUDPConnPair(portMin, portMax uint16, ip net.IP) (*net.UDPConn, *net.UDPC
 	return nil, nil, ErrListenFailed
 }
 
-// GSocketWrapper wraps the GSocket GObject.
 type GSocketWrapper struct {
 	*glib.Object
 }
 
-// ToGValue implements the glib.ValueTransformer interface.
-// This is called automatically by SetProperty to marshal the object.
 func (s *GSocketWrapper) ToGValue() (*glib.Value, error) {
-	// 1. Initialize a GValue with the specific G_TYPE_SOCKET
-	// This prevents the "invalid type GObject" and "invalid type gpointer" errors.
 	socketType := glib.Type(C.get_socket_type())
 	val, err := glib.ValueInit(socketType)
 	if err != nil {
 		return nil, err
 	}
-
-	// 2. Set the object into the GValue
 	val.SetInstance(s.Object.Unsafe())
 	return val, nil
 }
@@ -133,7 +121,7 @@ func GSocketFromUDPConn(conn *net.UDPConn) (*GSocketWrapper, error) {
 
 	cSocket := C.create_gsocket_from_fd(C.int(fd))
 	if cSocket == nil {
-		syscall.Close(fd) // Clean up if creation failed
+		syscall.Close(fd)
 		return nil, errors.New("failed to create GSocket from UDPConn")
 	}
 
