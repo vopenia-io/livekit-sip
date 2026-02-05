@@ -72,7 +72,10 @@ func (s *SipMedia) InstanceInit(instance *glib.Object) {
 
 	var err error
 	s.SrcRtp, err = gst.NewElementWithProperties("udpsrc", map[string]interface{}{
-		"name": "sip-src-rtp",
+		"name":         "sip-src-rtp",
+		"do-timestamp": true,
+		"format":       int(gst.FormatTime),
+		"is_live":      true,
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to create udpsrc for RTP: %v", s.err))
@@ -82,7 +85,10 @@ func (s *SipMedia) InstanceInit(instance *glib.Object) {
 	}
 
 	s.SrcRtcp, err = gst.NewElementWithProperties("udpsrc", map[string]interface{}{
-		"name": "sip-src-rtcp",
+		"name":         "sip-src-rtcp",
+		"do-timestamp": true,
+		"format":       int(gst.FormatTime),
+		"is_live":      true,
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to create udpsrc for RTCP: %v", s.err))

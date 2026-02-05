@@ -293,14 +293,12 @@ func (s *lkroom) SetProperty(instance *glib.Object, id uint, value *glib.Value) 
 }
 
 func (s *lkroom) GetProperty(instance *glib.Object, id uint) *glib.Value {
-	self := gst.ToGstBin(instance)
 	param := properties[id]
 	switch param.Name() {
 	case "room":
 		h := cgo.NewHandle(s.room)
 		val := uint64(uintptr(h))
 		gv, _ := glib.GValue(val)
-		self.Log(CAT, gst.LevelDebug, "GetProperty room called")
 		return gv
 	case "auto-join":
 		gv, _ := glib.GValue(s.AutoJoin)

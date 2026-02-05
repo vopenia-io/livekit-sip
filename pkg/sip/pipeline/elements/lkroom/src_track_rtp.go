@@ -66,6 +66,7 @@ func (s *SrcTrackRtp) InstanceInit(instance *glib.Object) {
 	self.SetLive(true)
 	self.SetFormat(gst.FormatTime)
 	self.SetAsync(false)
+	self.SetDoTimestamp(true)
 }
 
 func (s *SrcTrackRtp) SetCaps(self *base.GstBaseSrc, caps *gst.Caps) bool {
