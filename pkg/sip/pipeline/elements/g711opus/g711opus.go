@@ -20,6 +20,7 @@ type G711Opus struct {
 	G711Dec       *gst.Element
 	AudioConvert  *gst.Element
 	AudioResample *gst.Element
+	AudioRate     *gst.Element
 	OpusEnc       *gst.Element
 	RtpOpusPay    *gst.Element
 }
@@ -80,6 +81,13 @@ func (e *G711Opus) InstanceInit(instance *glib.Object) {
 		return
 	}
 
+	e.AudioRate, err = gst.NewElement("audiorate")
+	if err != nil {
+		self.Error("Failed to create audiorate element", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create audiorate element: %v", err))
+		return
+	}
+
 	e.OpusEnc, err = gst.NewElement("opusenc")
 	if err != nil {
 		self.Error("Failed to create opusenc element", err)
@@ -100,6 +108,7 @@ func (e *G711Opus) InstanceInit(instance *glib.Object) {
 		e.Identity,
 		e.AudioConvert,
 		e.AudioResample,
+		e.AudioRate,
 		e.OpusEnc,
 		e.RtpOpusPay,
 	)
@@ -107,6 +116,7 @@ func (e *G711Opus) InstanceInit(instance *glib.Object) {
 	if err := gst.ElementLinkMany(
 		e.AudioConvert,
 		e.AudioResample,
+		e.AudioRate,
 		e.OpusEnc,
 		e.RtpOpusPay,
 	); err != nil {
@@ -237,6 +247,7 @@ func (e *G711Opus) ChangeState(instance *gst.Element, transition gst.StateChange
 		e.G711Dec = nil
 		e.AudioConvert = nil
 		e.AudioResample = nil
+		e.AudioRate = nil
 		e.OpusEnc = nil
 		e.RtpOpusPay = nil
 	}

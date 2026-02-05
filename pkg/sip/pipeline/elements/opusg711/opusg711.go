@@ -18,6 +18,7 @@ type OpusG711 struct {
 	OpusDec       *gst.Element
 	AudioConvert  *gst.Element
 	AudioResample *gst.Element
+	AudioRate     *gst.Element
 	G711Enc       *gst.Element
 	RtpG711Pay    *gst.Element
 	Identity      *gst.Element
@@ -82,7 +83,14 @@ func (e *OpusG711) InstanceInit(instance *glib.Object) {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create audioresample element: %v", err))
 		return
 	}
-	e.AudioResample.GetStaticPad("src").AddProbe(gst.PadProbeTypeBlockDownstream, func(p *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+
+	e.AudioRate, err = gst.NewElement("audiorate")
+	if err != nil {
+		self.Error("Failed to create audiorate element", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create audiorate element: %v", err))
+		return
+	}
+	e.AudioRate.GetStaticPad("src").AddProbe(gst.PadProbeTypeBlockDownstream, func(p *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
 		return e.G711Setup(self, p, info) // TODO: do that cause any leaks?
 	})
 
@@ -112,6 +120,7 @@ func (e *OpusG711) InstanceInit(instance *glib.Object) {
 		e.OpusDec,
 		e.AudioConvert,
 		e.AudioResample,
+		e.AudioRate,
 		e.Identity,
 	)
 
@@ -120,6 +129,7 @@ func (e *OpusG711) InstanceInit(instance *glib.Object) {
 		e.OpusDec,
 		e.AudioConvert,
 		e.AudioResample,
+		e.AudioRate,
 	); err != nil {
 		self.Error("Failed to link elements", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link elements: %v", err))
@@ -172,7 +182,7 @@ func (e *OpusG711) setupCodec(self *gst.Bin) (err error) {
 	}
 
 	if err := gst.ElementLinkMany(
-		e.AudioResample,
+		e.AudioRate,
 		e.G711Enc,
 		e.RtpG711Pay,
 		e.Identity,
@@ -241,6 +251,7 @@ func (e *OpusG711) ChangeState(instance *gst.Element, transition gst.StateChange
 		e.OpusDec = nil
 		e.AudioConvert = nil
 		e.AudioResample = nil
+		e.AudioRate = nil
 		e.G711Enc = nil
 		e.RtpG711Pay = nil
 		e.Identity = nil
