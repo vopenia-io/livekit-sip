@@ -4,8 +4,10 @@ import (
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/activeselector"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/g711opus"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/h264vp8"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/lkroom"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/opusg711"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sinkwriter"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipmanager"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sourcereader"
@@ -30,6 +32,14 @@ func init() {
 
 	if !vp8h264.Register() {
 		panic("Failed to register vp8-h264")
+	}
+
+	if !g711opus.Register() {
+		panic("Failed to register g711-opus")
+	}
+
+	if !opusg711.Register() {
+		panic("Failed to register opus-g711")
 	}
 
 	if !sipmanager.Register() {

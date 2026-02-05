@@ -82,14 +82,14 @@ func (sio *SipIo) binPadAddedRecvRtpSrc(rtpbin *gst.Element, pad *gst.Pad) {
 	sio.log.Infow("RTP pad added", "pad", padName, "ssrc", ssrc, "payloadType", payloadType)
 	if err := LinkPad(
 		pad,
-		sio.pipeline.SipToWebrtc.RtpPcmuDepay.GetStaticPad("sink"),
+		sio.pipeline.SipToWebrtc.G711Opus.GetStaticPad("sink"),
 	); err != nil {
 		sio.log.Errorw("Failed to link rtpbin pad to depayloader", err)
 		return
 	}
 
 	if err := LinkPad(
-		sio.pipeline.SipToWebrtc.RtpOpusPay.GetStaticPad("src"),
+		sio.pipeline.SipToWebrtc.G711Opus.GetStaticPad("src"),
 		sio.pipeline.WebrtcIo.WebrtcRtpBin.GetRequestPad("send_rtp_sink_0"),
 	); err != nil {
 		sio.log.Errorw("Failed to link rtp payloader to webrtc rtpbin", err)
