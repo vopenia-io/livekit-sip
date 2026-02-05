@@ -115,29 +115,53 @@ func (sio *SipIo) binPadAddedSendRtpSrc(rtpbin *gst.Element, pad *gst.Pad) {
 
 	sio.log.Infow("SIP RTP pad added", "pad", padName, "session", session)
 
+	rtpSinkPad := sio.SipManager.GetRequestPad("sink_audio_%u")
 	if err := LinkPad(
 		pad,
-		sio.SipManager.GetRequestPad("sink_audio_%u"),
+		rtpSinkPad,
 	); err != nil {
 		sio.log.Errorw("Failed to link sip rtpbin pad to sinkwriter", err)
 		return
 	}
 	sio.log.Infow("Linked SIP RTP pad", "pad", padName)
-}
 
-func (sio *SipIo) sipPadAddedAudioSrc(sipManager *gst.Element, pad *gst.Pad) {
-	padName := pad.GetName()
-	if !strings.HasPrefix(padName, "src_audio_") || strings.HasSuffix(padName, "_rtcp") {
+	var trackID uint32
+	if _, err := fmt.Sscanf(rtpSinkPad.GetName(), "sink_audio_%d", &trackID); err != nil {
+		sio.log.Warnw("Invalid SIP manager sink pad format", err, "pad", rtpSinkPad.GetName())
 		return
 	}
 
-	var trackID uint32
-	if _, err := fmt.Sscanf(padName, "src_audio_%d", &trackID); err != nil {
+	go func() {
+		rtcpPad := rtpbin.GetRequestPad(fmt.Sprintf("send_rtcp_src_%d", session))
+		sio.log.Infow("Requested RTCP pad from rtpbin", "name", fmt.Sprintf("send_rtcp_src_%d", session), "pad", rtcpPad.GetName())
+		rtcpSinkPad := sio.SipManager.GetRequestPad(fmt.Sprintf("sink_rtcp_audio_%d", trackID))
+		if err := LinkPad(
+			rtcpPad,
+			rtcpSinkPad,
+		); err != nil {
+			sio.log.Errorw("Failed to link sip rtpbin RTCP pad to SIP manager RTCP sink pad", err)
+			return
+		}
+		sio.log.Infow("Linked SIP RTCP pad", "pad", rtcpPad.GetName())
+	}()
+}
+
+func (sio *SipIo) sipPadAddedSrc(sipManager *gst.Element, pad *gst.Pad) {
+	padName := pad.GetName()
+	if !strings.HasPrefix(padName, "src_") || strings.HasPrefix(padName, "src_rtcp_") {
+		return
+	}
+
+	var (
+		trackID uint32
+		kind    string
+	)
+	if _, err := fmt.Sscanf(strings.ReplaceAll(padName, "_", " "), "src %s %d", &kind, &trackID); err != nil {
 		sio.log.Warnw("Invalid SIP pad format", err, "pad", padName)
 		return
 	}
 
-	sio.log.Infow("SIP audio pad added", "pad", padName, "trackID", trackID)
+	sio.log.Infow("SIP audio pad added", "pad", padName, "trackID", trackID, "kind", kind)
 
 	if err := LinkPad(
 		pad,
@@ -147,6 +171,33 @@ func (sio *SipIo) sipPadAddedAudioSrc(sipManager *gst.Element, pad *gst.Pad) {
 		return
 	}
 	sio.log.Infow("Linked SIP audio pad", "pad", padName)
+}
+
+func (sio *SipIo) sipPadAddedSrcRtcp(sipManager *gst.Element, pad *gst.Pad) {
+	padName := pad.GetName()
+	if !strings.HasPrefix(padName, "src_rtcp_") {
+		return
+	}
+
+	var (
+		trackID uint32
+		kind    string
+	)
+	if _, err := fmt.Sscanf(strings.ReplaceAll(padName, "_", " "), "src rtcp %s %d", &kind, &trackID); err != nil {
+		sio.log.Warnw("Invalid SIP RTCP pad format", err, "pad", padName)
+		return
+	}
+
+	sio.log.Infow("SIP audio RTCP pad added", "pad", padName, "trackID", trackID, "kind", kind)
+
+	if err := LinkPad(
+		pad,
+		sio.SipRtpBin.GetRequestPad(fmt.Sprintf("recv_rtcp_sink_%d", trackID)),
+	); err != nil {
+		sio.log.Errorw("Failed to link sip manager RTCP pad to rtpbin", err)
+		return
+	}
+	sio.log.Infow("Linked SIP audio RTCP pad", "pad", padName)
 }
 
 // Link implements [GstChain].
@@ -165,10 +216,19 @@ func (sio *SipIo) Link() error {
 	if _, err := sio.SipManager.Connect("pad-added", func(sipManager *gst.Element, pad *gst.Pad) {
 		ptr := siow.Value()
 		if ptr != nil {
-			ptr.sipPadAddedAudioSrc(sipManager, pad)
+			ptr.sipPadAddedSrc(sipManager, pad)
 		}
 	}); err != nil {
 		return fmt.Errorf("failed to connect to sip manager pad-added signal: %w", err)
+	}
+
+	if _, err := sio.SipManager.Connect("pad-added", func(sipManager *gst.Element, pad *gst.Pad) {
+		ptr := siow.Value()
+		if ptr != nil {
+			ptr.sipPadAddedSrcRtcp(sipManager, pad)
+		}
+	}); err != nil {
+		return fmt.Errorf("failed to connect to sip manager RTCP pad-added signal: %w", err)
 	}
 
 	// link rtp out
