@@ -163,6 +163,8 @@ func (s *SipManager) mediaGhostPadRemove(self *gst.Bin, id uint) error {
 }
 
 func (s *SipManager) RequestNewPadSinkRtp(self *gst.Bin, templ *gst.PadTemplate, name string, caps *gst.Caps) *gst.Pad {
+	class := gst.ToElementClass(self.Class())
+
 	if name != "" {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Static pad request not supported: %s", name))
 		return nil
@@ -199,7 +201,7 @@ func (s *SipManager) RequestNewPadSinkRtp(self *gst.Bin, templ *gst.PadTemplate,
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get sink pad from media element for pad request: %s", pname))
 			return nil
 		}
-		ghostPad := gst.NewGhostPad(pname, pad)
+		ghostPad := gst.NewGhostPadFromTemplate(pname, pad, class.GetPadTemplate(fmt.Sprintf("sink_%s_%%u", kind)))
 		if ghostPad == nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create ghost pad for pad request: %s", pname))
 			return nil
@@ -212,7 +214,6 @@ func (s *SipManager) RequestNewPadSinkRtp(self *gst.Bin, templ *gst.PadTemplate,
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add ghost pad to bin for pad request: %s", pname))
 			return nil
 		}
-
 		return ghostPad.Pad
 	}
 
@@ -224,8 +225,55 @@ func (s *SipManager) RequestNewPadSinkRtp(self *gst.Bin, templ *gst.PadTemplate,
 }
 
 func (s *SipManager) RequestNewPadSinkRtcp(self *gst.Bin, templ *gst.PadTemplate, name string, caps *gst.Caps) *gst.Pad {
-	self.Log(CAT, gst.LevelWarning, "RTCP sink pad request handling not implemented yet")
-	return nil
+	if name == "" {
+		self.Log(CAT, gst.LevelError, "Pad name must be provided for RTCP sink pads")
+		return nil
+	}
+
+	var (
+		kind string
+		id   uint
+	)
+	if _, err := fmt.Sscanf(strings.ReplaceAll(name, "_", " "), "sink rtcp %s %d", &kind, &id); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid RTCP sink pad name format %q: %v", name, err))
+		return nil
+	}
+
+	if int(id) >= len(s.medias) {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid media ID in pad name: %d > %d", id, len(s.medias)-1))
+		return nil
+	}
+
+	media := s.medias[id]
+	if media == nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Media is nil for pad name: %s", name))
+		return nil
+	}
+
+	class := gst.ToElementClass(self.Class())
+
+	pname := fmt.Sprintf("sink_rtcp_%s_%d", kind, id)
+	rtcpPad := media.Element.GetStaticPad("sink_rtcp")
+	if rtcpPad == nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get RTCP sink pad from media element for pad request: %s", pname))
+		return nil
+	}
+	rtcpGhostPad := gst.NewGhostPadFromTemplate(pname, rtcpPad, class.GetPadTemplate(fmt.Sprintf("sink_rtcp_%s_%%u", kind)))
+	if rtcpGhostPad == nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create RTCP ghost pad for pad request: %s", pname))
+		return nil
+	}
+
+	if !rtcpGhostPad.SetActive(true) {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to activate RTCP ghost pad for pad request: %s", pname))
+		return nil
+	}
+	if !self.AddPad(rtcpGhostPad.Pad) {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add RTCP ghost pad to bin for pad request: %s", pname))
+		return nil
+	}
+
+	return rtcpGhostPad.Pad
 }
 
 func (s *SipManager) RequestNewPad(instance *gst.Element, templ *gst.PadTemplate, name string, caps *gst.Caps) *gst.Pad {
