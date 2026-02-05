@@ -228,41 +228,22 @@ func (e *OpusG711) G711Setup(self *gst.Bin, p *gst.Pad, info *gst.PadProbeInfo) 
 	return gst.PadProbeRemove
 }
 
-// 	caps := event.ParseCaps()
-// 	for i := range caps.GetSize() {
-// 		structure := caps.GetStructureAt(i)
-// 		obj, err := structure.GetValue("encoding-name")
-// 		if err != nil {
-// 			continue
-// 		}
-// 		encodingName, ok := obj.(string)
-// 		if !ok {
-// 			continue
-// 		}
+func (e *OpusG711) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
+	self := gst.ToGstBin(instance)
 
-// 		switch strings.ToUpper(encodingName) {
-// 		case "PCMU":
-// 			if err := e.setupPCMU(self, p); err != nil {
-// 				self.Error("Failed to setup PCMU elements", err)
-// 				return gst.PadProbeRemove
-// 			}
-// 		case "PCMA":
-// 			if err := e.setupPCMA(self, p); err != nil {
-// 				self.Error("Failed to setup PCMA elements", err)
-// 				return gst.PadProbeRemove
-// 			}
-// 		default:
-// 			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unsupported encoding: %s", encodingName))
-// 			continue
-// 		}
-// 		if err := e.setupCodec(self); err != nil {
-// 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to setup codec elements: %v", err))
-// 			self.Error("Failed to setup codec elements", err)
-// 			return gst.PadProbeRemove
-// 		}
-// 		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Successfully set up codec for encoding: %s", encodingName))
-// 		return gst.PadProbeRemove
-// 	}
-// 	self.Log(CAT, gst.LevelWarning, "No valid encoding-name found in caps")
-// 	return gst.PadProbePass
-// }
+	ret := self.ParentChangeState(transition)
+	if ret != gst.StateChangeSuccess {
+		return ret
+	}
+
+	if transition == gst.StateChangeReadyToNull {
+		e.RtpOpusDepay = nil
+		e.OpusDec = nil
+		e.AudioConvert = nil
+		e.AudioResample = nil
+		e.G711Enc = nil
+		e.RtpG711Pay = nil
+		e.Identity = nil
+	}
+	return ret
+}

@@ -222,3 +222,23 @@ func (e *G711Opus) G711Setup(self *gst.Bin, p *gst.Pad, info *gst.PadProbeInfo) 
 	self.Log(CAT, gst.LevelWarning, "No valid encoding-name found in caps")
 	return gst.PadProbePass
 }
+
+func (e *G711Opus) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
+	self := gst.ToGstBin(instance)
+
+	ret := self.ParentChangeState(transition)
+	if ret != gst.StateChangeSuccess {
+		return ret
+	}
+
+	if transition == gst.StateChangeReadyToNull {
+		e.Identity = nil
+		e.RtpG711Depay = nil
+		e.G711Dec = nil
+		e.AudioConvert = nil
+		e.AudioResample = nil
+		e.OpusEnc = nil
+		e.RtpOpusPay = nil
+	}
+	return ret
+}

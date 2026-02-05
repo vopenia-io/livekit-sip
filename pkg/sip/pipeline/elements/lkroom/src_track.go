@@ -172,6 +172,11 @@ func (s *SrcTrack) ChangeState(instance *gst.Element, transition gst.StateChange
 		return ret
 	}
 
+	switch transition {
+	case gst.StateChangeReadyToNull:
+		s.src = nil
+	}
+
 	return ret
 }
 

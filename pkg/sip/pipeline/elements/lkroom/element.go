@@ -172,12 +172,6 @@ func (*lkroom) ClassInit(klass *glib.ObjectClass) {
 		gst.PadPresenceSometimes,
 		gst.NewCapsFromString("application/x-rtcp")))
 
-	// class.AddPadTemplate(gst.NewPadTemplate(
-	// 	"src_rtcp_%u_%u",
-	// 	gst.PadDirectionSource,
-	// 	gst.PadPresenceSometimes,
-	// 	gst.NewCapsFromString("application/x-rtcp")))
-
 	CAT.Log(gst.LevelDebug, "Installing properties")
 	class.InstallProperties(properties)
 }
@@ -480,7 +474,9 @@ func (s *lkroom) startTrack(self *gst.Bin, cfg TrackCfg) *gst.Pad {
 
 	pad := sink.GetStaticPad("sink")
 	gsinkSink := gst.NewGhostPadFromTemplate(pname, pad, class.GetPadTemplate(tmplname))
-	self.AddPad(gsinkSink.Pad)
+	if !self.AddPad(gsinkSink.Pad) {
+		return nil
+	}
 
 	if !sink.SyncStateWithParent() {
 		self.Log(CAT, gst.LevelError, "Failed to sync sink_sink state with parent")
