@@ -202,6 +202,11 @@ func (s *sinkTrack) startAsync(self *base.GstBaseSink, transition gst.StateChang
 		return ret
 	}
 
+	if err := self.SetLockedState(true); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to lock state change: %v", err))
+		self.ContinueState(gst.StateChangeFailure)
+		return gst.StateChangeFailure
+	}
 	go func() {
 		if !s.parent.state.WaitJoined() {
 			self.Log(CAT, gst.LevelError, "Parent lkroom element failed to join room before starting sink_camera")
@@ -209,6 +214,7 @@ func (s *sinkTrack) startAsync(self *base.GstBaseSink, transition gst.StateChang
 			return
 		}
 		self.Log(CAT, gst.LevelInfo, "Parent lkroom element joined room, continuing sink_camera state change")
+		self.SetLockedState(false)
 		ret := s.startAsync(self, transition)
 		self.ContinueState(ret)
 	}()

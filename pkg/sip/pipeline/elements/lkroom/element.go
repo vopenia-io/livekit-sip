@@ -215,6 +215,7 @@ func (s *lkroom) InstanceInit(instance *glib.Object) {
 	}
 
 	gsinkRtcp := gst.NewGhostPadFromTemplate("sink_rtcp", sinkRTCP.GetStaticPad("sink"), class.GetPadTemplate("sink_rtcp"))
+	gsinkRtcp.Pad.AddProbe(s.padWaitReadyProbe())
 	self.AddPad(gsinkRtcp.Pad)
 }
 
@@ -356,16 +357,17 @@ func (s *lkroom) start(self *gst.Bin) gst.StateChangeReturn {
 			self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error connecting to room", err.Error())
 			return gst.StateChangeFailure
 		}
-	} else {
-		self.Log(CAT, gst.LevelInfo, "Auto-join disabled, waiting for event")
-
-		if err := self.SetLockedState(true); err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Could not lock element state: %v", err))
-			self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Could not lock element state", err.Error())
-			return gst.StateChangeFailure
-		}
-		return gst.StateChangeAsync
 	}
+	// else {
+	// 	self.Log(CAT, gst.LevelInfo, "Auto-join disabled, waiting for event")
+
+	// 	if err := self.SetLockedState(true); err != nil {
+	// 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Could not lock element state: %v", err))
+	// 		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Could not lock element state", err.Error())
+	// 		return gst.StateChangeFailure
+	// 	}
+	// 	return gst.StateChangeAsync
+	// }
 
 	return gst.StateChangeSuccess
 }
@@ -427,7 +429,7 @@ func (s *lkroom) ChangeState(instance *gst.Element, transition gst.StateChange) 
 		}
 		return gst.StateChangeFailure
 	}
-	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("ChangeState: %v", transition))
+	// self.Log(CAT, gst.LevelDebug, fmt.Sprintf("ChangeState: %v", transition))
 
 	switch transition {
 	case gst.StateChangeReadyToPaused:
@@ -449,18 +451,27 @@ func (s *lkroom) ChangeState(instance *gst.Element, transition gst.StateChange) 
 	return ret
 }
 
+func (s *lkroom) padWaitReadyProbe() (gst.PadProbeType, gst.PadProbeCallback) {
+	return gst.PadProbeTypeBuffer | gst.PadProbeTypeBufferList, func(p *gst.Pad, ppi *gst.PadProbeInfo) gst.PadProbeReturn {
+		if !s.state.IsJoined() {
+			return gst.PadProbeDrop
+		}
+		return gst.PadProbeRemove
+	}
+}
+
 func (s *lkroom) startTrack(self *gst.Bin, cfg TrackCfg) *gst.Pad {
-	self.Log(CAT, gst.LevelDebug, "startCamera")
+	self.Log(CAT, gst.LevelDebug, "startTrack")
 	sink, err := NewTrackSink(s, cfg)
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating sink_camera: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error creating sink_camera", err.Error())
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating sink_track: %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error creating sink_track", err.Error())
 		return nil
 	}
 
 	if err := self.Add(sink); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error adding sink_camera to bin: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error adding sink_camera to bin", err.Error())
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error adding sink_track to bin: %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error adding sink_track to bin", err.Error())
 		return nil
 	}
 
@@ -471,13 +482,21 @@ func (s *lkroom) startTrack(self *gst.Bin, cfg TrackCfg) *gst.Pad {
 	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Creating ghost pad %s", pname))
 
 	pad := sink.GetStaticPad("sink")
+
 	gsinkSink := gst.NewGhostPadFromTemplate(pname, pad, class.GetPadTemplate(tmplname))
 	if !self.AddPad(gsinkSink.Pad) {
 		return nil
 	}
 
+	if !gsinkSink.Pad.SetActive(true) {
+		self.Log(CAT, gst.LevelError, "Failed to activate ghost pad for track_sink")
+		return nil
+	}
+
+	gsinkSink.Pad.AddProbe(s.padWaitReadyProbe())
+
 	if !sink.SyncStateWithParent() {
-		self.Log(CAT, gst.LevelError, "Failed to sync sink_sink state with parent")
+		self.Log(CAT, gst.LevelError, "Failed to sync sink_track state with parent")
 	}
 
 	return gsinkSink.Pad
