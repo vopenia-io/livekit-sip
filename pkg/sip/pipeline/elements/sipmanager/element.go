@@ -7,7 +7,6 @@ import (
 	"math"
 	"net"
 	"net/netip"
-	"sync/atomic"
 	"weak"
 
 	"github.com/go-gst/go-glib/glib"
@@ -80,8 +79,6 @@ type SipManager struct {
 	medias []*GstSipMedia
 
 	ptMap map[uint8]*gst.Caps
-
-	pending atomic.Bool
 }
 
 func (*SipManager) New() glib.GoObjectSubclass {
@@ -166,7 +163,11 @@ func (*SipManager) ClassInit(klass *glib.ObjectClass) {
 	// 	glib.TYPE_NONE,
 	// )
 
-	gst.SignalNew(class.Type(), "pt-map", gst.SignalRunLast, gst.TypeCaps, glib.TYPE_UINT, glib.TYPE_UINT)
+	gst.SignalNew(class.Type(),
+		"pt-map",
+		gst.SignalRunLast,
+		gst.TypeCaps,
+		glib.TYPE_UINT, glib.TYPE_UINT)
 
 	CAT.Log(gst.LevelDebug, "Installing properties")
 	class.InstallProperties(properties)
