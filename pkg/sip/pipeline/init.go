@@ -5,6 +5,7 @@ import (
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/activeselector"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/g711opus"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/g711opusdtmf"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/h264vp8"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/lkroom"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/opusg711"
@@ -14,7 +15,7 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/vp8h264"
 )
 
-var mainLoop *glib.MainLoop
+var MainLoop *glib.MainLoop
 
 func init() {
 	gst.Init(nil)
@@ -38,6 +39,10 @@ func init() {
 		panic("Failed to register g711-opus")
 	}
 
+	if !g711opusdtmf.Register() {
+		panic("Failed to register g711-opus-dtmf")
+	}
+
 	if !opusg711.Register() {
 		panic("Failed to register opus-g711")
 	}
@@ -54,6 +59,6 @@ func init() {
 		panic("Failed to register active-selector")
 	}
 
-	mainLoop = glib.NewMainLoop(glib.MainContextDefault(), false)
-	_ = mainLoop
+	MainLoop = glib.NewMainLoop(glib.MainContextDefault(), false)
+	go MainLoop.Run()
 }
