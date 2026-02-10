@@ -79,6 +79,8 @@ type SipManager struct {
 
 	medias []*GstSipMedia
 
+	ptMap map[uint8]*gst.Caps
+
 	pending atomic.Bool
 }
 
@@ -101,49 +103,49 @@ func (*SipManager) ClassInit(klass *glib.ObjectClass) {
 		"src_audio_%u",
 		gst.PadDirectionSource,
 		gst.PadPresenceSometimes,
-		gst.NewCapsFromString("application/x-rtp")))
+		gst.NewAnyCaps()))
 
 	class.AddPadTemplate(gst.NewPadTemplate(
 		"sink_audio_%u",
 		gst.PadDirectionSink,
 		gst.PadPresenceRequest,
-		gst.NewCapsFromString("application/x-rtp")))
+		gst.NewAnyCaps()))
 
 	class.AddPadTemplate(gst.NewPadTemplate(
 		"src_rtcp_audio_%u",
 		gst.PadDirectionSource,
 		gst.PadPresenceSometimes,
-		gst.NewCapsFromString("application/x-rtcp")))
+		gst.NewAnyCaps()))
 
 	class.AddPadTemplate(gst.NewPadTemplate(
 		"sink_rtcp_audio_%u",
 		gst.PadDirectionSink,
 		gst.PadPresenceRequest,
-		gst.NewCapsFromString("application/x-rtcp")))
+		gst.NewAnyCaps()))
 
 	class.AddPadTemplate(gst.NewPadTemplate(
 		"src_video_%u",
 		gst.PadDirectionSource,
 		gst.PadPresenceSometimes,
-		gst.NewCapsFromString("application/x-rtp")))
+		gst.NewAnyCaps()))
 
 	class.AddPadTemplate(gst.NewPadTemplate(
 		"sink_video_%u",
 		gst.PadDirectionSink,
 		gst.PadPresenceRequest,
-		gst.NewCapsFromString("application/x-rtp")))
+		gst.NewAnyCaps()))
 
 	class.AddPadTemplate(gst.NewPadTemplate(
 		"src_rtcp_video_%u",
 		gst.PadDirectionSource,
 		gst.PadPresenceRequest,
-		gst.NewCapsFromString("application/x-rtcp")))
+		gst.NewAnyCaps()))
 
 	class.AddPadTemplate(gst.NewPadTemplate(
 		"sink_rtcp_video_%u",
 		gst.PadDirectionSink,
 		gst.PadPresenceRequest,
-		gst.NewCapsFromString("application/x-rtcp")))
+		gst.NewAnyCaps()))
 
 	gst.SignalNew(class.Type(),
 		"on-remote-offer",
@@ -164,6 +166,8 @@ func (*SipManager) ClassInit(klass *glib.ObjectClass) {
 	// 	glib.TYPE_NONE,
 	// )
 
+	gst.SignalNew(class.Type(), "pt-map", gst.SignalRunLast, gst.TypeCaps, glib.TYPE_UINT, glib.TYPE_UINT)
+
 	CAT.Log(gst.LevelDebug, "Installing properties")
 	class.InstallProperties(properties)
 }
@@ -171,6 +175,7 @@ func (*SipManager) ClassInit(klass *glib.ObjectClass) {
 func (s *SipManager) InstanceInit(instance *glib.Object) {
 	self := gst.ToGstBin(instance)
 	self.Log(CAT, gst.LevelDebug, "InstanceInit")
+	s.ptMap = make(map[uint8]*gst.Caps)
 
 	pool := pj.NewPjPool(pj.UUID31())
 	s.pjpool = pool
@@ -193,6 +198,30 @@ func (s *SipManager) InstanceInit(instance *glib.Object) {
 		}
 		return string(answer)
 	})
+
+	self.Connect("pt-map", func(instance *gst.Element, session uint, pt uint) *gst.Caps {
+		self := gst.ToGstBin(instance)
+		s := sWeak.Value()
+		if s == nil {
+			self.Log(CAT, gst.LevelError, "SipManager instance has been garbage collected")
+			return nil
+		}
+		return s.PtMap(self, session, pt)
+	})
+}
+
+func (s *SipManager) PtMap(self *gst.Bin, session uint, pt uint) *gst.Caps {
+	if pt > math.MaxUint8 {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid PT value: %d", pt))
+		return nil
+	}
+
+	caps, ok := s.ptMap[uint8(pt)]
+	if ok {
+		return caps.Copy()
+	}
+	self.Log(CAT, gst.LevelWarning, fmt.Sprintf("No caps found for PT %d", pt))
+	return nil
 }
 
 func (s *SipManager) SetProperty(instance *glib.Object, id uint, value *glib.Value) {
@@ -297,7 +326,7 @@ func (s *SipManager) close(self *gst.Bin) gst.StateChangeReturn {
 
 func (s *SipManager) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
 	self := gst.ToGstBin(instance)
-	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("ChangeState: %v", transition))
+	// self.Log(CAT, gst.LevelDebug, fmt.Sprintf("ChangeState: %v", transition))
 
 	switch transition {
 	case gst.StateChangeNullToReady:
@@ -361,7 +390,11 @@ func (s *SipManager) AddMedia(self *gst.Bin, media *pj.PjSdpMedia, id uint) erro
 		var tmpl *pj.PjSdpMedia
 		switch media.DescMedia() {
 		case "audio":
-			tmpl = s.template.Audio()
+			if id == 0 {
+				tmpl = s.template.AudioDtmf()
+			} else {
+				tmpl = s.template.Audio()
+			}
 			sipMedia.Type = pj.PJMEDIA_TYPE_AUDIO
 		case "video":
 			tmpl = s.template.Video()
@@ -579,7 +612,7 @@ func (s *SipManager) Reconcile(self *gst.Bin) error {
 			continue
 		}
 
-		if err := media.Configure(stream); err != nil {
+		if err := media.Configure(stream, s.ptMap); err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to configure source for stream %d: %v", i, err))
 			errs = append(errs, err)
 		} else {

@@ -74,8 +74,8 @@ func (s *SipMedia) InstanceInit(instance *glib.Object) {
 	s.SrcRtp, err = gst.NewElementWithProperties("udpsrc", map[string]interface{}{
 		"name":         "sip-src-rtp",
 		"do-timestamp": true,
-		"format":       int(gst.FormatTime),
-		"is_live":      true,
+		// "format":       int(gst.FormatTime),
+		// "is_live":      true,
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to create udpsrc for RTP: %v", s.err))
@@ -87,8 +87,8 @@ func (s *SipMedia) InstanceInit(instance *glib.Object) {
 	s.SrcRtcp, err = gst.NewElementWithProperties("udpsrc", map[string]interface{}{
 		"name":         "sip-src-rtcp",
 		"do-timestamp": true,
-		"format":       int(gst.FormatTime),
-		"is_live":      true,
+		// "format":       int(gst.FormatTime),
+		// "is_live":      true,
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to create udpsrc for RTCP: %v", s.err))
@@ -296,16 +296,15 @@ func (s *SipMedia) RtcpPort() int {
 	return s.rtcpConn.LocalAddr().(*net.UDPAddr).Port
 }
 
-func (s *SipMedia) Configure(stream pj.StreamInfoCommon) error {
+func (s *SipMedia) Configure(stream pj.StreamInfoCommon, ptmap map[uint8]*gst.Caps) (err error) {
 	var caps *gst.Caps
-	var err error
 
 	switch v := stream.(type) {
 	case *pj.StreamInfo:
-		caps, err = s.configureCapsAudio(v)
+		caps, err = s.configureCapsAudio(v, ptmap)
 		s.Type = pj.PJMEDIA_TYPE_AUDIO
 	case *pj.VidStreamInfo:
-		caps, err = s.configureCapsVideo(v)
+		caps, err = s.configureCapsVideo(v, ptmap)
 		s.Type = pj.PJMEDIA_TYPE_VIDEO
 	default:
 		s.Type = pj.PJMEDIA_TYPE_UNKNOWN
@@ -344,33 +343,41 @@ func (s *SipMedia) Configure(stream pj.StreamInfoCommon) error {
 	return nil
 }
 
-func (s *SipMedia) configureCapsCommon(capsStr string, stream pj.StreamInfoCommon) (string, error) {
+func (s *SipMedia) configureCapsCommon(capsStr string, stream pj.StreamInfoCommon) (string, uint8, error) {
 	capsStr += fmt.Sprintf(", payload=(int)%d", stream.TxPt())
-	return capsStr, nil
+	return capsStr, stream.TxPt(), nil
 }
 
-func (s *SipMedia) configureCapsAudio(stream *pj.StreamInfo) (*gst.Caps, error) {
+func (s *SipMedia) configureCapsAudio(stream *pj.StreamInfo, ptmap map[uint8]*gst.Caps) (*gst.Caps, error) {
 	capsStr := "application/x-rtp, media=(string)audio"
 	capsStr += fmt.Sprintf(", clock-rate=(int)%d", stream.Fmt().ClockRate())
 	capsStr += fmt.Sprintf(", encoding-name=(string)%s", stream.Fmt().EncodingName())
-	capsStr, err := s.configureCapsCommon(capsStr, stream)
+	capsStr, pt, err := s.configureCapsCommon(capsStr, stream)
 	if err != nil {
 		return nil, err
 	}
 
 	caps := gst.NewCapsFromString(capsStr)
+	ptmap[pt] = caps.Copy() // TODO: do we need to check for conflicts or can we assume pjmedia won't let us reuse payload types across different codecs?
+	if stream.RxEventPt() >= 96 {
+		telCaps := gst.NewCapsFromString(fmt.Sprintf("application/x-rtp, media=(string)audio, clock-rate=(int)%d, encoding-name=(string)TELEPHONE-EVENT, payload=(int)%d",
+			stream.Fmt().ClockRate(), stream.RxEventPt()))
+		ptmap[uint8(stream.RxEventPt())] = telCaps
+		caps = gst.NewCapsFromString(fmt.Sprintf("application/x-rtp, media=(string)audio, clock-rate=(int)%d", stream.Fmt().ClockRate())) // loose caps because pt will be different
+	}
 	return caps, nil
 }
 
-func (s *SipMedia) configureCapsVideo(stream *pj.VidStreamInfo) (*gst.Caps, error) {
+func (s *SipMedia) configureCapsVideo(stream *pj.VidStreamInfo, ptmap map[uint8]*gst.Caps) (*gst.Caps, error) {
 	capsStr := "application/x-rtp, media=(string)video"
 	capsStr += fmt.Sprintf(", clock-rate=(int)%d", stream.CodecInfo().ClockRate())
 	capsStr += fmt.Sprintf(", encoding-name=(string)%s", stream.CodecInfo().EncodingName())
-	capsStr, err := s.configureCapsCommon(capsStr, stream)
+	capsStr, pt, err := s.configureCapsCommon(capsStr, stream)
 	if err != nil {
 		return nil, err
 	}
 
 	caps := gst.NewCapsFromString(capsStr)
+	ptmap[pt] = caps.Copy()
 	return caps, nil
 }
