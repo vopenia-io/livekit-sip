@@ -15,8 +15,12 @@ import (
 type Pipeline struct {
 	Log      logger.Logger
 	pipeline *gst.Pipeline
+	ctx      context.Context
+	cancel   context.CancelFunc
 	closed   core.Fuse
 	cleanup  func() error
+	bus      *gst.Bus
+	dtmfCh   chan int
 
 	*SipIo
 	*WebrtcIo
@@ -84,6 +88,8 @@ func (p *Pipeline) Close() error {
 	}
 	p.closed.Break()
 	p.Log.Debugw("Closing pipeline")
+
+	p.cancel()
 
 	done := make(chan struct{})
 	var err error
@@ -163,8 +169,11 @@ func (p *Pipeline) Close() error {
 		p.Log.Debugw("Pipeline cleanup complete")
 	}
 
+	p.CloseBus()
+	p.Log.Infow("Pipeline bus closed")
+
 	time.Sleep(100 * time.Millisecond) // give some time to settle
-	p.Log.Debugw("Pipeline closed")
+	p.Log.Infow("Pipeline closed")
 
 	return nil
 }
@@ -180,14 +189,20 @@ func New(ctx context.Context, log logger.Logger, sipOpt SipOpt) (*Pipeline, erro
 		return nil, fmt.Errorf("failed to create gst pipeline: %w", err)
 	}
 
+	ctx, cancel := context.WithCancel(ctx)
+
 	p := &Pipeline{
 		Log:      log.WithComponent("pipeline"),
 		pipeline: pipeline,
+		ctx:      ctx,
+		cancel:   cancel,
+		dtmfCh:   make(chan int, 10),
 	}
 	p.cleanup = p.cleanupChains
 
-	p.Log.Debugw("Setting bus to flushing")
-	p.Pipeline().GetBus().SetFlushing(true)
+	p.Log.Debugw("Setting up bus")
+	p.SetupBus()
+	p.Log.Debugw("Bus set up complete")
 
 	p.Log.Debugw("Adding SIP IO chain")
 	p.SipIo, err = AddChain(p, NewSipInput(log, p, sipOpt))

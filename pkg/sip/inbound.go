@@ -784,6 +784,24 @@ func (c *inboundCall) handleInvite(ctx context.Context, tid traceid.ID, req *sip
 		pinPrompt = true
 	}
 
+	opts := &MediaOptions{
+		IP:                  c.s.sconf.MediaIP,
+		IPLocal:             c.s.sconf.MediaIPLocal,
+		Ports:               conf.RTPPort,
+		MediaTimeoutInitial: c.s.conf.MediaTimeoutInitial,
+		MediaTimeout:        c.s.conf.MediaTimeout,
+		EnableJitterBuffer:  c.jitterBuf,
+		Stats:               &c.stats.Port,
+		NoInputResample:     !RoomResample,
+	}
+
+	orchestrator, err := NewMediaOrchestrator(c.log(), c.ctx, c.cc, opts)
+	if err != nil {
+		c.log().Errorw("Cannot create media orchestrator", err)
+		return err
+	}
+	c.medias = orchestrator
+
 	runMedia := func(enc livekit.SIPMediaEncryption) ([]byte, error) {
 		log := c.log()
 		if h := req.ContentLength(); h != nil {
@@ -824,6 +842,13 @@ func (c *inboundCall) handleInvite(ctx context.Context, tid traceid.ID, req *sip
 			c.close(true, status, reason)
 			return nil, err
 		}
+
+		if err := c.medias.Start(); err != nil {
+			c.log().Errorw("Cannot start media orchestrator", err)
+			c.close(true, callDropped, "media-start-failed")
+			return nil, errors.Wrap(err, "starting media orchestrator failed")
+		}
+
 		return answerData, nil
 	}
 
@@ -918,11 +943,6 @@ func (c *inboundCall) handleInvite(ctx context.Context, tid traceid.ID, req *sip
 	// 	return errors.Wrap(err, "publishing track to room failed")
 	// }
 	c.lkRoom.Subscribe()
-	if err := c.medias.Start(); err != nil {
-		c.log().Errorw("Cannot start media orchestrator", err)
-		c.close(true, callDropped, "media-start-failed")
-		return errors.Wrap(err, "starting media orchestrator failed")
-	}
 	if !pinPrompt {
 		c.log().Infow("Waiting for track subscription(s)")
 		// For dispatches without pin, we first wait for LK participant to become available,
@@ -990,17 +1010,6 @@ func (c *inboundCall) runMediaConn(tid traceid.ID, offerData []byte, enc livekit
 	}
 	_ = e // currently not used for inbound calls
 
-	opts := &MediaOptions{
-		IP:                  c.s.sconf.MediaIP,
-		IPLocal:             c.s.sconf.MediaIPLocal,
-		Ports:               conf.RTPPort,
-		MediaTimeoutInitial: c.s.conf.MediaTimeoutInitial,
-		MediaTimeout:        c.s.conf.MediaTimeout,
-		EnableJitterBuffer:  c.jitterBuf,
-		Stats:               &c.stats.Port,
-		NoInputResample:     !RoomResample,
-	}
-
 	// mp, err := NewMediaPort(tid, c.log(), c.mon, opts, RoomSampleRate)
 	// if err != nil {
 	// 	return nil, err
@@ -1012,13 +1021,7 @@ func (c *inboundCall) runMediaConn(tid traceid.ID, offerData []byte, enc livekit
 
 	// audioinfo := NewAudioInfo(c.media)
 
-	orchestrator, err := NewMediaOrchestrator(c.log(), c.ctx, c.cc, c.lkRoom.(*Room), opts)
-	if err != nil {
-		c.log().Errorw("Cannot create media orchestrator", err)
-		return nil, err
-	}
-	c.medias = orchestrator
-	c.lkRoom.(*Room).SetCallbacks(orchestrator)
+	c.lkRoom.(*Room).SetCallbacks(c.medias)
 
 	// offer, err := sdpv2.NewSDP(offerData)
 	// if err != nil {
@@ -1070,6 +1073,8 @@ func (c *inboundCall) runMediaConn(tid traceid.ID, offerData []byte, enc livekit
 	// if mconf.Audio.DTMFType != 0 {
 	// 	c.media.HandleDTMF(c.handleDTMF)
 	// }
+
+	c.medias.DtmfHandler(c.handleDTMF)
 
 	// Must be set earlier to send the pin prompts.
 	// if w := c.lkRoom.SwapOutput(c.media.GetAudioWriter()); w != nil {
@@ -1424,12 +1429,14 @@ func (c *inboundCall) playAudio(ctx context.Context, frames []msdk.PCM16Sample) 
 
 func (c *inboundCall) handleDTMF(tone dtmf.Event) {
 	if c.forwardDTMF.Load() {
+		c.log().Infow("Forwarding DTMF tone", "digit", string(tone.Digit), "code", tone.Code)
 		_ = c.lkRoom.SendData(&livekit.SipDTMF{
 			Code:  uint32(tone.Code),
 			Digit: string([]byte{tone.Digit}),
 		}, lksdk.WithDataPublishReliable(true))
 		return
 	}
+	c.log().Infow("Received DTMF tone", "digit", string(tone.Digit), "code", tone.Code)
 	// We should have enough buffer here.
 	select {
 	case c.dtmf <- tone:

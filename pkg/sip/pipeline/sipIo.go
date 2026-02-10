@@ -32,6 +32,9 @@ type SipIo struct {
 	SipRtpBin *gst.Element
 
 	SipManager *gst.Element
+
+	RtpDtmlDepay *gst.Element
+	FakeSink     *gst.Element
 }
 
 var _ GstChain = (*SipIo)(nil)
@@ -57,6 +60,20 @@ func (sio *SipIo) Create() error {
 		return fmt.Errorf("failed to create SIP connection element: %w", err)
 	}
 
+	sio.RtpDtmlDepay, err = gst.NewElement("rtpdtmfdepay")
+	if err != nil {
+		return fmt.Errorf("failed to create DTMF depayloader element: %w", err)
+	}
+
+	sio.FakeSink, err = gst.NewElementWithProperties("fakesink", map[string]interface{}{
+		"name":  "dtmf_fakesink",
+		"sync":  false,
+		"async": false,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create fakesink element: %w", err)
+	}
+
 	return nil
 }
 
@@ -65,6 +82,8 @@ func (sio *SipIo) Add() error {
 	return sio.pipeline.Pipeline().AddMany(
 		sio.SipRtpBin,
 		sio.SipManager,
+		sio.RtpDtmlDepay,
+		sio.FakeSink,
 	)
 }
 
@@ -79,24 +98,67 @@ func (sio *SipIo) binPadAddedRecvRtpSrc(rtpbin *gst.Element, pad *gst.Pad) {
 		sio.log.Warnw("Invalid RTP pad format", err, "pad", padName)
 		return
 	}
-	sio.log.Infow("RTP pad added", "pad", padName, "ssrc", ssrc, "payloadType", payloadType)
-	if err := LinkPad(
-		pad,
-		sio.pipeline.SipToWebrtc.G711Opus.GetStaticPad("sink"),
-	); err != nil {
-		sio.log.Errorw("Failed to link rtpbin pad to depayloader", err)
+
+	caps := sio.PtMap(rtpbin, session, payloadType)
+	if caps == nil {
+		sio.log.Warnw("No payload type mapping found for RTP pad", nil, "pad", padName, "session", session, "payloadType", payloadType)
+		return
+	}
+
+	encVal, err := caps.GetStructureAt(0).GetValue("encoding-name")
+	if err != nil {
+		sio.log.Warnw("Failed to get encoding name from caps", err, "caps", caps.String())
+		return
+	}
+
+	enc, ok := encVal.(string)
+	if !ok {
+		sio.log.Warnw("Encoding name in caps is not a string", nil, "caps", caps.String(), "type", fmt.Sprintf("%T", encVal))
+		return
+	}
+
+	sio.log.Infow("RTP pad added", "pad", padName, "ssrc", ssrc, "payloadType", payloadType, "encoding", enc, "caps", caps.String())
+
+	var destPad *gst.Pad
+	switch strings.ToLower(enc) {
+	case "pcmu", "pcma":
+		destPad = sio.pipeline.SipToWebrtc.G711OpusDtmf.GetStaticPad("sink")
+	case "telephone-event":
+		destPad = sio.RtpDtmlDepay.GetStaticPad("sink")
+	default:
+		sio.log.Warnw("Unsupported payload type", nil, "payloadType", payloadType, "encoding", enc)
+		return
+	}
+
+	if destPad.IsLinked() {
+		sio.log.Warnw("Destination pad is already linked, cannot link to new RTP pad", nil, "pad", destPad.GetName())
 		return
 	}
 
 	if err := LinkPad(
-		sio.pipeline.SipToWebrtc.G711Opus.GetStaticPad("src"),
+		pad,
+		destPad,
+	); err != nil {
+		sio.log.Errorw("Failed to link rtpbin pad to destination element", err)
+		return
+	}
+
+	sio.log.Infow("Linked RTP pad", "pad", padName, "destination", destPad.GetName())
+
+	src := sio.pipeline.SipToWebrtc.G711OpusDtmf.GetStaticPad("src")
+	if src.IsLinked() {
+		sio.log.Debugw("G711OpusDtmf src pad is already linked, cannot link to new RTP pad", "pad", src.GetName())
+		return
+	}
+	if err := LinkPad(
+		src,
 		sio.pipeline.WebrtcIo.WebrtcRtpBin.GetRequestPad("send_rtp_sink_0"),
 	); err != nil {
 		sio.log.Errorw("Failed to link rtp payloader to webrtc rtpbin", err)
 		return
 	}
 
-	sio.log.Infow("Linked RTP pad", "pad", padName)
+	sio.log.Infow("Linked G711OpusDtmf to WebRTC RTP bin", "srcPad", src.GetName(), "destPad", "send_rtp_sink_0")
 }
 
 func (sio *SipIo) binPadAddedSendRtpSrc(rtpbin *gst.Element, pad *gst.Pad) {
@@ -200,10 +262,42 @@ func (sio *SipIo) sipPadAddedSrcRtcp(sipManager *gst.Element, pad *gst.Pad) {
 	sio.log.Infow("Linked SIP audio RTCP pad", "pad", padName)
 }
 
+func (sio *SipIo) PtMap(rtpbin *gst.Element, session uint32, pt uint32) *gst.Caps {
+	val, err := sio.SipManager.Emit("pt-map", session, pt)
+	if err != nil {
+		sio.log.Errorw("Failed to emit pt-map signal on SIP manager", err)
+		return nil
+	}
+	caps, ok := val.(*gst.Caps)
+	if !ok {
+		sio.log.Errorw("Invalid return type from pt-map signal", nil, "type", fmt.Sprintf("%T", val))
+		return nil
+	}
+	return caps
+}
+
 // Link implements [GstChain].
 func (sio *SipIo) Link() error {
+	if err := gst.ElementLinkMany(
+		sio.RtpDtmlDepay,
+		sio.FakeSink,
+	); err != nil {
+		return fmt.Errorf("failed to link SIP IO elements: %w", err)
+	}
+
 	// link rtp in
 	siow := weak.Make(sio)
+
+	if _, err := sio.SipRtpBin.Connect("request-pt-map", func(rtpbin *gst.Element, session uint32, pt uint32) *gst.Caps {
+		ptr := siow.Value()
+		if ptr != nil {
+			return ptr.PtMap(rtpbin, session, pt)
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed to connect to rtpbin request-pt-map signal: %w", err)
+	}
+
 	if _, err := sio.SipRtpBin.Connect("pad-added", func(rtpbin *gst.Element, pad *gst.Pad) {
 		ptr := siow.Value()
 		if ptr != nil {
@@ -249,6 +343,8 @@ func (sio *SipIo) Close() error {
 	if err := sio.pipeline.Pipeline().RemoveMany(
 		sio.SipRtpBin,
 		sio.SipManager,
+		sio.RtpDtmlDepay,
+		sio.FakeSink,
 	); err != nil {
 		return fmt.Errorf("failed to remove SIP IO elements from pipeline: %w", err)
 	}

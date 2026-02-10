@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"runtime/cgo"
 
-	"github.com/go-gst/go-gst/gst"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
@@ -142,7 +141,7 @@ func (p *Pipeline) SetRoomOptions(wsUrl, token string, opts ...lksdk.ConnectOpti
 	}
 	p.Log.Infow("Joined room successfully", "wsUrl", wsUrl)
 
-	p.SetState(gst.StatePlaying)
+	// p.SetState(gst.StatePlaying)
 
 	return nil
 }

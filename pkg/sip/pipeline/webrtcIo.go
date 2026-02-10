@@ -123,8 +123,24 @@ func (wio *WebrtcIo) binPadAddedSendRtpSrc(_ *gst.Element, pad *gst.Pad) {
 
 	wio.log.Infow("SIP RTP pad added", "pad", padName, "session", session)
 
+	// fakesink, err := gst.NewElementWithProperties("fakesink", map[string]interface{}{
+	// 	"name": fmt.Sprintf("webrtc_send_rtp_fakesink_%d", session),
+	// })
+	// if err != nil {
+	// 	wio.log.Errorw("Failed to create fakesink for send RTP pad", err, "session", session)
+	// 	return
+	// }
+
+	// if err := wio.pipeline.Pipeline().Add(fakesink); err != nil {
+	// 	wio.log.Errorw("Failed to add fakesink to pipeline", err, "session", session)
+	// 	return
+	// }
+
+	// fakesink.SyncStateWithParent()
+
 	if err := LinkPad(
 		pad,
+		// fakesink.GetStaticPad("sink"),
 		wio.LkRoom.GetRequestPad("sink_2_%u"),
 	); err != nil {
 		wio.log.Errorw("Failed to link sip rtpbin pad to sinkwriter", err)

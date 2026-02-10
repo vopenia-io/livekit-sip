@@ -18,7 +18,7 @@ type SipToWebrtc struct {
 	pipeline *Pipeline
 	log      logger.Logger
 
-	G711Opus *gst.Element
+	G711OpusDtmf *gst.Element
 }
 
 var _ GstChain = (*SipToWebrtc)(nil)
@@ -27,9 +27,9 @@ var _ GstChain = (*SipToWebrtc)(nil)
 func (stw *SipToWebrtc) Create() error {
 	var err error
 
-	stw.G711Opus, err = gst.NewElement("g711-opus")
+	stw.G711OpusDtmf, err = gst.NewElement("g711-opus-dtmf")
 	if err != nil {
-		return fmt.Errorf("failed to create g711-opus element: %w", err)
+		return fmt.Errorf("failed to create g711-opus-dtmf element: %w", err)
 	}
 
 	return nil
@@ -37,7 +37,7 @@ func (stw *SipToWebrtc) Create() error {
 
 func (stw *SipToWebrtc) Add() error {
 	if err := stw.pipeline.Pipeline().AddMany(
-		stw.G711Opus,
+		stw.G711OpusDtmf,
 	); err != nil {
 		return fmt.Errorf("failed to add SIP to WebRTC elements to pipeline: %w", err)
 	}
@@ -50,7 +50,7 @@ func (stw *SipToWebrtc) Link() error {
 
 func (stw *SipToWebrtc) Close() error {
 	if err := stw.pipeline.Pipeline().RemoveMany(
-		stw.G711Opus,
+		stw.G711OpusDtmf,
 	); err != nil {
 		return fmt.Errorf("failed to remove SIP to WebRTC elements from pipeline: %w", err)
 	}

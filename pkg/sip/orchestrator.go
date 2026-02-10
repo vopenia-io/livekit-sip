@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/go-gst/go-gst/gst"
+	"github.com/livekit/media-sdk/dtmf"
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
 	"github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
@@ -93,7 +94,7 @@ type MediaOrchestrator struct {
 	state MediaState
 }
 
-func NewMediaOrchestrator(log logger.Logger, ctx context.Context, inbound *sipInbound, room *Room, opts *MediaOptions) (*MediaOrchestrator, error) {
+func NewMediaOrchestrator(log logger.Logger, ctx context.Context, inbound *sipInbound, opts *MediaOptions) (*MediaOrchestrator, error) {
 	initCodecs()
 	ctx, cancel := context.WithCancel(ctx)
 	o := &MediaOrchestrator{
@@ -113,7 +114,7 @@ func NewMediaOrchestrator(log logger.Logger, ctx context.Context, inbound *sipIn
 	}
 
 	if err := o.dispatch(func() error {
-		return o.init(room)
+		return o.init()
 	}); err != nil {
 		return nil, err
 	}
@@ -121,7 +122,7 @@ func NewMediaOrchestrator(log logger.Logger, ctx context.Context, inbound *sipIn
 	return o, nil
 }
 
-func (o *MediaOrchestrator) init(room *Room) error {
+func (o *MediaOrchestrator) init() error {
 	if err := o.okStates(MediaStateNew); err != nil {
 		return err
 	}
@@ -300,98 +301,13 @@ func (o *MediaOrchestrator) answerSDP(offerData []byte) ([]byte, error) {
 	return []byte(answerStr), nil
 }
 
-// func (o *MediaOrchestrator) offerSDP(camera bool, bfcp bool, screenshare bool) (*sdpv2.SDP, error) {
-// 	builder := (&sdpv2.SDP{}).Builder()
-
-// 	builder.SetAddress(o.opts.IP)
-
-// 	// audio is required anyway
-// 	// builder.SetAudio(func(b *sdpv2.SDPMediaBuilder) (*sdpv2.SDPMedia, error) {
-// 	// 	codec := o.audioinfo.Codec()
-// 	// 	if codec == nil {
-// 	// 		for _, c := range o.audioinfo.AvailableCodecs() {
-// 	// 			b.AddCodec(func(_ *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
-// 	// 				return c, nil
-// 	// 			}, false)
-// 	// 		}
-// 	// 	} else {
-// 	// 		b.AddCodec(func(_ *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
-// 	// 			return codec, nil
-// 	// 		}, true)
-// 	// 	}
-// 	// 	return b.
-// 	// 		SetRTPPort(uint16(o.audioinfo.Port())).
-// 	// 		Build()
-// 	// }).Build()
-
-// 	// if bfcp && o.bfcp != nil {
-// 	// 	if screenshare {
-// 	// 		builder.SetBFCP(func(b *sdpv2.SDPBfcpBuilder) (*sdpv2.SDPBfcp, error) {
-// 	// 			return b.
-// 	// 				SetPort(o.bfcp.Port()).
-// 	// 				SetConnection(sdpv2.BfcpConnectionNew).
-// 	// 				SetProto(sdpv2.BfcpProtoTCP).
-// 	// 				SetFloorCtrl(sdpv2.BfcpFloorCtrlServer).
-// 	// 				SetSetup(sdpv2.BfcpSetupPassive).
-// 	// 				SetConfID(o.bfcp.config.ConferenceID).
-// 	// 				SetUserID(1).
-// 	// 				SetMStreamID(ScreenshareMSTreamID).
-// 	// 				Build()
-// 	// 		})
-// 	// 	}
-// 	// }
-
-// 	// if camera {
-// 	// 	builder.SetVideo(func(b *sdpv2.SDPMediaBuilder) (*sdpv2.SDPMedia, error) {
-// 	// 		codec := o.video.Codec()
-// 	// 		if codec == nil {
-// 	// 			for _, c := range o.video.SupportedCodecs() {
-// 	// 				b.AddCodec(func(_ *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
-// 	// 					return c, nil
-// 	// 				}, false)
-// 	// 			}
-// 	// 		} else {
-// 	// 			b.AddCodec(func(_ *sdpv2.CodecBuilder) (*sdpv2.Codec, error) {
-// 	// 				return codec, nil
-// 	// 			}, true)
-// 	// 		}
-// 	// 		b.SetDisabled(o.video.Status() < VideoStatusReady)
-// 	// 		// b.SetDisabled(false)
-// 	// 		b.SetRTPPort(uint16(o.video.RtpPort()))
-// 	// 		b.SetRTCPPort(uint16(o.video.RtcpPort()))
-// 	// 		b.SetDirection(o.video.Direction())
-// 	// 		return b.Build()
-// 	// 	})
-// 	// }
-
-// 	// offer, err := builder.Build()
-// 	// if err != nil {
-// 	// 	return nil, fmt.Errorf("could create a new sdp: %w", err)
-// 	// }
-// 	// o.log.Debugw("created offer sdp", "offer", offer)
-
-// 	return nil, nil
-// }
-
-// func (o *MediaOrchestrator) setupSDP(sdp *sdpv2.SDP) error {
-// 	o.log.Debugw("setting up sdp", "sdp", sdp)
-
-// 	o.log.Debugw("reconciling camera")
-// 	if _, err := o.video.Reconcile(sdp.Addr, sdp.Video); err != nil {
-// 		o.log.Errorw("could not reconcile video sdp", err)
-// 		return fmt.Errorf("could not reconcile video sdp: %w", err)
-// 	}
-// 	return nil
-// }
-
 func (o *MediaOrchestrator) start() error {
-	// if o.video.Status() == VideoStatusReady {
-	// 	o.log.Debugw("starting camera")
-	// 	if err := o.video.Start(); err != nil {
-	// 		o.log.Errorw("could not start camera", err)
-	// 		return fmt.Errorf("could not start camera: %w", err)
-	// 	}
-	// }
+
+	if err := o.pipeline.SetState(gst.StatePlaying); err != nil {
+		return fmt.Errorf("failed to set pipeline to playing state: %w", err)
+	}
+
+	o.log.Infow("media orchestrator started")
 
 	o.state = MediaStateStarted
 	return nil
@@ -407,4 +323,45 @@ func (o *MediaOrchestrator) Start() (err error) {
 		return err
 	}
 	return nil
+}
+
+var dtmfMap = map[int]byte{
+	0:  '0',
+	1:  '1',
+	2:  '2',
+	3:  '3',
+	4:  '4',
+	5:  '5',
+	6:  '6',
+	7:  '7',
+	8:  '8',
+	9:  '9',
+	10: '*',
+	11: '#',
+}
+
+func (o *MediaOrchestrator) DtmfHandler(h func(ev dtmf.Event)) {
+	go func() {
+		for {
+			select {
+			case <-o.ctx.Done():
+				return
+			case nb, ok := <-o.pipeline.DTMF():
+				if !ok {
+					return
+				}
+				digit, ok := dtmfMap[nb]
+				if !ok {
+					o.log.Warnw("Received invalid DTMF number", nil, "number", nb)
+					continue
+				}
+				// TODO: do we need to set the other fields?
+				h(dtmf.Event{
+					Code:  byte(nb),
+					Digit: digit,
+				})
+				o.log.Infow("Handled DTMF event", "number", nb, "digit", digit)
+			}
+		}
+	}()
 }
