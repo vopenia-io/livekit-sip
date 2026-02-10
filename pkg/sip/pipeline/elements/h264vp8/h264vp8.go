@@ -191,3 +191,26 @@ func (h *H264Vp8) InstanceInit(self *glib.Object) {
 	ghostSrc := gst.NewGhostPadFromTemplate("src", h.Vp8Pay.GetStaticPad("src"), elemClass.GetPadTemplate("src"))
 	h.self.AddPad(ghostSrc.Pad)
 }
+
+func (h *H264Vp8) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
+	self := gst.ToGstBin(instance)
+
+	ret := self.ParentChangeState(transition)
+	if ret != gst.StateChangeSuccess {
+		return ret
+	}
+
+	if transition == gst.StateChangeReadyToNull {
+		h.H264Depay = nil
+		h.H264Parse = nil
+		h.H264Dec = nil
+		h.VideoConvert = nil
+		h.VideoScale = nil
+		h.VideoRate = nil
+		h.Filter = nil
+		h.Vp8Enc = nil
+		h.Vp8Pay = nil
+	}
+
+	return ret
+}

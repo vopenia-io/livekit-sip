@@ -218,3 +218,26 @@ func (h *Vp8H264) SetProperty(instance *glib.Object, id uint, value *glib.Value)
 		}
 	}
 }
+
+func (h *Vp8H264) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
+	self := gst.ToGstBin(instance)
+
+	ret := self.ParentChangeState(transition)
+	if ret != gst.StateChangeSuccess {
+		return ret
+	}
+
+	if transition == gst.StateChangeReadyToNull {
+		h.Vp8Depay = nil
+		h.Vp8Dec = nil
+		h.VideoScale = nil
+		h.VideoRate = nil
+		h.Filter = nil
+		h.X264Enc = nil
+		h.H264Parse = nil
+		h.RtpH264Pay = nil
+		h.H264Caps = nil
+	}
+
+	return ret
+}

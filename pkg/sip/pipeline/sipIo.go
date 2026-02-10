@@ -87,7 +87,7 @@ func (sio *SipIo) Add() error {
 	)
 }
 
-func (sio *SipIo) binPadAddedRecvRtpSrc(rtpbin *gst.Element, pad *gst.Pad) {
+func (sio *SipIo) binPadAddedRecvRtpSrc(_ *gst.Element, pad *gst.Pad) {
 	sio.log.Debugw("RTPBIN PAD ADDED", "pad", pad.GetName())
 	padName := pad.GetName()
 	if !strings.HasPrefix(padName, "recv_rtp_src_") {
@@ -99,7 +99,7 @@ func (sio *SipIo) binPadAddedRecvRtpSrc(rtpbin *gst.Element, pad *gst.Pad) {
 		return
 	}
 
-	caps := sio.PtMap(rtpbin, session, payloadType)
+	caps := sio.PtMap(sio.SipRtpBin, session, payloadType)
 	if caps == nil {
 		sio.log.Warnw("No payload type mapping found for RTP pad", nil, "pad", padName, "session", session, "payloadType", payloadType)
 		return
@@ -169,7 +169,70 @@ func (sio *SipIo) binPadAddedRecvRtpSrc(rtpbin *gst.Element, pad *gst.Pad) {
 	}
 }
 
-func (sio *SipIo) binPadAddedSendRtpSrc(rtpbin *gst.Element, pad *gst.Pad) {
+func (sio *SipIo) binPadAddedSendRtSrcCaps(pad *gst.Pad, session uint32) {
+	padName := pad.GetName()
+	if !strings.HasPrefix(padName, "send_rtp_src_") {
+		return
+	}
+
+	caps := pad.CurrentCaps()
+	if caps == nil {
+		sio.log.Warnw("No caps found on RTP pad", nil, "pad", pad.GetName())
+		return
+	}
+
+	mediaVal, err := caps.GetStructureAt(0).GetValue("media")
+	if err != nil {
+		sio.log.Warnw("Failed to get media from caps", err, "caps", caps.String())
+		return
+	}
+	media, ok := mediaVal.(string)
+	if !ok {
+		sio.log.Warnw("Media in caps is not a string", nil, "caps", caps.String(), "type", fmt.Sprintf("%T", mediaVal))
+		return
+	}
+
+	sio.log.Infow("SIP RTP pad added", "pad", padName, "session", session, "media", media, "caps", caps.String())
+
+	switch strings.ToLower(media) {
+	case "audio":
+		media = "audio"
+	case "video":
+		media = "video"
+	default:
+		sio.log.Warnw("Unsupported media type", nil, "media", media)
+		return
+	}
+
+	rtpSinkPad := sio.SipManager.GetRequestPad(fmt.Sprintf("sink_%s_%%u", media))
+	if err := LinkPad(
+		pad,
+		rtpSinkPad,
+	); err != nil {
+		sio.log.Errorw("Failed to link sip rtpbin pad to sip manager sink pad", err, "rtpPad", padName)
+		return
+	}
+	sio.log.Infow("Linked SIP RTP pad", "pad", padName)
+
+	var trackID uint32
+	if _, err := fmt.Sscanf(rtpSinkPad.GetName(), fmt.Sprintf("sink_%s_%%d", media), &trackID); err != nil {
+		sio.log.Warnw("Invalid SIP manager sink pad format", err, "pad", rtpSinkPad.GetName())
+		return
+	}
+	rtcpPad := sio.SipRtpBin.GetRequestPad(fmt.Sprintf("send_rtcp_src_%d", session))
+	sio.log.Infow("Requested RTCP pad from rtpbin", "name", fmt.Sprintf("send_rtcp_src_%d", session), "pad", rtcpPad.GetName())
+	rtcpSinkPad := sio.SipManager.GetRequestPad(fmt.Sprintf("sink_rtcp_%s_%d", media, trackID))
+	if err := LinkPad(
+		rtcpPad,
+		rtcpSinkPad,
+	); err != nil {
+		sio.log.Errorw("Failed to link sip rtpbin RTCP pad to SIP manager RTCP sink pad", err)
+		return
+	}
+	sio.log.Infow("Linked SIP RTCP pad", "pad", rtcpPad.GetName())
+}
+
+func (sio *SipIo) binPadAddedSendRtpSrc(_ *gst.Element, pad *gst.Pad) {
 	sio.log.Debugw("WEBRTC RTPBIN PAD ADDED", "pad", pad.GetName())
 	padName := pad.GetName()
 
@@ -183,76 +246,29 @@ func (sio *SipIo) binPadAddedSendRtpSrc(rtpbin *gst.Element, pad *gst.Pad) {
 		return
 	}
 
-	pad.AddProbe(gst.PadProbeTypeEventDownstream, func(p *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
-		event := info.GetEvent()
-		if event == nil {
-			return gst.PadProbePass
-		}
-
-		if event.Type() != gst.EventTypeCaps {
-			return gst.PadProbePass
-		}
-
-		caps := event.ParseCaps()
-		if caps == nil {
-			sio.log.Warnw("No caps found on RTP pad event", nil, "pad", padName)
-			return gst.PadProbePass
-		}
-
-		mediaVal, err := caps.GetStructureAt(0).GetValue("media")
-		if err != nil {
-			sio.log.Warnw("Failed to get media from caps", err, "caps", caps.String())
-			return gst.PadProbeRemove
-		}
-		media, ok := mediaVal.(string)
-		if !ok {
-			sio.log.Warnw("Media in caps is not a string", nil, "caps", caps.String(), "type", fmt.Sprintf("%T", mediaVal))
-			return gst.PadProbeRemove
-		}
-
-		sio.log.Infow("SIP RTP pad added", "pad", padName, "session", session, "media", media, "caps", caps.String())
-
-		switch strings.ToLower(media) {
-		case "audio":
-			media = "audio"
-		case "video":
-			media = "video"
+	wsio := weak.Make(sio)
+	if _, err := pad.Connect("notify::caps", func(padVal any, _ any) {
+		var pad *gst.Pad
+		switch v := padVal.(type) {
+		case *gst.Pad:
+			pad = v
+		case *gst.GhostPad:
+			pad = v.Pad
 		default:
-			sio.log.Warnw("Unsupported media type", nil, "media", media)
-			return gst.PadProbeRemove
+			return
 		}
 
-		rtpSinkPad := sio.SipManager.GetRequestPad(fmt.Sprintf("sink_%s_%%u", media))
-		if err := LinkPad(
-			pad,
-			rtpSinkPad,
-		); err != nil {
-			sio.log.Errorw("Failed to link sip rtpbin pad to sip manager sink pad", err, "rtpPad", padName)
-			return gst.PadProbeRemove
+		ptr := wsio.Value()
+		if ptr != nil {
+			ptr.binPadAddedSendRtSrcCaps(pad, session)
 		}
-		sio.log.Infow("Linked SIP RTP pad", "pad", padName)
-
-		var trackID uint32
-		if _, err := fmt.Sscanf(rtpSinkPad.GetName(), fmt.Sprintf("sink_%s_%%d", media), &trackID); err != nil {
-			sio.log.Warnw("Invalid SIP manager sink pad format", err, "pad", rtpSinkPad.GetName())
-			return gst.PadProbeRemove
-		}
-		rtcpPad := rtpbin.GetRequestPad(fmt.Sprintf("send_rtcp_src_%d", session))
-		sio.log.Infow("Requested RTCP pad from rtpbin", "name", fmt.Sprintf("send_rtcp_src_%d", session), "pad", rtcpPad.GetName())
-		rtcpSinkPad := sio.SipManager.GetRequestPad(fmt.Sprintf("sink_rtcp_%s_%d", media, trackID))
-		if err := LinkPad(
-			rtcpPad,
-			rtcpSinkPad,
-		); err != nil {
-			sio.log.Errorw("Failed to link sip rtpbin RTCP pad to SIP manager RTCP sink pad", err)
-			return gst.PadProbeRemove
-		}
-		sio.log.Infow("Linked SIP RTCP pad", "pad", rtcpPad.GetName())
-		return gst.PadProbeRemove
-	})
+	}); err != nil {
+		sio.log.Errorw("Failed to connect to caps notify signal on RTP pad", err, "pad", padName)
+		return
+	}
 }
 
-func (sio *SipIo) sipPadAddedSrc(sipManager *gst.Element, pad *gst.Pad) {
+func (sio *SipIo) sipPadAddedSrc(_ *gst.Element, pad *gst.Pad) {
 	padName := pad.GetName()
 	if !strings.HasPrefix(padName, "src_") || strings.HasPrefix(padName, "src_rtcp_") {
 		return
@@ -279,7 +295,7 @@ func (sio *SipIo) sipPadAddedSrc(sipManager *gst.Element, pad *gst.Pad) {
 	sio.log.Infow("Linked SIP audio pad", "pad", padName)
 }
 
-func (sio *SipIo) sipPadAddedSrcRtcp(sipManager *gst.Element, pad *gst.Pad) {
+func (sio *SipIo) sipPadAddedSrcRtcp(_ *gst.Element, pad *gst.Pad) {
 	padName := pad.GetName()
 	if !strings.HasPrefix(padName, "src_rtcp_") {
 		return
@@ -306,7 +322,7 @@ func (sio *SipIo) sipPadAddedSrcRtcp(sipManager *gst.Element, pad *gst.Pad) {
 	sio.log.Infow("Linked SIP audio RTCP pad", "pad", padName)
 }
 
-func (sio *SipIo) PtMap(rtpbin *gst.Element, session uint32, pt uint32) *gst.Caps {
+func (sio *SipIo) PtMap(_ *gst.Element, session uint32, pt uint32) *gst.Caps {
 	val, err := sio.SipManager.Emit("pt-map", session, pt)
 	if err != nil {
 		sio.log.Errorw("Failed to emit pt-map signal on SIP manager", err)
