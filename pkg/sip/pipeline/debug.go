@@ -36,7 +36,7 @@ func (p *Pipeline) Monitor() {
 			dotData = sanitizeDot(dotData)
 
 			if dotData != prevDot {
-				fmt.Printf("Pipeline %s changed, updating dot file\n", name)
+				// fmt.Printf("Pipeline %s changed, updating dot file\n", name)
 				prevDot = dotData
 				dotFile.Truncate(0)
 				dotFile.Seek(0, 0)
@@ -46,7 +46,7 @@ func (p *Pipeline) Monitor() {
 				time.Sleep(100 * time.Millisecond)
 			}
 
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(5000 * time.Millisecond)
 		}
 	}()
 }
