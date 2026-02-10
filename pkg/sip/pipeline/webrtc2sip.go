@@ -19,6 +19,7 @@ type WebrtcToSip struct {
 	log      logger.Logger
 
 	OpusG711 *gst.Element
+	Vp8H264  *gst.Element
 }
 
 var _ GstChain = (*WebrtcToSip)(nil)
@@ -32,12 +33,18 @@ func (stw *WebrtcToSip) Create() error {
 		return fmt.Errorf("failed to create opus-g711 element: %w", err)
 	}
 
+	stw.Vp8H264, err = gst.NewElement("vp8-h264")
+	if err != nil {
+		return fmt.Errorf("failed to create vp8-h264 element: %w", err)
+	}
+
 	return nil
 }
 
 func (stw *WebrtcToSip) Add() error {
 	if err := stw.pipeline.Pipeline().AddMany(
 		stw.OpusG711,
+		stw.Vp8H264,
 	); err != nil {
 		return fmt.Errorf("failed to add WebRTC to SIP elements to pipeline: %w", err)
 	}
@@ -51,6 +58,7 @@ func (stw *WebrtcToSip) Link() error {
 func (stw *WebrtcToSip) Close() error {
 	if err := stw.pipeline.Pipeline().RemoveMany(
 		stw.OpusG711,
+		stw.Vp8H264,
 	); err != nil {
 		return fmt.Errorf("failed to remove WebRTC to SIP elements from pipeline: %w", err)
 	}

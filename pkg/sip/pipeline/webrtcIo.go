@@ -87,24 +87,74 @@ func (wio *WebrtcIo) binPadAddedRecvRtpSrc(rtpbin *gst.Element, pad *gst.Pad) {
 		wio.log.Warnw("Invalid RTP pad format", err, "pad", padName)
 		return
 	}
-	wio.log.Infow("RTP pad added", "pad", padName, "ssrc", ssrc, "payloadType", payloadType)
-	if err := LinkPad(
-		pad,
-		wio.pipeline.WebrtcToSip.OpusG711.GetStaticPad("sink"),
-	); err != nil {
-		wio.log.Errorw("Failed to link rtpbin pad to depayloader", err)
+
+	caps := pad.GetCurrentCaps()
+	if caps == nil {
+		wio.log.Warnw("RTP pad has no caps", nil, "pad", padName)
 		return
 	}
 
-	if err := LinkPad(
-		wio.pipeline.WebrtcToSip.OpusG711.GetStaticPad("src"),
-		wio.pipeline.SipIo.SipRtpBin.GetRequestPad("send_rtp_sink_0"),
-	); err != nil {
-		wio.log.Errorw("Failed to link rtp payloader to sip rtpbin", err)
+	encVal, err := caps.GetStructureAt(0).GetValue("encoding-name")
+	if err != nil {
+		wio.log.Warnw("RTP pad caps has no encoding-name", err, "pad", padName, "caps", caps.String())
 		return
 	}
 
-	wio.log.Infow("Linked RTP pad", "pad", padName)
+	enc, ok := encVal.(string)
+	if !ok {
+		wio.log.Warnw("RTP pad caps encoding-name is not a string", nil, "pad", padName, "caps", caps.String())
+		return
+	}
+
+	wio.log.Infow("RTP pad added", "pad", padName, "ssrc", ssrc, "payloadType", payloadType, "encoding", enc, "caps", caps.String())
+
+	var destPad *gst.Pad
+	var srcPad *gst.Pad
+	switch strings.ToLower(enc) {
+	case "opus":
+		destPad = wio.pipeline.WebrtcToSip.OpusG711.GetStaticPad("sink")
+		srcPad = wio.pipeline.WebrtcToSip.OpusG711.GetStaticPad("src")
+	case "vp8":
+		destPad = wio.pipeline.WebrtcToSip.Vp8H264.GetStaticPad("sink")
+		srcPad = wio.pipeline.WebrtcToSip.Vp8H264.GetStaticPad("src")
+	default:
+		wio.log.Warnw("Unsupported RTP encoding", nil, "encoding", enc, "pad", padName)
+		return
+	}
+
+	if destPad != nil {
+
+		if destPad.IsLinked() {
+			wio.log.Warnw("RTP pad is already linked", nil, "pad", padName)
+			return
+		}
+
+		if err := LinkPad(
+			pad,
+			destPad,
+		); err != nil {
+			wio.log.Errorw("Failed to link rtpbin pad to depayloader", err)
+			return
+		}
+		wio.log.Infow("Linked RTP pad", "pad", padName, "destination", destPad.GetName())
+	}
+
+	if srcPad != nil {
+		if srcPad.IsLinked() {
+			wio.log.Warnw("Source pad is already linked, cannot link to new RTP pad", nil, "pad", srcPad.GetName())
+			return
+		}
+
+		if err := LinkPad(
+			srcPad,
+			wio.pipeline.SipIo.SipRtpBin.GetRequestPad(fmt.Sprintf("send_rtp_sink_%d", session)),
+		); err != nil {
+			wio.log.Errorw("Failed to link rtp payloader to sip rtpbin", err)
+			return
+		}
+
+		wio.log.Infow("Linked RTP pad", "pad", padName)
+	}
 }
 
 func (wio *WebrtcIo) binPadAddedSendRtpSrc(_ *gst.Element, pad *gst.Pad) {
@@ -121,45 +171,73 @@ func (wio *WebrtcIo) binPadAddedSendRtpSrc(_ *gst.Element, pad *gst.Pad) {
 		return
 	}
 
-	wio.log.Infow("SIP RTP pad added", "pad", padName, "session", session)
+	pad.AddProbe(gst.PadProbeTypeEventDownstream, func(p *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+		event := info.GetEvent()
+		if event == nil {
+			return gst.PadProbePass
+		}
 
-	// fakesink, err := gst.NewElementWithProperties("fakesink", map[string]interface{}{
-	// 	"name": fmt.Sprintf("webrtc_send_rtp_fakesink_%d", session),
-	// })
-	// if err != nil {
-	// 	wio.log.Errorw("Failed to create fakesink for send RTP pad", err, "session", session)
-	// 	return
-	// }
+		if event.Type() != gst.EventTypeCaps {
+			return gst.PadProbePass
+		}
 
-	// if err := wio.pipeline.Pipeline().Add(fakesink); err != nil {
-	// 	wio.log.Errorw("Failed to add fakesink to pipeline", err, "session", session)
-	// 	return
-	// }
+		caps := event.ParseCaps()
+		if caps == nil {
+			wio.log.Warnw("No caps found on RTP pad event", nil, "pad", padName)
+			return gst.PadProbePass
+		}
 
-	// fakesink.SyncStateWithParent()
+		mediaVal, err := caps.GetStructureAt(0).GetValue("media")
+		if err != nil {
+			wio.log.Warnw("SIP RTP pad caps has no media", err, "pad", padName, "caps", caps.String())
+			return gst.PadProbeRemove
+		}
 
-	if err := LinkPad(
-		pad,
-		// fakesink.GetStaticPad("sink"),
-		wio.LkRoom.GetRequestPad("sink_2_%u"),
-	); err != nil {
-		wio.log.Errorw("Failed to link sip rtpbin pad to sinkwriter", err)
-		return
-	}
-	wio.log.Infow("Linked SIP RTP pad", "pad", padName)
+		media, ok := mediaVal.(string)
+		if !ok {
+			wio.log.Warnw("SIP RTP pad caps media is not a string", nil, "pad", padName, "caps", caps.String())
+			return gst.PadProbeRemove
+		}
 
-	// rtpbin can't process two pads at the same time.
-	// since the sometimes pad of this callback already hold the lock for this session, we can't request a new pad on the same session before we return
-	go func() {
+		var kind livekit.TrackSource
+		switch strings.ToLower(media) {
+		case "audio":
+			kind = livekit.TrackSource_MICROPHONE
+		case "video":
+			kind = livekit.TrackSource_CAMERA
+		default:
+			wio.log.Warnw("Unsupported SIP RTP media type", nil, "media", media, "pad", padName, "caps", caps.String())
+			return gst.PadProbeRemove
+		}
+
+		wio.log.Infow("SIP RTP pad added", "pad", padName, "session", session, "kind", kind.String(), "caps", caps.String())
+
+		sinkPadName := fmt.Sprintf("sink_%d_%%u", int32(kind))
+		sinkPad := wio.LkRoom.GetRequestPad(sinkPadName)
+		if err := LinkPad(
+			pad,
+			sinkPad,
+		); err != nil {
+			wio.log.Errorw("Failed to link sip rtpbin pad to sinkwriter", err, "pad", padName, "session", session, "kind", kind.String(), "caps", caps.String(), "sinkPadName", sinkPadName)
+			return gst.PadProbeRemove
+		}
+		wio.log.Infow("Linked SIP RTP pad", "pad", padName)
+
+		if _, err := fmt.Sscanf(sinkPad.GetName(), fmt.Sprintf("sink_%d_%%d", int32(kind)), &session); err != nil {
+			wio.log.Warnw("Invalid sink pad name format", err, "pad", sinkPad.GetName())
+			return gst.PadProbeRemove
+		}
+
 		rtcpPad := wio.WebrtcRtpBin.GetRequestPad(fmt.Sprintf("send_rtcp_src_%d", session))
 		if err := LinkPad(
 			rtcpPad,
 			wio.RtcpFunnel.GetRequestPad("sink_%u"),
 		); err != nil {
 			wio.log.Errorw("Failed to link sip rtpbin RTCP pad to RTCP funnel", err)
-			return
+			return gst.PadProbeRemove
 		}
-	}()
+		return gst.PadProbeRemove
+	})
 }
 
 func (wio *WebrtcIo) lkroomSrcRtp(lkroom *gst.Element, pad *gst.Pad) {
@@ -174,12 +252,12 @@ func (wio *WebrtcIo) lkroomSrcRtp(lkroom *gst.Element, pad *gst.Pad) {
 		return
 	}
 
-	if kind != uint32(livekit.TrackSource_MICROPHONE) {
-		wio.log.Warnw("Unsupported track kind for SIP audio", nil, "kind", kind, "pad", padName)
-		return
-	}
+	// if kind != uint32(livekit.TrackSource_MICROPHONE) {
+	// 	wio.log.Warnw("Unsupported track kind for SIP audio", nil, "kind", kind, "pad", padName)
+	// 	return
+	// }
 
-	wio.log.Infow("SIP audio pad added", "pad", padName, "trackID", trackID)
+	wio.log.Infow("SIP pad added", "pad", padName, "trackID", trackID)
 
 	if err := LinkPad(
 		pad,
@@ -203,10 +281,10 @@ func (wio *WebrtcIo) lkroomSrcRtcp(lkroom *gst.Element, pad *gst.Pad) {
 		return
 	}
 
-	if kind != uint32(livekit.TrackSource_MICROPHONE) {
-		wio.log.Warnw("Unsupported track kind for SIP audio RTCP", nil, "kind", kind, "pad", padName)
-		return
-	}
+	// if kind != uint32(livekit.TrackSource_MICROPHONE) {
+	// 	wio.log.Warnw("Unsupported track kind for SIP audio RTCP", nil, "kind", kind, "pad", padName)
+	// 	return
+	// }
 
 	wio.log.Infow("SIP audio RTCP pad added", "pad", padName, "trackID", trackID)
 
