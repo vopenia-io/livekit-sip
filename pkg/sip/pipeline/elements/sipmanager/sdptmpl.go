@@ -14,7 +14,12 @@ t=0 0
 m=audio 123 RTP/AVP 0 8
 a=rtpmap:0 PCMU/8000
 a=rtpmap:8 PCMA/8000
-m=video 456 RTP/AVP 96
+m=audio 456 RTP/AVP 0 8 101
+a=rtpmap:0 PCMU/8000
+a=rtpmap:8 PCMA/8000
+a=rtpmap:101 telephone-event/8000
+a=fmtp:101 0-15
+m=video 789 RTP/AVP 96
 a=rtpmap:96 H264/90000
 `
 
@@ -29,6 +34,10 @@ func (s *SdpTemplate) Audio() *pj.PjSdpMedia {
 	return ((*pj.PjSdpSession)(s)).MediaAt(0)
 }
 
-func (s *SdpTemplate) Video() *pj.PjSdpMedia {
+func (s *SdpTemplate) AudioDtmf() *pj.PjSdpMedia {
 	return ((*pj.PjSdpSession)(s)).MediaAt(1)
+}
+
+func (s *SdpTemplate) Video() *pj.PjSdpMedia {
+	return ((*pj.PjSdpSession)(s)).MediaAt(2)
 }
