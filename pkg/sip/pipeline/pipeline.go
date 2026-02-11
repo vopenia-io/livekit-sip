@@ -315,12 +315,3 @@ func LinkChains(p *Pipeline, chains ...GstChain) error {
 	}
 	return nil
 }
-
-func SyncElements(elements ...*gst.Element) error {
-	for _, elem := range elements {
-		if !elem.SyncStateWithParent() {
-			return fmt.Errorf("failed to sync state for %s", elem.GetName())
-		}
-	}
-	return nil
-}
