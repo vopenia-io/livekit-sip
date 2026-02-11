@@ -50,6 +50,11 @@ func (p *Pipeline) onMessage(msg *gst.Message) bool {
 	case gst.MessageStateChanged:
 		oldState, newState := msg.ParseStateChanged()
 		p.Log.Debugw("Pipeline state changed", "old", oldState.String(), "new", newState.String())
+	case gst.MessageLatency:
+		p.Log.Debugw("Pipeline latency changed")
+		if !p.Pipeline().RecalculateLatency() {
+			p.Log.Warnw("Failed to recalculate pipeline latency", nil)
+		}
 	case gst.MessageElement:
 		structure := msg.GetStructure()
 		if structure == nil {

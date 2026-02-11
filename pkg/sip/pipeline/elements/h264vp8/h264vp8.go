@@ -103,7 +103,8 @@ func (h *H264Vp8) InstanceInit(self *glib.Object) {
 	}
 
 	h.VideoRate, err = gst.NewElementWithProperties("videorate", map[string]interface{}{
-		"drop-only": true,
+		"drop-only":     false,
+		"skip-to-first": true,
 	})
 	if err != nil {
 		h.self.Error("Failed to create videorate element", err)
