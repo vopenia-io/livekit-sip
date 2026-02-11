@@ -5,6 +5,7 @@ import (
 	"strings"
 	"weak"
 
+	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
@@ -123,7 +124,6 @@ func (wio *WebrtcIo) binPadAddedRecvRtpSrc(rtpbin *gst.Element, pad *gst.Pad) {
 	}
 
 	if destPad != nil {
-
 		if destPad.IsLinked() {
 			wio.log.Warnw("RTP pad is already linked", nil, "pad", padName)
 			return
@@ -210,7 +210,12 @@ func (wio *WebrtcIo) binPadAddedSendRtpSrcCaps(pad *gst.Pad, session uint32) {
 		return
 	}
 
-	rtcpPad := wio.WebrtcRtpBin.GetRequestPad(fmt.Sprintf("send_rtcp_src_%d", session))
+	rtcpPadName := fmt.Sprintf("send_rtcp_src_%d", session)
+	if wio.WebrtcRtpBin.GetStaticPad(rtcpPadName) != nil {
+		wio.log.Warnw("RTCP pad already exists for session, skipping RTCP linking", nil, "rtcpPadName", rtcpPadName, "session", session)
+		return
+	}
+	rtcpPad := wio.WebrtcRtpBin.GetRequestPad(rtcpPadName)
 	if err := LinkPad(
 		rtcpPad,
 		wio.RtcpFunnel.GetRequestPad("sink_%u"),
@@ -235,7 +240,11 @@ func (wio *WebrtcIo) binPadAddedSendRtpSrc(_ *gst.Element, pad *gst.Pad) {
 	}
 
 	wwio := weak.Make(wio)
-	if _, err := pad.Connect("notify::caps", func(padVal any, _ any) {
+	var (
+		hnd glib.SignalHandle
+		err error
+	)
+	if hnd, err = pad.Connect("notify::caps", func(padVal any, _ any) {
 		var pad *gst.Pad
 		switch v := padVal.(type) {
 		case *gst.Pad:
@@ -249,6 +258,7 @@ func (wio *WebrtcIo) binPadAddedSendRtpSrc(_ *gst.Element, pad *gst.Pad) {
 		ptr := wwio.Value()
 		if ptr != nil {
 			ptr.binPadAddedSendRtpSrcCaps(pad, session)
+			pad.HandlerDisconnect(hnd)
 		}
 	}); err != nil {
 		wio.log.Errorw("Failed to connect to caps notify signal on RTP pad", err, "pad", padName)

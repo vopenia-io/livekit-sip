@@ -14,11 +14,13 @@ var CAT = gst.NewDebugCategory(
 )
 
 var properties = []*glib.ParamSpec{
-	glib.NewBoxedParam(
-		"h264-caps",
-		"H264 Caps",
-		"The caps of H264 RTP stream",
-		gst.TypeCaps,
+	glib.NewUintParam(
+		"h264-pt",
+		"H264 Payload Type",
+		"The payload type of H264 RTP stream",
+		0,
+		127,
+		96,
 		glib.ParameterWritable,
 	),
 }
@@ -34,7 +36,6 @@ type Vp8H264 struct {
 	X264Enc    *gst.Element
 	H264Parse  *gst.Element
 	RtpH264Pay *gst.Element
-	H264Caps   *gst.Element
 }
 
 func (h *Vp8H264) New() glib.GoObjectSubclass {
@@ -146,15 +147,6 @@ func (h *Vp8H264) InstanceInit(self *glib.Object) {
 		return
 	}
 
-	h.H264Caps, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-		"caps": gst.NewCapsFromString("application/x-rtp, media=(string)video, clock-rate=(int)90000, encoding-name=(string)H264"),
-	})
-	if err != nil {
-		h.self.Error("Failed to create H264 capsfilter element", err)
-		h.self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create H264 capsfilter element: %v", err))
-		return
-	}
-
 	// Add all elements to the bin
 	h.self.AddMany(
 		h.Vp8Depay,
@@ -165,7 +157,6 @@ func (h *Vp8H264) InstanceInit(self *glib.Object) {
 		h.X264Enc,
 		h.H264Parse,
 		h.RtpH264Pay,
-		h.H264Caps,
 	)
 
 	// Link the elements together
@@ -178,7 +169,6 @@ func (h *Vp8H264) InstanceInit(self *glib.Object) {
 		h.X264Enc,
 		h.H264Parse,
 		h.RtpH264Pay,
-		h.H264Caps,
 	); err != nil {
 		h.self.Error("Failed to link elements", err)
 		h.self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link elements: %v", err))
@@ -190,7 +180,7 @@ func (h *Vp8H264) InstanceInit(self *glib.Object) {
 	ghostSink := gst.NewGhostPadFromTemplate("sink", h.Vp8Depay.GetStaticPad("sink"), elemClass.GetPadTemplate("sink"))
 	h.self.AddPad(ghostSink.Pad)
 
-	ghostSrc := gst.NewGhostPadFromTemplate("src", h.H264Caps.GetStaticPad("src"), elemClass.GetPadTemplate("src"))
+	ghostSrc := gst.NewGhostPadFromTemplate("src", h.RtpH264Pay.GetStaticPad("src"), elemClass.GetPadTemplate("src"))
 	h.self.AddPad(ghostSrc.Pad)
 }
 
@@ -198,23 +188,16 @@ func (h *Vp8H264) SetProperty(instance *glib.Object, id uint, value *glib.Value)
 	self := gst.ToGstBin(instance)
 	param := properties[id]
 	switch param.Name() {
-	case "h264-caps":
-		val, err := value.GoValue()
-		if err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting caps property value: %v", err))
+	case "h264-pt":
+		gv, _ := value.GoValue()
+		val, _ := gv.(uint)
+		if val > 127 {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid H264 PT value: %d", val))
 			return
 		}
-		caps, ok := val.(*gst.Caps)
-		if !ok {
-			self.Log(CAT, gst.LevelError, "Invalid type for caps property")
-			return
-		}
-		if caps == nil {
-			self.Log(CAT, gst.LevelError, "Nil caps provided")
-			return
-		}
-		if err := h.H264Caps.SetProperty("caps", caps.Copy().Ref()); err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set caps property: %v", err))
+		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Setting H264 PT to %d", val))
+		if err := h.RtpH264Pay.SetProperty("pt", val); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set H264 PT: %v", err))
 		}
 	}
 }
@@ -236,7 +219,6 @@ func (h *Vp8H264) ChangeState(instance *gst.Element, transition gst.StateChange)
 		h.X264Enc = nil
 		h.H264Parse = nil
 		h.RtpH264Pay = nil
-		h.H264Caps = nil
 	}
 
 	return ret

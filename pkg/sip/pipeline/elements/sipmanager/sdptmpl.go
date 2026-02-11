@@ -21,6 +21,7 @@ a=rtpmap:101 telephone-event/8000
 a=fmtp:101 0-15
 m=video 789 RTP/AVP 96
 a=rtpmap:96 H264/90000
+a=fmtp:96 profile-level-id=42e01e;packetization-mode=1
 `
 
 func NewSdpTemplate(p *pj.PjPool) *SdpTemplate {

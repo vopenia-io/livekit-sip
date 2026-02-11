@@ -167,7 +167,7 @@ func (*SipManager) ClassInit(klass *glib.ObjectClass) {
 		"pt-map",
 		gst.SignalRunLast,
 		gst.TypeCaps,
-		glib.TYPE_UINT, glib.TYPE_UINT)
+		glib.TYPE_UINT)
 
 	CAT.Log(gst.LevelDebug, "Installing properties")
 	class.InstallProperties(properties)
@@ -200,25 +200,28 @@ func (s *SipManager) InstanceInit(instance *glib.Object) {
 		return string(answer)
 	})
 
-	self.Connect("pt-map", func(instance *gst.Element, session uint, pt uint) *gst.Caps {
+	self.Connect("pt-map", func(instance *gst.Element, pt uint) *gst.Caps {
 		self := gst.ToGstBin(instance)
 		s := sWeak.Value()
 		if s == nil {
 			self.Log(CAT, gst.LevelError, "SipManager instance has been garbage collected")
 			return nil
 		}
-		return s.PtMap(self, session, pt)
+		return s.PtMap(self, pt)
 	})
 }
 
-func (s *SipManager) PtMap(self *gst.Bin, session uint, pt uint) *gst.Caps {
+func (s *SipManager) PtMap(self *gst.Bin, pt uint) *gst.Caps {
 	if pt > math.MaxUint8 {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid PT value: %d", pt))
 		return nil
 	}
 
+	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Received PT map request for PT %d", pt))
+
 	caps, ok := s.ptMap[uint8(pt)]
 	if ok {
+		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Found caps for PT %d: %s", pt, caps.String()))
 		return caps.Copy()
 	}
 	self.Log(CAT, gst.LevelWarning, fmt.Sprintf("No caps found for PT %d", pt))
