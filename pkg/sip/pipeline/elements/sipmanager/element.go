@@ -330,7 +330,7 @@ func (s *SipManager) close(self *gst.Bin) gst.StateChangeReturn {
 
 func (s *SipManager) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
 	self := gst.ToGstBin(instance)
-	// self.Log(CAT, gst.LevelDebug, fmt.Sprintf("ChangeState: %v", transition))
+	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("ChangeState: %v", transition))
 
 	switch transition {
 	case gst.StateChangeNullToReady:

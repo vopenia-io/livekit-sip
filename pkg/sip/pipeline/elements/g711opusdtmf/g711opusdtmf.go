@@ -24,6 +24,9 @@ type G711OpusDtmf struct {
 	DtmfDetect    *gst.Element
 	OpusEnc       *gst.Element
 	RtpOpusPay    *gst.Element
+
+	RtpDtmlDepay *gst.Element
+	FakeSink     *gst.Element
 }
 
 func (e *G711OpusDtmf) New() glib.GoObjectSubclass {
@@ -44,6 +47,13 @@ func (e *G711OpusDtmf) ClassInit(klass *glib.ObjectClass) {
 		gst.PadDirectionSink,
 		gst.PadPresenceAlways,
 		gst.NewCapsFromString("application/x-rtp, media=(string)audio, clock-rate=(int)8000, encoding-name=(string){ PCMU, PCMA }"),
+	))
+
+	class.AddPadTemplate(gst.NewPadTemplate(
+		"sink_dtmf",
+		gst.PadDirectionSink,
+		gst.PadPresenceAlways,
+		gst.NewCapsFromString("application/x-rtp, media=(string)audio, clock-rate=(int)8000, encoding-name=(string)TELEPHONE-EVENT"),
 	))
 
 	class.AddPadTemplate(gst.NewPadTemplate(
@@ -112,6 +122,23 @@ func (e *G711OpusDtmf) InstanceInit(instance *glib.Object) {
 		return
 	}
 
+	e.RtpDtmlDepay, err = gst.NewElement("rtpdtmfdepay")
+	if err != nil {
+		self.Error("Failed to create rtpdtmfdepay element", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create rtpdtmfdepay element: %v", err))
+		return
+	}
+
+	e.FakeSink, err = gst.NewElementWithProperties("fakesink", map[string]interface{}{
+		"sync":  false,
+		"async": false,
+	})
+	if err != nil {
+		self.Error("Failed to create fakesink element", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create fakesink element: %v", err))
+		return
+	}
+
 	self.AddMany(
 		e.Identity,
 		e.AudioConvert,
@@ -120,6 +147,8 @@ func (e *G711OpusDtmf) InstanceInit(instance *glib.Object) {
 		e.DtmfDetect,
 		e.OpusEnc,
 		e.RtpOpusPay,
+		e.RtpDtmlDepay,
+		e.FakeSink,
 	)
 
 	if err := gst.ElementLinkMany(
@@ -135,10 +164,22 @@ func (e *G711OpusDtmf) InstanceInit(instance *glib.Object) {
 		return
 	}
 
+	if err := gst.ElementLinkMany(
+		e.RtpDtmlDepay,
+		e.FakeSink,
+	); err != nil {
+		self.Error("Failed to link DTMF elements", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link DTMF elements: %v", err))
+		return
+	}
+
 	elemClass := gst.ToElementClass(self.Class())
 
 	ghostSink := gst.NewGhostPadFromTemplate("sink", e.Identity.GetStaticPad("sink"), elemClass.GetPadTemplate("sink"))
 	self.AddPad(ghostSink.Pad)
+
+	ghostSinkDtmf := gst.NewGhostPadFromTemplate("sink_dtmf", e.RtpDtmlDepay.GetStaticPad("sink"), elemClass.GetPadTemplate("sink_dtmf"))
+	self.AddPad(ghostSinkDtmf.Pad)
 
 	ghostSrc := gst.NewGhostPadFromTemplate("src", e.RtpOpusPay.GetStaticPad("src"), elemClass.GetPadTemplate("src"))
 	self.AddPad(ghostSrc.Pad)

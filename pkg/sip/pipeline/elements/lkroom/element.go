@@ -136,7 +136,15 @@ func (*lkroom) ClassInit(klass *glib.ObjectClass) {
 		class.Type(),
 		"join-room",
 		gst.SignalRunLast,
-		glib.TYPE_BOOLEAN,
+		glib.TYPE_NONE,
+	)
+
+	gst.SignalNew(
+		class.Type(),
+		"room-joined",
+		gst.SignalRunLast,
+		glib.TYPE_NONE,
+		glib.TYPE_BOOLEAN, // success
 	)
 
 	CAT.Log(gst.LevelDebug, "Adding pad template")
@@ -320,22 +328,16 @@ func (s *lkroom) Constructed(instance *glib.Object) {
 	var (
 		err error
 	)
-	_, err = self.Connect("join-room", func(instance *gst.Element) bool {
+	_, err = self.Connect("join-room", func(instance *gst.Element) {
 		self := gst.ToGstBin(instance)
-		err := s.joinRoom(self)
-		if err := self.SetLockedState(false); err != nil {
-			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Could not unlock element state: %v", err))
-		}
-		if err == nil {
-			self.ParentChangeState(gst.StateChangeReadyToPaused)
-			self.ContinueState(gst.StateChangeSuccess)
-			return true
-		} else {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error joining room: %v", err))
-			self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error joining room", err.Error())
-			self.ContinueState(gst.StateChangeFailure)
-			return false
-		}
+		go func() {
+			err := s.joinRoom(self)
+			if err != nil {
+				self.Log(CAT, gst.LevelError, fmt.Sprintf("Error joining room: %v", err))
+				self.Error("Error joining room", err)
+				return
+			}
+		}()
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error connecting join-room signal: %v", err))
@@ -349,27 +351,58 @@ func (s *lkroom) start(self *gst.Bin) gst.StateChangeReturn {
 		return gst.StateChangeSuccess
 	}
 
-	if s.AutoJoin {
-		self.Log(CAT, gst.LevelInfo, "Auto-joining room")
-		err := s.joinRoom(self)
-		if err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error connecting to room: %v", err))
-			self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error connecting to room", err.Error())
-			return gst.StateChangeFailure
-		}
+	if !self.PostMessage(gst.NewAsyncStartMessage(self)) {
+		self.Log(CAT, gst.LevelError, "Failed to post async start message")
+		self.Error("Failed to post async start message", fmt.Errorf("failed to post async start message"))
+		return gst.StateChangeFailure
 	}
-	// else {
-	// 	self.Log(CAT, gst.LevelInfo, "Auto-join disabled, waiting for event")
 
-	// 	if err := self.SetLockedState(true); err != nil {
-	// 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Could not lock element state: %v", err))
-	// 		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Could not lock element state", err.Error())
-	// 		return gst.StateChangeFailure
-	// 	}
-	// 	return gst.StateChangeAsync
-	// }
+	go func() {
+		ok := s.state.WaitJoined()
+		if err := self.SetLockedState(true); err != nil {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Could not lock element state: %v", err))
+			self.Error("Could not lock element state", fmt.Errorf("could not lock element state: %w", err))
+			return
+		}
+		defer func() {
+			if err := self.SetLockedState(false); err != nil {
+				self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Could not unlock element state: %v", err))
+				self.Error("Could not unlock element state", fmt.Errorf("could not unlock element state: %w", err))
+				return
+			}
+		}()
+		if !ok {
+			self.Log(CAT, gst.LevelError, "Failed while waiting to join room")
+			self.Error("Failed while waiting to join room", fmt.Errorf("failed while waiting to join room"))
+			self.Emit("room-joined", false)
+			self.AbortState()
+		} else {
+			self.Log(CAT, gst.LevelInfo, "Successfully joined room")
+			self.Emit("room-joined", true)
+			if ret := self.ContinueState(gst.StateChangeSuccess); ret != gst.StateChangeSuccess {
+				self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to continue state change after joining room: %v", ret))
+			}
+		}
+		if !self.PostMessage(gst.NewAsyncDoneMessage(self, gst.ClockTimeNone)) {
+			self.Log(CAT, gst.LevelError, "Failed to post async done message")
+			self.Error("Failed to post async done message", fmt.Errorf("failed to post async done message"))
+			return
+		}
+	}()
 
-	return gst.StateChangeSuccess
+	go func() {
+		if s.AutoJoin {
+			self.Log(CAT, gst.LevelInfo, "Auto-joining room")
+			err := s.joinRoom(self)
+			if err != nil {
+				self.Log(CAT, gst.LevelError, fmt.Sprintf("Error connecting to room: %v", err))
+				self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error connecting to room", err.Error())
+				return
+			}
+		}
+	}()
+
+	return gst.StateChangeAsync
 }
 
 func (s *lkroom) joinRoom(self *gst.Bin) error {
@@ -429,14 +462,7 @@ func (s *lkroom) ChangeState(instance *gst.Element, transition gst.StateChange) 
 		}
 		return gst.StateChangeFailure
 	}
-	// self.Log(CAT, gst.LevelDebug, fmt.Sprintf("ChangeState: %v", transition))
-
-	switch transition {
-	case gst.StateChangeReadyToPaused:
-		if ret := s.start(self); ret != gst.StateChangeSuccess {
-			return ret
-		}
-	}
+	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("ChangeState: %v", transition))
 
 	ret := self.ParentChangeState(transition)
 	if ret == gst.StateChangeFailure {
@@ -444,6 +470,10 @@ func (s *lkroom) ChangeState(instance *gst.Element, transition gst.StateChange) 
 	}
 
 	switch transition {
+	case gst.StateChangeReadyToPaused:
+		if ret := s.start(self); ret != gst.StateChangeSuccess {
+			return ret
+		}
 	case gst.StateChangeReadyToNull:
 		return s.close(self)
 	}

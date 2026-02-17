@@ -18,6 +18,8 @@ func (p *Pipeline) SetupBus() {
 	p.Log.Debugw("Setting bus to non-flushing")
 	p.bus.SetFlushing(false)
 
+	p.bus.SetSyncHandler(BusFilter)
+
 	pweak := weak.Make(p)
 	if !p.bus.AddWatch(func(msg *gst.Message) bool {
 		p := pweak.Value()
@@ -25,9 +27,19 @@ func (p *Pipeline) SetupBus() {
 			fmt.Printf("Pipeline has been garbage collected, stopping bus watch\n")
 			return false
 		}
-		return p.onMessage(msg)
+		success := p.onMessage(msg)
+		return success
 	}) {
 		p.Log.Errorw("Failed to set bus to non-flushing", nil)
+	}
+}
+
+func BusFilter(msg *gst.Message) gst.BusSyncReply {
+	switch msg.Type() {
+	case gst.MessageError, gst.MessageLatency, gst.MessageElement:
+		return gst.BusPass
+	default:
+		return gst.BusDrop
 	}
 }
 
@@ -42,14 +54,14 @@ func (p *Pipeline) CloseBus() {
 }
 
 func (p *Pipeline) onMessage(msg *gst.Message) bool {
-	p.Log.Debugw("Received bus message", "type", msg.Type())
+	// p.Log.Infow("Received bus message", "type", msg.Type())
 	switch msg.Type() {
 	case gst.MessageError:
 		gErr := msg.ParseError()
 		p.Log.Errorw("Pipeline error", gErr)
-	case gst.MessageStateChanged:
-		oldState, newState := msg.ParseStateChanged()
-		p.Log.Debugw("Pipeline state changed", "old", oldState.String(), "new", newState.String())
+	// case gst.MessageStateChanged:
+	// 	oldState, newState := msg.ParseStateChanged()
+	// 	p.Log.Debugw("Pipeline state changed", "old", oldState.String(), "new", newState.String())
 	case gst.MessageLatency:
 		p.Log.Debugw("Pipeline latency changed")
 		if !p.Pipeline().RecalculateLatency() {

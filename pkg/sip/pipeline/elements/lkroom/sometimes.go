@@ -10,6 +10,11 @@ import (
 )
 
 func (s *lkroom) SometimesTrackAdded(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
+	if !s.state.WaitJoined() {
+		s.self.Log(CAT, gst.LevelError, "Failed to join room - cannot add track (should not happen)")
+		return
+	}
+
 	kind := uint(pub.Source())
 	if kind == uint(livekit.TrackSource_UNKNOWN) {
 		s.self.Log(CAT, gst.LevelWarning, "SometimesTrackAdded called with unknown track source")

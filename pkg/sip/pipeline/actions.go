@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"runtime/cgo"
 
+	"github.com/go-gst/go-glib/glib"
+	"github.com/go-gst/go-gst/gst"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
@@ -132,13 +134,28 @@ func (p *Pipeline) SetRoomOptions(wsUrl, token string, opts ...lksdk.ConnectOpti
 		return fmt.Errorf("failed to set connect-options property: %w", err)
 	}
 
-	res, err := p.WebrtcIo.LkRoom.Emit("join-room")
+	sucess := make(chan bool, 1)
+	var (
+		hnd glib.SignalHandle
+		err error
+	)
+	hnd, err = p.WebrtcIo.LkRoom.Connect("room-joined", func(_ *gst.Element, ok bool) {
+		sucess <- ok
+		p.WebrtcIo.LkRoom.HandlerDisconnect(hnd)
+	})
 	if err != nil {
+		return fmt.Errorf("failed to connect to room-joined signal: %w", err)
+	}
+
+	if _, err := p.WebrtcIo.LkRoom.Emit("join-room"); err != nil {
 		return fmt.Errorf("failed to emit join-room signal: %v", err)
 	}
-	if success, ok := res.(bool); !ok || !success {
-		return fmt.Errorf("join-room signal reported failure")
+
+	ok := <-sucess
+	if !ok {
+		return fmt.Errorf("failed to join room")
 	}
+
 	p.Log.Infow("Joined room successfully", "wsUrl", wsUrl)
 
 	// p.SetState(gst.StatePlaying)

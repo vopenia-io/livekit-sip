@@ -24,8 +24,9 @@ type Pipeline struct {
 
 	*SipIo
 	*WebrtcIo
-	*SipToWebrtc
-	*WebrtcToSip
+	// *SipToWebrtc
+	// *WebrtcToSip
+	*IOManager
 }
 
 type GstChain interface {
@@ -218,26 +219,27 @@ func New(ctx context.Context, log logger.Logger, sipOpt SipOpt) (*Pipeline, erro
 		return nil, err
 	}
 
-	p.Log.Debugw("Adding SIP to WebRTC chain")
-	p.SipToWebrtc, err = AddChain(p, NewSipToWebrtcChain(log, p))
+	p.Log.Debugw("Adding IO chain")
+	p.IOManager, err = AddChain(p, NewIOChain(log, p))
 	if err != nil {
-		p.Log.Errorw("Failed to add SIP to WebRTC chain", err)
+		p.Log.Errorw("Failed to add IO chain", err)
 		return nil, err
 	}
 
-	p.Log.Debugw("Adding WebRTC to SIP chain")
-	p.WebrtcToSip, err = AddChain(p, NewWebrtcToSipChain(log, p))
-	if err != nil {
-		p.Log.Errorw("Failed to add WebRTC to SIP chain", err)
-		return nil, err
-	}
+	// p.Log.Debugw("Adding WebRTC to SIP chain")
+	// p.WebrtcToSip, err = AddChain(p, NewWebrtcToSipChain(log, p))
+	// if err != nil {
+	// 	p.Log.Errorw("Failed to add WebRTC to SIP chain", err)
+	// 	return nil, err
+	// }
 
 	p.Log.Debugw("Linking chains")
 	if err := LinkChains(p,
 		p.SipIo,
 		p.WebrtcIo,
-		p.SipToWebrtc,
-		p.WebrtcToSip,
+		// p.SipToWebrtc,
+		// p.WebrtcToSip,
+		p.IOManager,
 	); err != nil {
 		p.Log.Errorw("Failed to link chains", err)
 		return nil, err
@@ -267,21 +269,21 @@ func (p *Pipeline) cleanupChains() error {
 		p.WebrtcIo = nil
 	}
 
-	p.Log.Debugw("Closing SIP to WebRTC chain")
-	if p.SipToWebrtc != nil {
-		if err := p.SipToWebrtc.Close(); err != nil {
-			return fmt.Errorf("failed to close SIP to WebRTC chain: %w", err)
+	p.Log.Debugw("Closing IO chain")
+	if p.IOManager != nil {
+		if err := p.IOManager.Close(); err != nil {
+			return fmt.Errorf("failed to close IO chain: %w", err)
 		}
-		p.SipToWebrtc = nil
+		p.IOManager = nil
 	}
 
-	p.Log.Debugw("Closing WebRTC to SIP chain")
-	if p.WebrtcToSip != nil {
-		if err := p.WebrtcToSip.Close(); err != nil {
-			return fmt.Errorf("failed to close WebRTC to SIP chain: %w", err)
-		}
-		p.WebrtcToSip = nil
-	}
+	// p.Log.Debugw("Closing WebRTC to SIP chain")
+	// if p.WebrtcToSip != nil {
+	// 	if err := p.WebrtcToSip.Close(); err != nil {
+	// 		return fmt.Errorf("failed to close WebRTC to SIP chain: %w", err)
+	// 	}
+	// 	p.WebrtcToSip = nil
+	// }
 
 	p.Log.Debugw("Pipeline chains closed")
 	return nil
