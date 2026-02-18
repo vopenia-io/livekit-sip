@@ -88,7 +88,9 @@ func (e *G711Opus) InstanceInit(instance *glib.Object) {
 		return
 	}
 
-	e.OpusEnc, err = gst.NewElement("opusenc")
+	e.OpusEnc, err = gst.NewElementWithProperties("opusenc", map[string]interface{}{
+		"frame-size": int(2), // 2.5ms
+	})
 	if err != nil {
 		self.Error("Failed to create opusenc element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create opusenc element: %v", err))
