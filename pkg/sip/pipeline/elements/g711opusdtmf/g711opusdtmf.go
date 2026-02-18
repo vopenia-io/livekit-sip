@@ -14,6 +14,16 @@ var CAT = gst.NewDebugCategory(
 	"g711-opus-dtmf Element",
 )
 
+var properties = []*glib.ParamSpec{
+	glib.NewBoolParam(
+		"drop-audio",
+		"Drop Audio",
+		"Whether to drop audio packets and only process DTMF events",
+		false,
+		glib.ParameterWritable,
+	),
+}
+
 type G711OpusDtmf struct {
 	Identity      *gst.Element
 	RtpG711Depay  *gst.Element
@@ -22,6 +32,7 @@ type G711OpusDtmf struct {
 	AudioResample *gst.Element
 	AudioRate     *gst.Element
 	DtmfDetect    *gst.Element
+	Valve         *gst.Element
 	OpusEnc       *gst.Element
 	RtpOpusPay    *gst.Element
 
@@ -62,6 +73,8 @@ func (e *G711OpusDtmf) ClassInit(klass *glib.ObjectClass) {
 		gst.PadPresenceAlways,
 		gst.NewCapsFromString("application/x-rtp, media=(string)audio, clock-rate=(int)48000, encoding-name=(string)OPUS"),
 	))
+
+	class.InstallProperties(properties)
 }
 
 func (e *G711OpusDtmf) InstanceInit(instance *glib.Object) {
@@ -106,7 +119,14 @@ func (e *G711OpusDtmf) InstanceInit(instance *glib.Object) {
 		return
 	}
 
-	e.OpusEnc, err = gst.NewElement("opusenc")
+	e.Valve, err = gst.NewElementWithProperties("valve", map[string]interface{}{
+		"drop":      false,
+		"drop-mode": int(1), // forward-sticky-events
+	})
+
+	e.OpusEnc, err = gst.NewElementWithProperties("opusenc", map[string]interface{}{
+		"frame-size": int(2), // 2.5ms
+	})
 	if err != nil {
 		self.Error("Failed to create opusenc element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create opusenc element: %v", err))
@@ -145,6 +165,7 @@ func (e *G711OpusDtmf) InstanceInit(instance *glib.Object) {
 		e.AudioResample,
 		e.AudioRate,
 		e.DtmfDetect,
+		e.Valve,
 		e.OpusEnc,
 		e.RtpOpusPay,
 		e.RtpDtmlDepay,
@@ -156,6 +177,7 @@ func (e *G711OpusDtmf) InstanceInit(instance *glib.Object) {
 		e.AudioResample,
 		e.AudioRate,
 		e.DtmfDetect,
+		e.Valve,
 		e.OpusEnc,
 		e.RtpOpusPay,
 	); err != nil {
@@ -185,7 +207,21 @@ func (e *G711OpusDtmf) InstanceInit(instance *glib.Object) {
 	self.AddPad(ghostSrc.Pad)
 }
 
-func (e *G711OpusDtmf) setupPCMU(self *gst.Bin, p *gst.Pad) (err error) {
+func (e *G711OpusDtmf) SetProperty(instance *glib.Object, id uint, value *glib.Value) {
+	self := gst.ToGstBin(instance)
+	param := properties[id]
+	switch param.Name() {
+	case "drop-audio":
+		gv, _ := value.GoValue()
+		val, _ := gv.(bool)
+		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Setting drop-audio to %t", val))
+		if err := e.Valve.SetProperty("drop", val); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set drop-audio: %v", err))
+		}
+	}
+}
+
+func (e *G711OpusDtmf) setupPCMU() (err error) {
 	e.RtpG711Depay, err = gst.NewElement("rtppcmudepay")
 	if err != nil {
 		return fmt.Errorf("failed to create rtppcmudepay element: %w", err)
@@ -199,7 +235,7 @@ func (e *G711OpusDtmf) setupPCMU(self *gst.Bin, p *gst.Pad) (err error) {
 	return nil
 }
 
-func (e *G711OpusDtmf) setupPCMA(self *gst.Bin, p *gst.Pad) (err error) {
+func (e *G711OpusDtmf) setupPCMA() (err error) {
 	e.RtpG711Depay, err = gst.NewElement("rtppcmadepay")
 	if err != nil {
 		return fmt.Errorf("failed to create rtppcmadepay element: %w", err)
@@ -259,12 +295,12 @@ func (e *G711OpusDtmf) G711Setup(self *gst.Bin, p *gst.Pad, info *gst.PadProbeIn
 
 		switch strings.ToUpper(encodingName) {
 		case "PCMU":
-			if err := e.setupPCMU(self, p); err != nil {
+			if err := e.setupPCMU(); err != nil {
 				self.Error("Failed to setup PCMU elements", err)
 				return gst.PadProbeRemove
 			}
 		case "PCMA":
-			if err := e.setupPCMA(self, p); err != nil {
+			if err := e.setupPCMA(); err != nil {
 				self.Error("Failed to setup PCMA elements", err)
 				return gst.PadProbeRemove
 			}
