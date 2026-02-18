@@ -87,14 +87,24 @@ func (s *sinkRtcp) Stop(self *base.GstBaseSink) bool {
 func (s *sinkRtcp) Render(self *base.GstBaseSink, buffer *gst.Buffer) gst.FlowReturn {
 	self.Log(CAT, gst.LevelTrace, fmt.Sprintf("Rendering RTCP buffer of size %d", buffer.GetSize()))
 
-	if s.pc == nil {
-		self.Log(CAT, gst.LevelError, "PeerConnection is not set, dropping RTCP packet")
-		self.Error("PeerConnection is not set", errors.New("peer connection is nil"))
+	if !s.parent.state.WaitJoined() {
+		self.Log(CAT, gst.LevelError, "Parent lkroom element failed to join room before rendering RTCP packet")
+		self.Error("Parent lkroom element failed to join room before rendering RTCP packet", errors.New("parent lkroom failed to join room"))
 		return gst.FlowError
 	}
 
+	if s.pc == nil {
+		pc := s.parent.room.LocalParticipant.GetPublisherPeerConnection()
+		if pc == nil {
+			self.Log(CAT, gst.LevelError, "PeerConnection is not set on room's LocalParticipant, dropping RTCP packet")
+			self.Error("PeerConnection is not set on room's LocalParticipant", errors.New("peer connection is nil"))
+			return gst.FlowError
+		}
+		s.pc = pc
+	}
+
 	if state := s.pc.ConnectionState(); state != webrtc.PeerConnectionStateConnected {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("PeerConnection is not connected (state: %s), dropping RTCP packet", state.String()))
+		self.Log(CAT, gst.LevelTrace, fmt.Sprintf("PeerConnection is not connected (state: %s), dropping RTCP packet", state.String()))
 		return gst.FlowOK
 	}
 
@@ -114,25 +124,25 @@ func (s *sinkRtcp) Render(self *base.GstBaseSink, buffer *gst.Buffer) gst.FlowRe
 	return gst.FlowOK
 }
 
-func (s *sinkRtcp) startAsync(self *base.GstBaseSink, transition gst.StateChange) gst.StateChangeReturn {
-	if s.parent.state.IsJoined() {
-		s.pc = s.parent.room.LocalParticipant.GetPublisherPeerConnection()
-		ret := self.ParentChangeState(transition)
-		return ret
-	}
+// func (s *sinkRtcp) startAsync(self *base.GstBaseSink, transition gst.StateChange) gst.StateChangeReturn {
+// 	if s.parent.state.IsJoined() {
+// 		s.pc = s.parent.room.LocalParticipant.GetPublisherPeerConnection()
+// 		ret := self.ParentChangeState(transition)
+// 		return ret
+// 	}
 
-	go func() {
-		if !s.parent.state.WaitJoined() {
-			self.Log(CAT, gst.LevelError, "Parent lkroom element failed to join room before starting sink_rtcp")
-			self.ContinueState(gst.StateChangeFailure)
-			return
-		}
-		self.Log(CAT, gst.LevelInfo, "Parent lkroom element joined room, continuing sink_rtcp state change")
-		ret := s.startAsync(self, transition)
-		self.ContinueState(ret)
-	}()
-	return gst.StateChangeAsync
-}
+// 	go func() {
+// 		if !s.parent.state.WaitJoined() {
+// 			self.Log(CAT, gst.LevelError, "Parent lkroom element failed to join room before starting sink_rtcp")
+// 			self.AbortState()
+// 			return
+// 		}
+// 		self.Log(CAT, gst.LevelInfo, "Parent lkroom element joined room, continuing sink_rtcp state change")
+// 		ret := s.startAsync(self, transition)
+// 		self.ContinueState(ret)
+// 	}()
+// 	return gst.StateChangeAsync
+// }
 
 func (s *sinkRtcp) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
 	self := base.ToGstBaseSink(instance)
@@ -145,9 +155,9 @@ func (s *sinkRtcp) ChangeState(instance *gst.Element, transition gst.StateChange
 		return gst.StateChangeFailure
 	}
 
-	if transition == gst.StateChangeReadyToPaused {
-		return s.startAsync(self, transition)
-	}
+	// if transition == gst.StateChangeReadyToPaused {
+	// 	return s.startAsync(self, transition)
+	// }
 
 	ret := self.ParentChangeState(transition)
 

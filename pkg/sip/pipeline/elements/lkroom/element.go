@@ -2,9 +2,7 @@ package lkroom
 
 import (
 	"fmt"
-	"math"
 	"runtime"
-	"runtime/cgo"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -21,57 +19,6 @@ var CAT = gst.NewDebugCategory(
 	gst.DebugColorFgGreen,
 	"lkroom Element",
 )
-
-var properties = []*glib.ParamSpec{
-	glib.NewUint64Param(
-		"callbacks",
-		"Callbacks Handle",
-		"Handle for the LiveKit room callbacks",
-		0,
-		math.MaxUint64,
-		0,
-		glib.ParameterWritable,
-	),
-	glib.NewUint64Param(
-		"room",
-		"Room Handle",
-		"Handle for the LiveKit room",
-		0,
-		math.MaxUint64,
-		0,
-		glib.ParameterReadable,
-	),
-	glib.NewBoolParam(
-		"auto-join",
-		"Auto Join",
-		"Automatically join the room on state change to PLAYING (default: true, must emit a 'room-joined' signal after joining if false)",
-		true,
-		glib.ParameterReadable|glib.ParameterWritable,
-	),
-	glib.NewStringParam(
-		"token",
-		"Token",
-		"LiveKit access token",
-		nil,
-		glib.ParameterReadable|glib.ParameterWritable,
-	),
-	glib.NewStringParam(
-		"ws-url",
-		"WebSocket URL",
-		"LiveKit WebSocket URL",
-		nil,
-		glib.ParameterReadable|glib.ParameterWritable,
-	),
-	glib.NewUint64Param(
-		"connect-options",
-		"Options Handle",
-		"Cgo Handle for the LiveKit room options",
-		0,
-		math.MaxUint64,
-		0,
-		glib.ParameterWritable,
-	),
-}
 
 type config struct {
 	AutoJoin bool
@@ -227,101 +174,6 @@ func (s *lkroom) InstanceInit(instance *glib.Object) {
 	self.AddPad(gsinkRtcp.Pad)
 }
 
-func (s *lkroom) SetProperty(instance *glib.Object, id uint, value *glib.Value) {
-	self := gst.ToGstBin(instance)
-	param := properties[id]
-	switch param.Name() {
-	case "callbacks":
-		gv, err := value.GoValue()
-		if err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting callbacks property value: %v", err))
-			return
-		}
-		val, ok := gv.(uint64)
-		if !ok {
-			self.Log(CAT, gst.LevelError, "Invalid type for callbacks property")
-			return
-		}
-		h := cgo.Handle(uintptr(val))
-		if h == 0 {
-			self.Log(CAT, gst.LevelError, "Invalid handle provided for callbacks")
-			return
-		}
-		obj := h.Value()
-		cb, ok := obj.(*lksdk.RoomCallback)
-		if !ok {
-			self.Log(CAT, gst.LevelError, "Handle does not contain a RoomCallback")
-			return
-		}
-		s.callbacks.Merge(cb)
-	case "auto-join":
-		gv, err := value.GoValue()
-		if err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting auto-join property value: %v", err))
-			return
-		}
-		s.AutoJoin = gv.(bool)
-	case "token":
-		gv, err := value.GoValue()
-		if err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting token property value: %v", err))
-			return
-		}
-		s.Token = gv.(string)
-	case "ws-url":
-		gv, err := value.GoValue()
-		if err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting ws-url property value: %v", err))
-			return
-		}
-		s.WsURL = gv.(string)
-	case "connect-options":
-		gv, err := value.GoValue()
-		if err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting connect-options property value: %v", err))
-			return
-		}
-		val, ok := gv.(uint64)
-		if !ok {
-			self.Log(CAT, gst.LevelError, "Invalid type for connect-options property")
-			return
-		}
-		h := cgo.Handle(uintptr(val))
-		if h == 0 {
-			self.Log(CAT, gst.LevelError, "Invalid handle provided for connect-options")
-			return
-		}
-		obj := h.Value()
-		opt, ok := obj.([]lksdk.ConnectOption)
-		if !ok {
-			self.Log(CAT, gst.LevelError, "Handle does not contain a ConnectOption")
-			return
-		}
-		s.Opt = opt
-	}
-}
-
-func (s *lkroom) GetProperty(instance *glib.Object, id uint) *glib.Value {
-	param := properties[id]
-	switch param.Name() {
-	case "room":
-		h := cgo.NewHandle(s.room)
-		val := uint64(uintptr(h))
-		gv, _ := glib.GValue(val)
-		return gv
-	case "auto-join":
-		gv, _ := glib.GValue(s.AutoJoin)
-		return gv
-	case "token":
-		gv, _ := glib.GValue(s.Token)
-		return gv
-	case "ws-url":
-		gv, _ := glib.GValue(s.WsURL)
-		return gv
-	}
-	return nil
-}
-
 func (s *lkroom) Constructed(instance *glib.Object) {
 	self := gst.ToGstBin(instance)
 
@@ -351,47 +203,8 @@ func (s *lkroom) start(self *gst.Bin) gst.StateChangeReturn {
 		return gst.StateChangeSuccess
 	}
 
-	if !self.PostMessage(gst.NewAsyncStartMessage(self)) {
-		self.Log(CAT, gst.LevelError, "Failed to post async start message")
-		self.Error("Failed to post async start message", fmt.Errorf("failed to post async start message"))
-		return gst.StateChangeFailure
-	}
-
-	go func() {
-		ok := s.state.WaitJoined()
-		if err := self.SetLockedState(true); err != nil {
-			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Could not lock element state: %v", err))
-			self.Error("Could not lock element state", fmt.Errorf("could not lock element state: %w", err))
-			return
-		}
-		defer func() {
-			if err := self.SetLockedState(false); err != nil {
-				self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Could not unlock element state: %v", err))
-				self.Error("Could not unlock element state", fmt.Errorf("could not unlock element state: %w", err))
-				return
-			}
-		}()
-		if !ok {
-			self.Log(CAT, gst.LevelError, "Failed while waiting to join room")
-			self.Error("Failed while waiting to join room", fmt.Errorf("failed while waiting to join room"))
-			self.Emit("room-joined", false)
-			self.AbortState()
-		} else {
-			self.Log(CAT, gst.LevelInfo, "Successfully joined room")
-			self.Emit("room-joined", true)
-			if ret := self.ContinueState(gst.StateChangeSuccess); ret != gst.StateChangeSuccess {
-				self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to continue state change after joining room: %v", ret))
-			}
-		}
-		if !self.PostMessage(gst.NewAsyncDoneMessage(self, gst.ClockTimeNone)) {
-			self.Log(CAT, gst.LevelError, "Failed to post async done message")
-			self.Error("Failed to post async done message", fmt.Errorf("failed to post async done message"))
-			return
-		}
-	}()
-
-	go func() {
-		if s.AutoJoin {
+	if s.AutoJoin {
+		go func() {
 			self.Log(CAT, gst.LevelInfo, "Auto-joining room")
 			err := s.joinRoom(self)
 			if err != nil {
@@ -399,10 +212,10 @@ func (s *lkroom) start(self *gst.Bin) gst.StateChangeReturn {
 				self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error connecting to room", err.Error())
 				return
 			}
-		}
-	}()
+		}()
+	}
 
-	return gst.StateChangeAsync
+	return gst.StateChangeSuccess
 }
 
 func (s *lkroom) joinRoom(self *gst.Bin) error {
@@ -411,6 +224,12 @@ func (s *lkroom) joinRoom(self *gst.Bin) error {
 		self.Log(CAT, gst.LevelInfo, "Already joined room")
 		return nil
 	}
+	defer func() {
+		if _, err := self.Emit("room-joined", s.state.IsJoined()); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error emitting room-joined signal: %v", err))
+			self.Error("Error emitting room-joined signal", err)
+		}
+	}()
 	err := s.room.JoinWithToken(s.WsURL, s.Token, s.Opt...)
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error connecting to room: %v", err))
@@ -464,16 +283,19 @@ func (s *lkroom) ChangeState(instance *gst.Element, transition gst.StateChange) 
 	}
 	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("ChangeState: %v", transition))
 
+	switch transition {
+	case gst.StateChangeReadyToPaused:
+		if ret := s.start(self); ret == gst.StateChangeFailure {
+			return ret
+		}
+	}
+
 	ret := self.ParentChangeState(transition)
 	if ret == gst.StateChangeFailure {
 		return ret
 	}
 
 	switch transition {
-	case gst.StateChangeReadyToPaused:
-		if ret := s.start(self); ret != gst.StateChangeSuccess {
-			return ret
-		}
 	case gst.StateChangeReadyToNull:
 		return s.close(self)
 	}
