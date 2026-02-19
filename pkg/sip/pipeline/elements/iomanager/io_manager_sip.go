@@ -51,6 +51,8 @@ func (e *IoManagerSip) ChangeState(instance *gst.Element, transition gst.StateCh
 	}
 
 	if transition == gst.StateChangeReadyToNull {
+		e.Audio = nil
+		e.Camera = nil
 	}
 	return ret
 }

@@ -194,29 +194,36 @@ func (s *sinkTrack) startAsync(self *base.GstBaseSink, transition gst.StateChang
 	if s.parent.state.IsJoined() {
 		if !s.publishTrack(self) {
 			self.Log(CAT, gst.LevelError, "Failed to publish track after joining room")
-			self.ContinueState(gst.StateChangeFailure)
 			return gst.StateChangeFailure
 		}
 		self.Log(CAT, gst.LevelInfo, "Parent lkroom element already joined room, published track")
-		ret := self.ParentChangeState(transition)
-		return ret
+		return gst.StateChangeSuccess
 	}
 
-	if err := self.SetLockedState(true); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to lock state change: %v", err))
-		self.ContinueState(gst.StateChangeFailure)
+	if !self.PostMessage(gst.NewAsyncStartMessage(self)) {
+		self.Log(CAT, gst.LevelError, "Failed to post async start message")
+		self.Error("Failed to post async start message", fmt.Errorf("failed to post async start message"))
 		return gst.StateChangeFailure
 	}
 	go func() {
 		if !s.parent.state.WaitJoined() {
 			self.Log(CAT, gst.LevelError, "Parent lkroom element failed to join room before starting sink_camera")
-			self.ContinueState(gst.StateChangeFailure)
+			self.AbortState()
 			return
 		}
 		self.Log(CAT, gst.LevelInfo, "Parent lkroom element joined room, continuing sink_camera state change")
-		self.SetLockedState(false)
 		ret := s.startAsync(self, transition)
+		if err := self.SetLockedState(true); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to lock state after async start: %v", err))
+			self.AbortState()
+			return
+		}
 		self.ContinueState(ret)
+		if err := self.SetLockedState(false); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to unlock state after async start: %v", err))
+			self.AbortState()
+			return
+		}
 	}()
 	return gst.StateChangeAsync
 }
@@ -233,11 +240,12 @@ func (s *sinkTrack) ChangeState(instance *gst.Element, transition gst.StateChang
 	}
 
 	if transition == gst.StateChangeReadyToPaused {
-		return s.startAsync(self, transition)
+		if ret := s.startAsync(self, transition); ret == gst.StateChangeFailure {
+			return ret
+		}
 	}
 
 	ret := self.ParentChangeState(transition)
-
 	if transition == gst.StateChangeReadyToNull {
 		s.parent = nil
 	}

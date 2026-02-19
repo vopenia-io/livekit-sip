@@ -168,3 +168,13 @@ func (s *SrcTrackRtp) Unlock(self *base.GstBaseSrc) bool {
 
 	return true
 }
+
+// func (s *SrcTrackRtp) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
+// 	self := base.ToGstBaseSrc(instance)
+// 	ret := self.ParentChangeState(transition)
+
+// 	if transition == gst.StateChangeReadyToNull {
+// 		s.parent = nil
+// 	}
+// 	return ret
+// }

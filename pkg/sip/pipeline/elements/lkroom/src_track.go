@@ -175,6 +175,7 @@ func (s *SrcTrack) ChangeState(instance *gst.Element, transition gst.StateChange
 	switch transition {
 	case gst.StateChangeReadyToNull:
 		s.src = nil
+		// s.parent = nil
 	}
 
 	return ret

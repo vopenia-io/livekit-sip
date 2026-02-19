@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"weak"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
@@ -30,6 +31,7 @@ type config struct {
 type state struct {
 	mu         sync.Mutex
 	joined     atomic.Bool
+	closed     bool
 	joinedCond *sync.Cond
 }
 
@@ -47,7 +49,7 @@ func (s *state) SetJoined(joined bool) {
 func (s *state) WaitJoined() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.joined.Load() {
+	for !s.joined.Load() && !s.closed {
 		s.joinedCond.Wait()
 	}
 	return s.joined.Load()
@@ -109,11 +111,11 @@ func (*lkroom) ClassInit(klass *glib.ObjectClass) {
 			gst.NewCapsFromString("application/x-rtp")))
 	}
 
-	class.AddPadTemplate(gst.NewPadTemplate(
-		"sink_rtcp",
-		gst.PadDirectionSink,
-		gst.PadPresenceAlways,
-		gst.NewCapsFromString("application/x-rtcp")))
+	// class.AddPadTemplate(gst.NewPadTemplate(
+	// 	"sink_rtcp",
+	// 	gst.PadDirectionSink,
+	// 	gst.PadPresenceAlways,
+	// 	gst.NewCapsFromString("application/x-rtcp")))
 
 	class.AddPadTemplate(gst.NewPadTemplate(
 		"src_%u_%u",
@@ -268,6 +270,11 @@ func (s *lkroom) joinRoom(self *gst.Bin) error {
 func (s *lkroom) close(self *gst.Bin) gst.StateChangeReturn {
 	self.Log(CAT, gst.LevelDebug, "close")
 
+	s.state.mu.Lock()
+	s.state.closed = true
+	s.state.joinedCond.Broadcast()
+	s.state.mu.Unlock()
+
 	s.room.Disconnect()
 
 	return gst.StateChangeSuccess
@@ -304,7 +311,12 @@ func (s *lkroom) ChangeState(instance *gst.Element, transition gst.StateChange) 
 }
 
 func (s *lkroom) padWaitReadyProbe() (gst.PadProbeType, gst.PadProbeCallback) {
+	sweak := weak.Make(s)
 	return gst.PadProbeTypeBuffer | gst.PadProbeTypeBufferList, func(p *gst.Pad, ppi *gst.PadProbeInfo) gst.PadProbeReturn {
+		s := sweak.Value()
+		if s == nil {
+			return gst.PadProbeRemove
+		}
 		if !s.state.IsJoined() {
 			return gst.PadProbeDrop
 		}

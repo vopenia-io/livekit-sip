@@ -3,6 +3,7 @@ package g711opusdtmf
 import (
 	"fmt"
 	"strings"
+	"weak"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
@@ -87,8 +88,15 @@ func (e *G711OpusDtmf) InstanceInit(instance *glib.Object) {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create identity element: %v", err))
 		return
 	}
+	eweak := weak.Make(e)
 	e.Identity.GetStaticPad("sink").AddProbe(gst.PadProbeTypeEventDownstream, func(p *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
-		return e.G711Setup(self, p, info) // TODO: do that cause any leaks?
+		e := eweak.Value()
+		if e == nil {
+			return gst.PadProbeRemove
+		}
+		// TODO: do that cause any leaks?
+		// yes it does, we need to make a weak ref of self too but it can only be a glib weakref as the go wrapper will get dropped 
+		return e.G711Setup(self, p, info)
 	})
 
 	e.AudioConvert, err = gst.NewElement("audioconvert")
@@ -335,8 +343,13 @@ func (e *G711OpusDtmf) ChangeState(instance *gst.Element, transition gst.StateCh
 		e.AudioConvert = nil
 		e.AudioResample = nil
 		e.AudioRate = nil
+		e.DtmfDetect = nil
+		e.Valve = nil
 		e.OpusEnc = nil
 		e.RtpOpusPay = nil
+		
+		e.RtpDtmlDepay = nil
+		e.FakeSink = nil
 	}
 	return ret
 }

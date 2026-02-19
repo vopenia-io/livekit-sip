@@ -3,6 +3,7 @@ package g711opus
 import (
 	"fmt"
 	"strings"
+	"weak"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
@@ -63,8 +64,15 @@ func (e *G711Opus) InstanceInit(instance *glib.Object) {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create identity element: %v", err))
 		return
 	}
+	eWeak := weak.Make(e)
 	e.Identity.GetStaticPad("sink").AddProbe(gst.PadProbeTypeEventDownstream, func(p *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
-		return e.G711Setup(self, p, info) // TODO: do that cause any leaks?
+		e := eWeak.Value()
+		if e == nil {
+			return gst.PadProbeRemove
+		}
+		// TODO: do that cause any leaks?
+		// yes it does, we need to make a weak ref of self too but it can only be a glib weakref as the go wrapper will get dropped 
+		return e.G711Setup(self, p, info)
 	})
 
 	e.AudioConvert, err = gst.NewElement("audioconvert")
@@ -136,7 +144,7 @@ func (e *G711Opus) InstanceInit(instance *glib.Object) {
 	self.AddPad(ghostSrc.Pad)
 }
 
-func (e *G711Opus) setupPCMU(self *gst.Bin, p *gst.Pad) (err error) {
+func (e *G711Opus) setupPCMU() (err error) {
 	e.RtpG711Depay, err = gst.NewElement("rtppcmudepay")
 	if err != nil {
 		return fmt.Errorf("failed to create rtppcmudepay element: %w", err)
@@ -150,7 +158,7 @@ func (e *G711Opus) setupPCMU(self *gst.Bin, p *gst.Pad) (err error) {
 	return nil
 }
 
-func (e *G711Opus) setupPCMA(self *gst.Bin, p *gst.Pad) (err error) {
+func (e *G711Opus) setupPCMA() (err error) {
 	e.RtpG711Depay, err = gst.NewElement("rtppcmadepay")
 	if err != nil {
 		return fmt.Errorf("failed to create rtppcmadepay element: %w", err)
@@ -210,12 +218,12 @@ func (e *G711Opus) G711Setup(self *gst.Bin, p *gst.Pad, info *gst.PadProbeInfo) 
 
 		switch strings.ToUpper(encodingName) {
 		case "PCMU":
-			if err := e.setupPCMU(self, p); err != nil {
+			if err := e.setupPCMU(); err != nil {
 				self.Error("Failed to setup PCMU elements", err)
 				return gst.PadProbeRemove
 			}
 		case "PCMA":
-			if err := e.setupPCMA(self, p); err != nil {
+			if err := e.setupPCMA(); err != nil {
 				self.Error("Failed to setup PCMA elements", err)
 				return gst.PadProbeRemove
 			}

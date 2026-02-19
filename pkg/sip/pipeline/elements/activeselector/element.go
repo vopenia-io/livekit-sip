@@ -2,6 +2,7 @@ package activeselector
 
 import (
 	"fmt"
+	"weak"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
@@ -130,7 +131,12 @@ func (s *ActiveSelector) RequestNewPad(instance *gst.Element, templ *gst.PadTemp
 
 	gsink := gst.NewGhostPadFromTemplate(pad.GetName(), pad, class.GetPadTemplate("sink_%u"))
 
+	sWeak := weak.Make(s)
 	gsink.SetEventFunction(func(curPad *gst.Pad, parent *gst.Object, event *gst.Event) bool {
+		s := sWeak.Value()
+		if s == nil {
+			return false
+		}
 		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Pad %s received event: %s", curPad.GetName(), event.Type().String()))
 		if event.Type() == gst.EventTypeCustomDownstream && event.HasName(ACTIVE_TRACK_EVENT_NAME) {
 			if !s.HandleTrackSelect(self, pad, curPad, event) {

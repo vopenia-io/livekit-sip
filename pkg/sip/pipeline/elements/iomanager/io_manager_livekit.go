@@ -49,6 +49,8 @@ func (e *IoManagerLivekit) ChangeState(instance *gst.Element, transition gst.Sta
 	}
 
 	if transition == gst.StateChangeReadyToNull {
+		e.Audio = nil
+		e.Camera = nil
 	}
 	return ret
 }
@@ -141,7 +143,7 @@ func (e *IoManagerLivekit) setupCamera(self *gst.Bin) error {
 
 	var err error
 	e.Camera, err = gst.NewElementWithProperties("vp8-h264", map[string]interface{}{
-		"h264-pt": int(109),
+		"h264-pt": int(97),
 	})
 	if err != nil {
 		self.Error("Failed to create vp8-h264 element", err)

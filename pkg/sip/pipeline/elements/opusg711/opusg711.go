@@ -2,6 +2,7 @@ package opusg711
 
 import (
 	"fmt"
+	"weak"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
@@ -90,7 +91,12 @@ func (e *OpusG711) InstanceInit(instance *glib.Object) {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create audiorate element: %v", err))
 		return
 	}
+	eWeak := weak.Make(e)
 	e.AudioRate.GetStaticPad("src").AddProbe(gst.PadProbeTypeBlockDownstream, func(p *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+		e := eWeak.Value()
+		if e == nil {
+			return gst.PadProbeRemove
+		}
 		return e.G711Setup(self, p, info) // TODO: do that cause any leaks?
 	})
 

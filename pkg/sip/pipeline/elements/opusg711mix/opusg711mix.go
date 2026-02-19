@@ -115,13 +115,13 @@ func (e *OpusG711Mix) SrcLinkFunction(pad *gst.Pad, parent *gst.Object, peer *gs
 
 	if peer.QueryAcceptCaps(pcmuCaps) {
 		self.Log(CAT, gst.LevelInfo, "Peer accepts PCMU caps, setting up PCMU elements")
-		if err := e.setupPCMU(self); err != nil {
+		if err := e.setupPCMU(); err != nil {
 			self.Error("Failed to setup PCMU elements", err)
 			return gst.PadLinkRefused
 		}
 	} else if peer.QueryAcceptCaps(pcmaCaps) {
 		self.Log(CAT, gst.LevelInfo, "Peer accepts PCMA caps, setting up PCMA elements")
-		if err := e.setupPCMA(self); err != nil {
+		if err := e.setupPCMA(); err != nil {
 			self.Error("Failed to setup PCMA elements", err)
 			return gst.PadLinkRefused
 		}
@@ -140,7 +140,7 @@ func (e *OpusG711Mix) SrcLinkFunction(pad *gst.Pad, parent *gst.Object, peer *gs
 	return gst.PadLinkOK
 }
 
-func (e *OpusG711Mix) setupPCMU(self *gst.Bin) (err error) {
+func (e *OpusG711Mix) setupPCMU() (err error) {
 	e.G711Enc, err = gst.NewElement("mulawenc")
 	if err != nil {
 		return fmt.Errorf("failed to create mulawenc element: %w", err)
@@ -154,7 +154,7 @@ func (e *OpusG711Mix) setupPCMU(self *gst.Bin) (err error) {
 	return nil
 }
 
-func (e *OpusG711Mix) setupPCMA(self *gst.Bin) (err error) {
+func (e *OpusG711Mix) setupPCMA() (err error) {
 	e.G711Enc, err = gst.NewElement("alawenc")
 	if err != nil {
 		return fmt.Errorf("failed to create alawenc element: %w", err)
@@ -194,45 +194,6 @@ func (e *OpusG711Mix) setupCodec(self *gst.Bin) (err error) {
 	return nil
 }
 
-// func (e *OpusG711Mix) G711Setup(self *gst.Bin, p *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
-// 	self.Log(CAT, gst.LevelDebug, "G711Setup called")
-// 	src := self.GetStaticPad("src")
-// 	peer := src.GetPeer()
-// 	if peer == nil {
-// 		self.Log(CAT, gst.LevelError, "Identity src pad has no peer")
-// 		return gst.PadProbeOK
-// 	}
-
-// 	pcmuCaps := gst.NewCapsFromString("application/x-rtp, media=(string)audio, clock-rate=(int)8000, encoding-name=(string)PCMU")
-// 	pcmaCaps := gst.NewCapsFromString("application/x-rtp, media=(string)audio, clock-rate=(int)8000, encoding-name=(string)PCMA")
-
-// 	if peer.QueryAcceptCaps(pcmuCaps) {
-// 		self.Log(CAT, gst.LevelInfo, "Peer accepts PCMU caps, setting up PCMU elements")
-// 		if err := e.setupPCMU(self, p); err != nil {
-// 			self.Error("Failed to setup PCMU elements", err)
-// 			return gst.PadProbeRemove
-// 		}
-// 	} else if peer.QueryAcceptCaps(pcmaCaps) {
-// 		self.Log(CAT, gst.LevelInfo, "Peer accepts PCMA caps, setting up PCMA elements")
-// 		if err := e.setupPCMA(self, p); err != nil {
-// 			self.Error("Failed to setup PCMA elements", err)
-// 			return gst.PadProbeRemove
-// 		}
-// 	} else {
-// 		self.Log(CAT, gst.LevelWarning, "Peer does not accept PCMU or PCMA caps")
-// 		return gst.PadProbeRemove
-// 	}
-
-// 	if err := e.setupCodec(self); err != nil {
-// 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to setup codec elements: %v", err))
-// 		self.Error("Failed to setup codec elements", err)
-// 		return gst.PadProbeRemove
-// 	}
-
-// 	self.Log(CAT, gst.LevelInfo, "Successfully set up codec elements")
-// 	return gst.PadProbeRemove
-// }
-
 func (e *OpusG711Mix) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
 	self := gst.ToGstBin(instance)
 
@@ -243,6 +204,7 @@ func (e *OpusG711Mix) ChangeState(instance *gst.Element, transition gst.StateCha
 
 	if transition == gst.StateChangeReadyToNull {
 		e.Branches = nil
+		e.AudioMixer = nil
 		e.G711Enc = nil
 		e.RtpG711Pay = nil
 		e.Identity = nil
