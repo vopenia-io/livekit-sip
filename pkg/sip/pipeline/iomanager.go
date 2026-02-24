@@ -6,7 +6,9 @@ import (
 	"weak"
 
 	"github.com/go-gst/go-gst/gst"
+	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/iomanager"
 )
 
 func NewIOChain(log logger.Logger, parent *Pipeline) *IOManager {
@@ -67,7 +69,17 @@ func (c *IOManager) handleSipControllerPadAdded(_ *gst.Element, pad *gst.Pad) {
 		return
 	}
 
-	destPad := c.pipeline.WebrtcIo.WebrtcRtpBin.GetRequestPad(fmt.Sprintf("send_rtp_sink_%d", session))
+	switch iomanager.SessionKind(session) {
+	case iomanager.SessionKindCamera:
+		session = int(livekit.TrackSource_CAMERA)
+	case iomanager.SessionKindMicrophone:
+		session = int(livekit.TrackSource_MICROPHONE)
+	default:
+		c.log.Warnw("Unknown session kind in SIP controller pad name", nil, "session", session, "pad", pname)
+		return
+	}
+
+	destPad := c.pipeline.WebrtcIo.LivekitBin.GetRequestPad(fmt.Sprintf("send_rtp_sink_%d", session))
 	if destPad == nil {
 		c.log.Errorw("Failed to get request pad", nil, "pad", fmt.Sprintf("send_rtp_sink_%d", session))
 		return

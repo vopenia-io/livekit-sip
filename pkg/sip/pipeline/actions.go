@@ -2,11 +2,8 @@ package pipeline
 
 import (
 	"fmt"
-	"runtime/cgo"
 
-	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
-	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
 // func (p *Pipeline) Configure(remote netip.Addr, media *sdpv2.SDPMedia) error {
@@ -84,71 +81,74 @@ import (
 // 	return uint16(sipConnPort)
 // }
 
-func (p *Pipeline) SetRoomCallbacks(callbacks *lksdk.RoomCallback) error {
-	cbHandle := cgo.NewHandle(callbacks)
-	defer cbHandle.Delete()
-	if err := p.WebrtcIo.LkRoom.SetProperty("callbacks", uint64(uintptr(cbHandle))); err != nil {
-		p.Log.Errorw("failed to set room callbacks", err)
-		return fmt.Errorf("failed to set room callbacks: %w", err)
-	}
-	return nil
-}
+// func (p *Pipeline) SetRoomCallbacks(callbacks *lksdk.RoomCallback) error {
+// 	cbHandle := cgo.NewHandle(callbacks)
+// 	defer cbHandle.Delete()
+// 	if err := p.WebrtcIo.LkRoom.SetProperty("callbacks", uint64(uintptr(cbHandle))); err != nil {
+// 		p.Log.Errorw("failed to set room callbacks", err)
+// 		return fmt.Errorf("failed to set room callbacks: %w", err)
+// 	}
+// 	return nil
+// }
 
-func (p *Pipeline) GetRoom() (*lksdk.Room, error) {
-	roomHnd, err := p.WebrtcIo.LkRoom.GetProperty("room")
-	if err != nil {
-		p.Log.Errorw("failed to get room property", err)
-		return nil, fmt.Errorf("failed to get room property: %w", err)
-	}
-	roomHndUint, ok := roomHnd.(uint64)
-	if !ok {
-		p.Log.Errorw("room property is not uint64", nil, "value", roomHnd)
-		return nil, fmt.Errorf("room property is not uint64")
-	}
-	h := cgo.Handle(uintptr(roomHndUint))
-	if h == 0 {
-		p.Log.Errorw("room handle is invalid", nil, "value", roomHndUint)
-		return nil, fmt.Errorf("room handle is invalid")
-	}
-	obj := h.Value()
-	room, ok := obj.(*lksdk.Room)
-	if !ok {
-		p.Log.Errorw("room handle value is not *lksdk.Room", nil, "value", obj)
-		return nil, fmt.Errorf("room handle value is not *lksdk.Room")
-	}
-	return room, nil
-}
+// func (p *Pipeline) GetRoom() (*lksdk.Room, error) {
+// 	roomHnd, err := p.WebrtcIo.LkRoom.GetProperty("room")
+// 	if err != nil {
+// 		p.Log.Errorw("failed to get room property", err)
+// 		return nil, fmt.Errorf("failed to get room property: %w", err)
+// 	}
+// 	roomHndUint, ok := roomHnd.(uint64)
+// 	if !ok {
+// 		p.Log.Errorw("room property is not uint64", nil, "value", roomHnd)
+// 		return nil, fmt.Errorf("room property is not uint64")
+// 	}
+// 	h := cgo.Handle(uintptr(roomHndUint))
+// 	if h == 0 {
+// 		p.Log.Errorw("room handle is invalid", nil, "value", roomHndUint)
+// 		return nil, fmt.Errorf("room handle is invalid")
+// 	}
+// 	obj := h.Value()
+// 	room, ok := obj.(*lksdk.Room)
+// 	if !ok {
+// 		p.Log.Errorw("room handle value is not *lksdk.Room", nil, "value", obj)
+// 		return nil, fmt.Errorf("room handle value is not *lksdk.Room")
+// 	}
+// 	return room, nil
+// }
 
-func (p *Pipeline) SetRoomOptions(wsUrl, token string, opts ...lksdk.ConnectOption) error {
+func (p *Pipeline) ConnectRoom(wsUrl, token string, attributes map[string]string) error {
+	attr := gst.NewStructure("participant-attributes")
+
+	for k, v := range attributes {
+		if err := attr.SetValue(k, v); err != nil {
+			p.Log.Warnw("failed to set participant attribute", err, "key", k, "value", v)
+		}
+	}
+
+	if err := p.WebrtcIo.LivekitBin.SetProperty("participant-attributes", attr); err != nil {
+		return fmt.Errorf("failed to set participant attributes: %w", err)
+	}
+
 	p.Log.Infow("Setting room options", "wsUrl", wsUrl)
-	if err := p.WebrtcIo.LkRoom.SetProperty("ws-url", wsUrl); err != nil {
+	if err := p.WebrtcIo.LivekitBin.SetProperty("ws-url", wsUrl); err != nil {
 		return fmt.Errorf("failed to set ws-url property: %w", err)
 	}
-	if err := p.WebrtcIo.LkRoom.SetProperty("token", token); err != nil {
+	if err := p.WebrtcIo.LivekitBin.SetProperty("token", token); err != nil {
 		return fmt.Errorf("failed to set token property: %w", err)
 	}
 
-	optsHandle := cgo.NewHandle(opts)
-	defer optsHandle.Delete()
-	if err := p.WebrtcIo.LkRoom.SetProperty("connect-options", uint64(uintptr(optsHandle))); err != nil {
-		return fmt.Errorf("failed to set connect-options property: %w", err)
-	}
-
 	sucess := make(chan bool, 1)
-	var (
-		hnd glib.SignalHandle
-		err error
-	)
-	hnd, err = p.WebrtcIo.LkRoom.Connect("room-joined", func(_ *gst.Element, ok bool) {
-		sucess <- ok
-		p.WebrtcIo.LkRoom.HandlerDisconnect(hnd)
-	})
-	if err != nil {
-		return fmt.Errorf("failed to connect to room-joined signal: %w", err)
-	}
+	go func() {
+		select {
+		case <-p.WebrtcIo.Connected():
+			sucess <- true
+		case <-p.WebrtcIo.Closed():
+			sucess <- false
+		}
+	}()
 
-	if _, err := p.WebrtcIo.LkRoom.Emit("join-room"); err != nil {
-		return fmt.Errorf("failed to emit join-room signal: %v", err)
+	if _, err := p.WebrtcIo.LivekitBin.Emit("connect"); err != nil {
+		return fmt.Errorf("failed to emit connect signal: %v", err)
 	}
 
 	ok := <-sucess
@@ -156,9 +156,11 @@ func (p *Pipeline) SetRoomOptions(wsUrl, token string, opts ...lksdk.ConnectOpti
 		return fmt.Errorf("failed to join room")
 	}
 
-	p.Log.Infow("Joined room successfully", "wsUrl", wsUrl)
+	if err := p.WebrtcIo.LivekitBin.SetProperty("participant-attributes", attr); err != nil {
+		return fmt.Errorf("failed to set participant attributes: %w", err)
+	}
 
-	// p.SetState(gst.StatePlaying)
+	p.Log.Infow("Joined room successfully", "wsUrl", wsUrl)
 
 	return nil
 }

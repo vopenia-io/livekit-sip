@@ -22,7 +22,6 @@ import (
 	"log/slog"
 	"math"
 	"net/netip"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,7 +33,6 @@ import (
 
 	msdk "github.com/livekit/media-sdk"
 	"github.com/livekit/media-sdk/dtmf"
-	"github.com/livekit/media-sdk/rtp"
 	"github.com/livekit/media-sdk/sdp"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
@@ -44,12 +42,10 @@ import (
 	"github.com/livekit/protocol/utils"
 	"github.com/livekit/protocol/utils/traceid"
 	"github.com/livekit/psrpc"
-	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/livekit/sipgo/sip"
 
 	"github.com/livekit/sip/pkg/config"
 	"github.com/livekit/sip/pkg/stats"
-	"github.com/livekit/sip/res"
 )
 
 const (
@@ -341,11 +337,19 @@ func (s *Server) processInvite(req *sip.Request, tx sip.ServerTransaction) (retE
 		if c == nil || len(c.attrsToHdr) == 0 {
 			return headers
 		}
-		r := c.lkRoom.Room()
-		if r == nil {
+		// r := c.lkRoom.Room()
+		// if r == nil {
+		// 	return headers
+		// }
+		// return AttrsToHeaders(r.LocalParticipant.Attributes(), c.attrsToHdr, headers)
+		if c.medias == nil {
 			return headers
 		}
-		return AttrsToHeaders(r.LocalParticipant.Attributes(), c.attrsToHdr, headers)
+		attr := c.medias.Attributes()
+		if len(attr) == 0 {
+			return headers
+		}
+		return AttrsToHeaders(attr, c.attrsToHdr, headers)
 	})
 	log = LoggerWithParams(log, cc)
 	log = LoggerWithHeaders(log, cc)
@@ -637,9 +641,9 @@ type inboundCall struct {
 	closeReason atomic.Pointer[ReasonHeader]
 	call        *rpc.SIPCall
 	// media       *MediaPort
-	medias      *MediaOrchestrator
-	dtmf        chan dtmf.Event // buffered
-	lkRoom      RoomInterface   // LiveKit room; only active after correct pin is entered
+	medias *MediaOrchestrator
+	dtmf   chan dtmf.Event // buffered
+	// lkRoom      RoomInterface   // LiveKit room; only active after correct pin is entered
 	callDur     func() time.Duration
 	joinDur     func() time.Duration
 	forwardDTMF atomic.Bool
@@ -677,7 +681,7 @@ func (s *Server) newInboundCall(
 	}
 	c.setLog(log.WithValues("jitterBuf", c.jitterBuf))
 	// we need it created earlier so that the audio mixer is available for pin prompts
-	c.lkRoom = s.getRoom(c.log(), &c.stats.Room)
+	// c.lkRoom = s.getRoom(c.log(), &c.stats.Room)
 	c.ctx, c.cancel = context.WithCancel(context.Background())
 	s.cmu.Lock()
 	s.byRemoteTag[cc.Tag()] = c
@@ -863,9 +867,12 @@ func (c *inboundCall) handleInvite(ctx context.Context, tid traceid.ID, req *sip
 	acceptCall := func(answerData []byte) (bool, error) {
 		headers := disp.Headers
 		c.attrsToHdr = disp.AttributesToHeaders
-		if r := c.lkRoom.Room(); r != nil {
-			headers = AttrsToHeaders(r.LocalParticipant.Attributes(), c.attrsToHdr, headers)
+		if medias := c.medias; medias != nil {
+			headers = AttrsToHeaders(medias.Attributes(), disp.AttributesToHeaders, headers)
 		}
+		// if r := c.lkRoom.Room(); r != nil {
+		// 	headers = AttrsToHeaders(r.LocalParticipant.Attributes(), c.attrsToHdr, headers)
+		// }
 		c.log().Infow("Accepting the call", "headers", headers)
 		err := c.cc.Accept(ctx, answerData, headers)
 		if errors.Is(err, errNoACK) {
@@ -942,7 +949,7 @@ func (c *inboundCall) handleInvite(ctx context.Context, tid traceid.ID, req *sip
 	// 	c.close(true, callDropped, "publish-failed")
 	// 	return errors.Wrap(err, "publishing track to room failed")
 	// }
-	c.lkRoom.Subscribe()
+	// c.lkRoom.Subscribe()
 	if !pinPrompt {
 		c.log().Infow("Waiting for track subscription(s)")
 		// For dispatches without pin, we first wait for LK participant to become available,
@@ -958,11 +965,18 @@ func (c *inboundCall) handleInvite(ctx context.Context, tid traceid.ID, req *sip
 	c.state.Update(ctx, func(info *livekit.SIPCallInfo) {
 		info.StartedAtNs = time.Now().UnixNano()
 		info.CallStatus = livekit.SIPCallStatus_SCS_ACTIVE
-		if r := c.lkRoom.Room(); r != nil {
-			info.RoomId = r.SID()
-			info.RoomName = r.Name()
-			info.ParticipantAttributes = r.LocalParticipant.Attributes()
+		// if r := c.lkRoom.Room(); r != nil {
+		// 	info.RoomId = r.SID()
+		// 	info.RoomName = r.Name()
+		// 	info.ParticipantAttributes = r.LocalParticipant.Attributes()
+		// }
+
+		if medias := c.medias; medias != nil {
+			info.RoomId = medias.SID()
+			info.RoomName = medias.RoomName()
+			info.ParticipantAttributes = medias.Attributes()
 		}
+
 	})
 
 	c.started.Break()
@@ -980,7 +994,8 @@ func (c *inboundCall) handleInvite(ctx context.Context, tid traceid.ID, req *sip
 		case <-ctx.Done():
 			c.closeWithHangup()
 			return nil
-		case <-c.lkRoom.Closed():
+		// case <-c.lkRoom.Closed():
+		case <-c.medias.Closed():
 			c.state.DeferUpdate(func(info *livekit.SIPCallInfo) {
 				info.DisconnectReason = livekit.DisconnectReason_CLIENT_INITIATED
 			})
@@ -1021,7 +1036,7 @@ func (c *inboundCall) runMediaConn(tid traceid.ID, offerData []byte, enc livekit
 
 	// audioinfo := NewAudioInfo(c.media)
 
-	c.lkRoom.(*Room).SetCallbacks(c.medias)
+	// c.lkRoom.(*Room).SetCallbacks(c.medias)
 
 	// offer, err := sdpv2.NewSDP(offerData)
 	// if err != nil {
@@ -1108,7 +1123,8 @@ func (c *inboundCall) waitMedia(ctx context.Context) (bool, error) {
 	case <-ctx.Done():
 		c.closeWithHangup()
 		return false, nil // caller hung up
-	case <-c.lkRoom.Closed():
+	// case <-c.lkRoom.Closed():
+	case <-c.medias.Closed():
 		c.closeWithHangup()
 		return false, psrpc.NewErrorf(psrpc.Canceled, "room closed")
 	// case <-c.media.Timeout():
@@ -1131,7 +1147,8 @@ func (c *inboundCall) waitSubscribe(ctx context.Context, timeout time.Duration) 
 	case <-ctx.Done():
 		c.closeWithHangup()
 		return false, nil
-	case <-c.lkRoom.Closed():
+	// case <-c.lkRoom.Closed():
+	case <-c.medias.Closed():
 		c.closeWithHangup()
 		return false, psrpc.NewErrorf(psrpc.Canceled, "room closed")
 	// case <-c.media.Timeout():
@@ -1139,7 +1156,8 @@ func (c *inboundCall) waitSubscribe(ctx context.Context, timeout time.Duration) 
 	case <-timer.C:
 		c.close(false, callDropped, "cannot-subscribe")
 		return false, psrpc.NewErrorf(psrpc.DeadlineExceeded, "room subscription timed out")
-	case <-c.lkRoom.Subscribed():
+	// case <-c.lkRoom.Subscribed():
+	case <-c.medias.Subscribed():
 		return true, nil
 	}
 }
@@ -1327,7 +1345,8 @@ func (c *inboundCall) Close() error {
 }
 
 func (c *inboundCall) closeMedia() {
-	c.lkRoom.Close()
+	// c.lkRoom.Close()
+	// c.medias.Close()
 	// if c.media != nil {
 	// 	c.media.Close()
 	// }
@@ -1338,15 +1357,20 @@ func (c *inboundCall) setStatus(v CallStatus) {
 	if attr == "" {
 		return
 	}
-	if c.lkRoom == nil {
+	// if c.lkRoom == nil {
+	if c.medias == nil {
 		return
 	}
-	r := c.lkRoom.Room()
-	if r == nil || r.LocalParticipant == nil {
-		return
-	}
+	// r := c.lkRoom.Room()
+	// if r == nil || r.LocalParticipant == nil {
+	// 	return
+	// }
 
-	r.LocalParticipant.SetAttributes(map[string]string{
+	// r.LocalParticipant.SetAttributes(map[string]string{
+	// 	livekit.AttrSIPCallStatus: attr,
+	// })
+
+	c.medias.SetAttributes(map[string]string{
 		livekit.AttrSIPCallStatus: attr,
 	})
 }
@@ -1374,7 +1398,8 @@ func (c *inboundCall) createLiveKitParticipant(ctx context.Context, rconf RoomCo
 		return err
 	}
 
-	err = c.lkRoom.Connect(c.s.conf, rconf)
+	// err = c.lkRoom.Connect(c.s.conf, rconf)
+	err = c.medias.Connect(c.s.conf, rconf)
 	if err != nil {
 		return err
 	}
@@ -1411,31 +1436,32 @@ func (c *inboundCall) joinRoom(ctx context.Context, rconf RoomConfig, status Cal
 }
 
 func (c *inboundCall) playAudio(ctx context.Context, frames []msdk.PCM16Sample) {
-	t := c.lkRoom.NewTrack()
-	if t == nil {
-		return // closed
-	}
-	defer t.Close()
+	return
+	// t := c.lkRoom.NewTrack()
+	// if t == nil {
+	// 	return // closed
+	// }
+	// defer t.Close()
 
-	sampleRate := res.SampleRate
-	if t.SampleRate() != sampleRate {
-		frames = slices.Clone(frames)
-		for i := range frames {
-			frames[i] = msdk.Resample(nil, t.SampleRate(), frames[i], sampleRate)
-		}
-	}
-	_ = msdk.PlayAudio[msdk.PCM16Sample](ctx, t, rtp.DefFrameDur, frames)
+	// sampleRate := res.SampleRate
+	// if t.SampleRate() != sampleRate {
+	// 	frames = slices.Clone(frames)
+	// 	for i := range frames {
+	// 		frames[i] = msdk.Resample(nil, t.SampleRate(), frames[i], sampleRate)
+	// 	}
+	// }
+	// _ = msdk.PlayAudio[msdk.PCM16Sample](ctx, t, rtp.DefFrameDur, frames)
 }
 
 func (c *inboundCall) handleDTMF(tone dtmf.Event) {
-	if c.forwardDTMF.Load() {
-		c.log().Infow("Forwarding DTMF tone", "digit", string(tone.Digit), "code", tone.Code)
-		_ = c.lkRoom.SendData(&livekit.SipDTMF{
-			Code:  uint32(tone.Code),
-			Digit: string([]byte{tone.Digit}),
-		}, lksdk.WithDataPublishReliable(true))
-		return
-	}
+	// if c.forwardDTMF.Load() {
+	// 	c.log().Infow("Forwarding DTMF tone", "digit", string(tone.Digit), "code", tone.Code)
+	// 	_ = c.lkRoom.SendData(&livekit.SipDTMF{
+	// 		Code:  uint32(tone.Code),
+	// 		Digit: string([]byte{tone.Digit}),
+	// 	}, lksdk.WithDataPublishReliable(true))
+	// 	return
+	// }
 	c.log().Infow("Received DTMF tone", "digit", string(tone.Digit), "code", tone.Code)
 	// We should have enough buffer here.
 	select {

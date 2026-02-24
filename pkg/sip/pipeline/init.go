@@ -54,7 +54,7 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/g711opusdtmf"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/h264vp8"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/iomanager"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/lkroom"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/opusg711"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/opusg711mix"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sinkwriter"
@@ -103,8 +103,8 @@ func init() {
 		panic("Failed to register sipmanager")
 	}
 
-	if !lkroom.Register() {
-		panic("Failed to register lkroom")
+	if !livekitbin.Register() {
+		panic("Failed to register livekitbin")
 	}
 
 	if !activeselector.Register() {

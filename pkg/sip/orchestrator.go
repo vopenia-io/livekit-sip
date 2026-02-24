@@ -13,7 +13,6 @@ import (
 	"github.com/livekit/media-sdk/dtmf"
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
 	"github.com/livekit/protocol/logger"
-	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/livekit/sip/pkg/sip/pipeline"
 	"github.com/vopenia-io/go-pjmedia/pj"
 )
@@ -251,21 +250,21 @@ func (o *MediaOrchestrator) Close() error {
 	return nil
 }
 
-// GetRoom implements [RoomCallbacks].
-func (o *MediaOrchestrator) JoinRoom(wsUrl, token string, callbacks *lksdk.RoomCallback, opts ...lksdk.ConnectOption) (*lksdk.Room, error) {
-	var errs []error
-	room, err := o.pipeline.GetRoom()
-	if err != nil || room == nil {
-		return nil, fmt.Errorf("could not get room from pipeline: %w", err)
-	}
-	errs = append(errs, err)
-	errs = append(errs, o.pipeline.SetRoomCallbacks(callbacks))
-	errs = append(errs, o.pipeline.SetRoomOptions(wsUrl, token, opts...))
-	if err := errors.Join(errs...); err != nil {
-		return nil, fmt.Errorf("could not join room: %w", err)
-	}
-	return room, nil
-}
+// // GetRoom implements [RoomCallbacks].
+// func (o *MediaOrchestrator) JoinRoom(wsUrl, token string, callbacks *lksdk.RoomCallback, opts ...lksdk.ConnectOption) (*lksdk.Room, error) {
+// 	var errs []error
+// 	room, err := o.pipeline.GetRoom()
+// 	if err != nil || room == nil {
+// 		return nil, fmt.Errorf("could not get room from pipeline: %w", err)
+// 	}
+// 	errs = append(errs, err)
+// 	errs = append(errs, o.pipeline.SetRoomCallbacks(callbacks))
+// 	errs = append(errs, o.pipeline.SetRoomOptions(wsUrl, token, opts...))
+// 	if err := errors.Join(errs...); err != nil {
+// 		return nil, fmt.Errorf("could not join room: %w", err)
+// 	}
+// 	return room, nil
+// }
 
 func (o *MediaOrchestrator) AnswerSDP(offer []byte) (answer []byte, err error) {
 	if err := o.okStates(MediaStateFailed, MediaStateOK, MediaStateReady, MediaStateStarted); err != nil {
