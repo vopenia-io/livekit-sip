@@ -71,7 +71,7 @@ func (wio *WebrtcIo) Add() error {
 	return nil
 }
 
-func (wio *WebrtcIo) binPadAddedRecvRtpSrc(_ *gst.Element, pad *gst.Pad) {
+func (wio *WebrtcIo) binPadAdded(_ *gst.Element, pad *gst.Pad) {
 	wio.log.Debugw("RTPBIN PAD ADDED", "pad", pad.GetName())
 	padName := pad.GetName()
 	if !strings.HasPrefix(padName, "recv_rtp_src_") {
@@ -102,7 +102,42 @@ func (wio *WebrtcIo) binPadAddedRecvRtpSrc(_ *gst.Element, pad *gst.Pad) {
 		wio.log.Errorw("Failed to link webrtc rtpbin pad to io manager", err, "pad", padName, "session", session, "ssrc", ssrc, "payloadType", payloadType)
 		return
 	}
+	pad.SetQData(QDataPadPeerKey, sinkPad)
 	wio.log.Infow("Linked WebRTC RTP pad to IO Manager", "pad", padName, "session", session, "ssrc", ssrc, "payloadType", payloadType)
+}
+
+func (wio *WebrtcIo) binPadRemoved(_ *gst.Element, pad *gst.Pad) {
+	wio.log.Debugw("RTPBIN PAD REMOVED", "pad", pad.GetName())
+	padName := pad.GetName()
+	if !strings.HasPrefix(padName, "recv_rtp_src_") {
+		return
+	}
+
+	peer, ok := pad.GetQData(QDataPadPeerKey).(*gst.Pad)
+	if !ok {
+		wio.log.Warnw("Failed to get peer pad from QData", nil, "pad", padName)
+		return
+	}
+	wio.pipeline.IOManager.LkController.ReleaseRequestPad(peer)
+
+	// var session, ssrc, payloadType int
+	// if _, err := fmt.Sscanf(padName, "recv_rtp_src_%d_%d_%d", &session, &ssrc, &payloadType); err != nil {
+	// 	wio.log.Warnw("Invalid RTP pad format", err, "pad", padName)
+	// 	return
+	// }
+
+	// switch livekit.TrackSource(session) {
+	// case livekit.TrackSource_CAMERA:
+	// 	session = int(iomanager.SessionKindCamera)
+	// case livekit.TrackSource_MICROPHONE:
+	// 	session = int(iomanager.SessionKindMicrophone)
+	// default:
+	// 	wio.log.Warnw("Unknown track source in RTP pad name", nil, "session", session, "pad", padName)
+	// 	return
+	// }
+
+	// sinkPad := wio.pipeline.IOManager.LkController.GetStaticPad(fmt.Sprintf("recv_rtp_sink_%d_%d_%d", session, ssrc, payloadType))
+	// wio.pipeline.IOManager.LkController.ReleaseRequestPad()
 }
 
 // Link implements [GstChain].
@@ -112,10 +147,19 @@ func (wio *WebrtcIo) Link() error {
 	if _, err := wio.LivekitBin.Connect("pad-added", func(rtpbin *gst.Element, pad *gst.Pad) {
 		ptr := wwio.Value()
 		if ptr != nil {
-			ptr.binPadAddedRecvRtpSrc(rtpbin, pad)
+			ptr.binPadAdded(rtpbin, pad)
 		}
 	}); err != nil {
 		return fmt.Errorf("failed to connect to webrtc rtpbin pad-added signal: %w", err)
+	}
+
+	if _, err := wio.LivekitBin.Connect("pad-removed", func(rtpbin *gst.Element, pad *gst.Pad) {
+		ptr := wwio.Value()
+		if ptr != nil {
+			ptr.binPadRemoved(rtpbin, pad)
+		}
+	}); err != nil {
+		return fmt.Errorf("failed to connect to webrtc rtpbin pad-removed signal: %w", err)
 	}
 
 	return nil

@@ -2,12 +2,15 @@ package iomanager
 
 import (
 	"fmt"
+	"strings"
+	"sync"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 )
 
 type IoManagerLivekit struct {
+	mu     sync.Mutex
 	Audio  *gst.Element // opus_g711_mix
 	Camera *gst.Element // vp8-h264
 }
@@ -55,9 +58,27 @@ func (e *IoManagerLivekit) ChangeState(instance *gst.Element, transition gst.Sta
 	return ret
 }
 
+func (e *IoManagerLivekit) ghostSinkPad(self *gst.Bin, session, ssrc, pt int, destPad *gst.Pad) (*gst.GhostPad, error) {
+	pname := fmt.Sprintf("recv_rtp_sink_%d_%d_%d", session, ssrc, pt)
+	class := gst.ToElementClass(self.Class())
+	gpad := gst.NewGhostPadFromTemplate(pname, destPad, class.GetPadTemplate("recv_rtp_sink_%u_%u_%u"))
+	if !self.AddPad(gpad.Pad) {
+		return nil, fmt.Errorf("Failed to add ghost pad %s to SIP IO element", pname)
+	}
+
+	if !gpad.Pad.SetActive(true) {
+		return nil, fmt.Errorf("Failed to activate ghost pad %s", pname)
+	}
+
+	return gpad, nil
+}
+
 func (e *IoManagerLivekit) setupAudio(self *gst.Bin) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	if e.Audio != nil {
-		return fmt.Errorf("Audio element already exists in LiveKit IO bin")
+		return nil
 	}
 
 	var err error
@@ -107,10 +128,8 @@ func (e *IoManagerLivekit) setupAudio(self *gst.Bin) error {
 }
 
 func (e *IoManagerLivekit) requestNewPadAudio(self *gst.Bin, session, ssrc, pt int) *gst.Pad {
-	if e.Audio == nil {
-		if err := e.setupAudio(self); err != nil {
-			return nil
-		}
+	if err := e.setupAudio(self); err != nil {
+		return nil
 	}
 
 	destPad := e.Audio.GetRequestPad("sink_%u")
@@ -119,26 +138,38 @@ func (e *IoManagerLivekit) requestNewPadAudio(self *gst.Bin, session, ssrc, pt i
 		return nil
 	}
 
-	pname := fmt.Sprintf("recv_rtp_sink_%d_%d_%d", session, ssrc, pt)
-	class := gst.ToElementClass(self.Class())
-	gpad := gst.NewGhostPadFromTemplate(pname, destPad, class.GetPadTemplate("recv_rtp_sink_%u_%u_%u"))
-	if !self.AddPad(gpad.Pad) {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add ghost pad %s to SIP IO element", pname))
-		return nil
-	}
-
-	if !gpad.Pad.SetActive(true) {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to activate ghost pad %s", pname))
-		// TODO: do we need to remove the pad here?
+	gpad, err := e.ghostSinkPad(self, session, ssrc, pt, destPad)
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create ghost pad for audio session %d: %v", session, err))
+		self.Error(fmt.Sprintf("Failed to create ghost pad for audio session %d", session), err)
 		return nil
 	}
 
 	return gpad.Pad
+
+	// pname := fmt.Sprintf("recv_rtp_sink_%d_%d_%d", session, ssrc, pt)
+	// class := gst.ToElementClass(self.Class())
+	// gpad := gst.NewGhostPadFromTemplate(pname, destPad, class.GetPadTemplate("recv_rtp_sink_%u_%u_%u"))
+	// if !self.AddPad(gpad.Pad) {
+	// 	self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add ghost pad %s to SIP IO element", pname))
+	// 	return nil
+	// }
+
+	// if !gpad.Pad.SetActive(true) {
+	// 	self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to activate ghost pad %s", pname))
+	// 	// TODO: do we need to remove the pad here?
+	// 	return nil
+	// }
+
+	// return gpad.Pad
 }
 
 func (e *IoManagerLivekit) setupCamera(self *gst.Bin) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	if e.Camera != nil {
-		return fmt.Errorf("Camera element already exists in SIP IO bin")
+		return nil
 	}
 
 	var err error
@@ -189,11 +220,44 @@ func (e *IoManagerLivekit) setupCamera(self *gst.Bin) error {
 	return nil
 }
 
+func (e *IoManagerLivekit) fakeCameraSink(self *gst.Bin, session, ssrc, pt int) *gst.Pad {
+	// This is a workaround to ensure that the camera element is created and linked in the pipeline even if no remote video track is published.
+	// The vp8-h264 element requires a sink pad to be created, which only happens when a remote video track is published. By creating a fake sink pad and linking it to a fakesink, we ensure that the vp8-h264 element is properly set up and can handle incoming video tracks when they are published.
+
+	fakesink, err := gst.NewElement("fakesink")
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create fakesink element: %v", err))
+		return nil
+	}
+
+	if err := self.Add(fakesink); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add fakesink element to SIP IO bin: %v", err))
+		return nil
+	}
+
+	if !fakesink.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelError, "Failed to sync state of fakesink element with parent")
+		return nil
+	}
+
+	sinkPad := fakesink.GetStaticPad("sink")
+	if sinkPad == nil {
+		self.Log(CAT, gst.LevelError, "Failed to get sink pad from fakesink element")
+		return nil
+	}
+
+	gpad, err := e.ghostSinkPad(self, session, ssrc, pt, sinkPad)
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create ghost pad for fake camera sink: %v", err))
+		return nil
+	}
+
+	return gpad.Pad
+}
+
 func (e *IoManagerLivekit) requestNewPadCamera(self *gst.Bin, session, ssrc, pt int) *gst.Pad {
-	if e.Camera == nil {
-		if err := e.setupCamera(self); err != nil {
-			return nil
-		}
+	if err := e.setupCamera(self); err != nil {
+		return nil
 	}
 
 	sink := e.Camera.GetStaticPad("sink")
@@ -203,8 +267,8 @@ func (e *IoManagerLivekit) requestNewPadCamera(self *gst.Bin, session, ssrc, pt 
 	}
 
 	if sink.IsLinked() {
-		self.Log(CAT, gst.LevelError, "vp8-h264 sink pad is already linked")
-		return nil
+		self.Log(CAT, gst.LevelWarning, "Camera pad is already linked, returning fake camera sink pad")
+		return e.fakeCameraSink(self, session, ssrc, pt)
 	}
 
 	pname := fmt.Sprintf("recv_rtp_sink_%d_%d_%d", session, ssrc, pt)
@@ -253,4 +317,63 @@ func (e *IoManagerLivekit) RequestNewPad(instance *gst.Element, templ *gst.PadTe
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unsupported session kind in pad name %s: %d (%s)", name, session, SessionKind(session).String()))
 		return nil
 	}
+}
+
+func (e *IoManagerLivekit) ReleasePad(instance *gst.Element, pad *gst.Pad) {
+	self := gst.ToGstBin(instance)
+
+	pname := pad.GetName()
+	if !strings.HasPrefix(pname, "recv_rtp_sink_") {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid pad name %s, expected to start with recv_rtp_sink_", pname))
+		return
+	}
+
+	gpad := pad.AsGhostPad()
+	if gpad == nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Pad %s is not a ghost pad, cannot release", pname))
+		return
+	}
+
+	target := gpad.GetTarget()
+	if target == nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Pad %s has no target, cannot release", pname))
+		return
+	}
+
+	var session, ssrc, pt int
+	if _, err := fmt.Sscanf(pname, "recv_rtp_sink_%d_%d_%d", &session, &ssrc, &pt); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to parse pad name %s: %v", pname, err))
+		return
+	}
+
+	switch SessionKind(session) {
+	case SessionKindMicrophone:
+		e.Audio.ReleaseRequestPad(target)
+	case SessionKindCamera:
+		parent := target.GetParentElement()
+		if parent == nil {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Target pad %s of camera pad %s has no parent element", target.GetName(), pname))
+		} else {
+			if err := parent.SetState(gst.StateNull); err != nil {
+				self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set state of parent element of target pad %s to NULL: %v", target.GetName(), err))
+			}
+			if err := self.Remove(parent); err != nil {
+				self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to remove parent element %s of target pad %s: %v", parent.GetName(), target.GetName(), err))
+			}
+		}
+	default:
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unsupported session kind in pad name %s: %d (%s)", pname, session, SessionKind(session).String()))
+		return
+	}
+
+	if !pad.SetActive(false) {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to deactivate ghost pad %s", pname))
+		return
+	}
+	if !self.RemovePad(pad) {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to remove ghost pad %s from SIP IO element", pname))
+		return
+	}
+
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Successfully released pad %s for session %d", pname, session))
 }

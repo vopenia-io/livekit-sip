@@ -40,6 +40,41 @@ func (e *LivekitBin) OnRtpBinPadAdded(pad *gst.Pad) {
 	}
 }
 
+func (e *LivekitBin) OnRtpBinPadRemoved(pad *gst.Pad) {
+	self := gst.ToGstBin(e.self.Get())
+	if self == nil {
+		CAT.Log(gst.LevelError, "LivekitBin instance is nil in OnRtpBinPadAdded")
+		return
+	}
+	pname := pad.GetName()
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Pad removed: %s", pname))
+	for _, prefix := range []string{"send_rtp_src_", "recv_rtp_src_"} {
+		if strings.HasPrefix(pname, prefix) {
+			e.GhostPadRemove(self, pad)
+			return
+		}
+	}
+}
+
+func (e *LivekitBin) GhostPadRemove(self *gst.Bin, pad *gst.Pad) {
+	pname := pad.GetName()
+	gpad, ok := pad.GetQData(tracks.QDataPadPeerKey).(*gst.GhostPad)
+	if !ok {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("No ghost pad found for removed pad %s", pname))
+		return
+	}
+
+	if !gpad.SetActive(false) {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to deactivate ghost pad %s for removal", pname))
+	}
+
+	if !self.RemovePad(gpad.Pad) {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove ghost pad %s for removal", pname))
+		return
+	}
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Removed ghost pad %s", pname))
+}
+
 func (e *LivekitBin) PublishTrack(self *gst.Bin, pad *gst.Pad, pname string) {
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Publishing track with pad name: %s", pname))
 
@@ -293,6 +328,7 @@ func (e *LivekitBin) ForwardSubscribeTrack(self *gst.Bin, pad *gst.Pad, pname st
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating ghost pad for pad name %s", pname))
 		return
 	}
+	pad.SetQData(tracks.QDataPadPeerKey, gpad)
 	if !self.AddPad(gpad.Pad) {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error adding ghost pad for pad name %s", pname))
 		return
@@ -303,4 +339,28 @@ func (e *LivekitBin) ForwardSubscribeTrack(self *gst.Bin, pad *gst.Pad, pname st
 	}
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("new track with pad name: %s", pname))
+}
+
+func (e *LivekitBin) UnsubscribeTrack(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
+	self := gst.ToGstBin(e.self.Get())
+	if self == nil {
+		CAT.Log(gst.LevelError, "LivekitBin instance is nil in UnsubscribeTrack")
+		return
+	}
+
+	src, err := self.GetElementByName(tracks.SinkTrackName(pub.SID()))
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting source element for track %s: %v", track.ID(), err))
+		return
+	}
+
+	if err := src.SetState(gst.StateNull); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error setting source element to NULL for track %s: %v", track.ID(), err))
+		return
+	}
+
+	if err := self.Remove(src); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error removing source element for track %s: %v", track.ID(), err))
+		return
+	}
 }

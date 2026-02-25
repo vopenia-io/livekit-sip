@@ -10,6 +10,7 @@ import (
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin/tracks"
+	"github.com/pion/rtcp"
 )
 
 var CAT = gst.NewDebugCategory(
@@ -111,6 +112,7 @@ func (e *LivekitBin) InstanceInit(instance *glib.Object) {
 	var err error
 	e.RtpBin, err = gst.NewElementWithProperties("rtpbin", map[string]interface{}{
 		"rtp-profile": int(3), // GST_RTP_PROFILE_AVPF
+		"autoremove":  true,
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating rtpbin: %v", err))
@@ -129,6 +131,19 @@ func (e *LivekitBin) InstanceInit(instance *glib.Object) {
 		self.Error("Error connecting to rtpbin pad-added signal", err)
 		return
 	}
+	if _, err := e.RtpBin.Connect("pad-removed", func(_ *gst.Element, pad *gst.Pad) {
+		ptr := eweak.Value()
+		if ptr == nil {
+			CAT.Log(gst.LevelError, "LivekitBin instance is nil in rtpbin pad-removed callback")
+			return
+		}
+		ptr.OnRtpBinPadRemoved(pad)
+	}); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error connecting to rtpbin pad-removed signal: %v", err))
+		self.Error("Error connecting to rtpbin pad-removed signal", err)
+		return
+	}
+
 	if _, err := e.RtpBin.Connect("request-pt-map", func(_ *gst.Element, session, pt uint) *gst.Caps {
 		ptr := eweak.Value()
 		if ptr == nil {
@@ -142,7 +157,7 @@ func (e *LivekitBin) InstanceInit(instance *glib.Object) {
 		return
 	}
 
-	e.RtcpFunnel, err = gst.NewElement("funnel")
+	e.RtcpFunnel, err = gst.NewElementWithName("funnel", "livekitbin_rtcp_funnel")
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating rtcp funnel: %v", err))
 		self.Error("Error creating rtcp funnel", err)
@@ -155,26 +170,41 @@ func (e *LivekitBin) InstanceInit(instance *glib.Object) {
 		return
 	}
 
-	e.MicrophoneRtpFunnel, err = gst.NewElement("rtpfunnel")
+	e.MicrophoneRtpFunnel, err = gst.NewElementWithName("rtpfunnel", "livekitbin_microphone_rtpfunnel")
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating microphone rtpfunnel: %v", err))
 		self.Error("Error creating microphone rtpfunnel", err)
 		return
 	}
-	e.MicrophoneRtcpFunnel, err = gst.NewElement("funnel")
+	e.MicrophoneRtcpFunnel, err = gst.NewElementWithName("funnel", "livekitbin_microphone_rtcp_funnel")
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating microphone rtcp funnel: %v", err))
 		self.Error("Error creating microphone rtcp funnel", err)
 		return
 	}
+	e.MicrophoneRtcpFunnel.GetStaticPad("src").AddProbe(gst.PadProbeTypeBuffer|gst.PadProbeTypeBufferList, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+		buffer := info.GetBuffer()
+		data := buffer.Bytes()
+		pkts, err := rtcp.Unmarshal(data)
+		if err != nil {
+			fmt.Printf("Failed to unmarshal RTCP packet in microphone rtcp funnel probe: %v => %x\n", err, data)
+			return gst.PadProbeOK
+		}
+		fmt.Printf("Received RTCP packet in microphone rtcp funnel probe: %d packets:\n", len(pkts))
+		for i, pkt := range pkts {
+			fmt.Printf("  Packet %d: %T => %+v\n", i, pkt, pkt)
+		}
 
-	e.CameraRtpFunnel, err = gst.NewElement("rtpfunnel")
+		return gst.PadProbeOK
+	})
+
+	e.CameraRtpFunnel, err = gst.NewElementWithName("rtpfunnel", "livekitbin_camera_rtpfunnel")
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating camera rtpfunnel: %v", err))
 		self.Error("Error creating camera rtpfunnel", err)
 		return
 	}
-	e.CameraRtcpFunnel, err = gst.NewElement("funnel")
+	e.CameraRtcpFunnel, err = gst.NewElementWithName("funnel", "livekitbin_camera_rtcp_funnel")
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating camera rtcp funnel: %v", err))
 		self.Error("Error creating camera rtcp funnel", err)

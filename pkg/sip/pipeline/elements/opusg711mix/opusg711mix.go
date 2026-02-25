@@ -2,11 +2,16 @@ package opusg711mix
 
 import (
 	"fmt"
+	"slices"
+	"sync"
+	"sync/atomic"
 	"weak"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 )
+
+const QDataPadBranchID = "opus_g711_mix-branch-id"
 
 var CAT = gst.NewDebugCategory(
 	"opus_g711_mix",
@@ -15,7 +20,7 @@ var CAT = gst.NewDebugCategory(
 )
 
 type branch struct {
-	GhostPad      *gst.GhostPad
+	id            uint64
 	RtpOpusDepay  *gst.Element
 	OpusDec       *gst.Element
 	AudioConvert  *gst.Element
@@ -24,6 +29,8 @@ type branch struct {
 }
 
 type OpusG711Mix struct {
+	mu         sync.Mutex
+	counter    atomic.Uint64
 	Branches   []*branch
 	AudioMixer *gst.Element
 	G711Enc    *gst.Element
@@ -213,6 +220,9 @@ func (e *OpusG711Mix) ChangeState(instance *gst.Element, transition gst.StateCha
 }
 
 func (e *OpusG711Mix) RequestNewPad(instance *gst.Element, templ *gst.PadTemplate, name string, caps *gst.Caps) *gst.Pad {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	self := gst.ToGstBin(instance)
 	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("RequestNewPad called with name: %s", name))
 	pad, err := e.AddBranch(self)
@@ -310,15 +320,67 @@ func (e *OpusG711Mix) AddBranch(self *gst.Bin) (pad *gst.Pad, err error) {
 
 	class := gst.ToElementClass(self.Class())
 
-	b.GhostPad = gst.NewGhostPadFromTemplate(fmt.Sprintf("sink_%d", len(e.Branches)), b.RtpOpusDepay.GetStaticPad("sink"), class.GetPadTemplate("sink_%u"))
-	self.AddPad(b.GhostPad.Pad)
+	b.id = e.counter.Add(1)
+	gpad := gst.NewGhostPadFromTemplate(fmt.Sprintf("sink_%d", b.id), b.RtpOpusDepay.GetStaticPad("sink"), class.GetPadTemplate("sink_%u"))
+	gpad.SetQData(QDataPadBranchID, b.id)
 
-	if !b.GhostPad.SetActive(true) {
+	if !self.AddPad(gpad.Pad) {
+		self.Error("Failed to add ghost pad", nil)
+		self.Log(CAT, gst.LevelError, "Failed to add ghost pad")
+		return nil, fmt.Errorf("failed to add ghost pad")
+	}
+
+	if !gpad.SetActive(true) {
 		self.Error("Failed to set ghost pad active", nil)
 		self.Log(CAT, gst.LevelError, "Failed to set ghost pad active")
 		return nil, fmt.Errorf("failed to set ghost pad active")
 	}
 
 	e.Branches = append(e.Branches, b)
-	return b.GhostPad.Pad, nil
+	return gpad.Pad, nil
+}
+
+func (e *OpusG711Mix) ReleasePad(instance *gst.Element, pad *gst.Pad) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	self := gst.ToGstBin(instance)
+
+	id, ok := pad.GetQData(QDataPadBranchID).(uint64)
+	if !ok {
+		self.Log(CAT, gst.LevelError, "Failed to get branch ID from pad QData")
+		return
+	}
+
+	if !pad.SetActive(false) {
+		self.Log(CAT, gst.LevelWarning, "Failed to set pad active to false")
+	}
+	if !self.RemovePad(pad) {
+		self.Log(CAT, gst.LevelWarning, "Failed to remove pad from bin")
+	}
+
+	idx := slices.IndexFunc(e.Branches, func(b *branch) bool { return b != nil && b.id == id })
+	if idx == -1 {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to find branch with ID %d", id))
+		return
+	}
+
+	b := e.Branches[idx]
+	if b == nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Branch with ID %d is already nil", id))
+		return
+	}
+
+	e.AudioMixer.ReleaseRequestPad(b.AudioRate.GetStaticPad("src").GetPeer())
+
+	for _, elem := range []*gst.Element{b.RtpOpusDepay, b.OpusDec, b.AudioConvert, b.AudioResample, b.AudioRate} {
+		if err := elem.SetState(gst.StateNull); err != nil {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set state of element %s to NULL: %v", elem.GetName(), err))
+		}
+		if err := self.Remove(elem); err != nil {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove element %s: %v", elem.GetName(), err))
+		}
+	}
+
+	e.Branches[idx] = nil
 }

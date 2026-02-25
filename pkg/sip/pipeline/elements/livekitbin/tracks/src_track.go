@@ -11,8 +11,12 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
+func SinkTrackName(sid string) string {
+	return "livekitbin_sinktrack_" + sid
+}
+
 func NewSrcTrack(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) (*gst.Element, error) {
-	element, err := gst.NewElement("livekitbin_srctrack")
+	element, err := gst.NewElementWithName("livekitbin_srctrack", SinkTrackName(pub.SID()))
 	if err != nil {
 		return nil, err
 	}
@@ -152,6 +156,22 @@ func (s *SrcTrack) stop(self *gst.Bin) gst.StateChangeReturn {
 	self.Log(CAT, gst.LevelDebug, "Stopping SrcTrack element")
 
 	s.Pub.OnRTCP(nil)
+
+	rtcpPad := self.GetStaticPad("src_rtcp")
+	if rtcpPad == nil {
+		self.Log(CAT, gst.LevelWarning, "Failed to get src_rtcp pad while stopping SrcTrack element")
+		return gst.StateChangeSuccess
+	}
+
+	if err := s.src.SetState(gst.StateReady); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set src element to READY: %v", err))
+		self.Error("Failed to set src element to READY", err)
+		return gst.StateChangeFailure
+	}
+
+	s.onRtcp(self, rtcpPad)(&rtcp.Goodbye{
+		Sources: []uint32{uint32(s.Track.SSRC())},
+	})
 
 	return gst.StateChangeSuccess
 }

@@ -2,6 +2,8 @@ package tracks
 
 import "github.com/go-gst/go-gst/gst"
 
+const QDataPadPeerKey = "livekitbin-pad-peer"
+
 var CAT *gst.DebugCategory
 
 func PadProbeDrop(_ *gst.Pad, _ *gst.PadProbeInfo) gst.PadProbeReturn {

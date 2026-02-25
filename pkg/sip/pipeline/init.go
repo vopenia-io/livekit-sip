@@ -63,6 +63,8 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/vp8h264"
 )
 
+const QDataPadPeerKey = "livekitsip-pad-peer"
+
 var MainLoop *glib.MainLoop
 
 func init() {

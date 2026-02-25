@@ -19,7 +19,8 @@ func (e *LivekitBin) callabcks() *lksdk.RoomCallback {
 			self.Log(CAT, gst.LevelInfo, "Disconnected from LiveKit room")
 		},
 		ParticipantCallback: lksdk.ParticipantCallback{
-			OnTrackSubscribed: e.SubscribeTrack,
+			OnTrackSubscribed:   e.SubscribeTrack,
+			OnTrackUnsubscribed: e.UnsubscribeTrack,
 		},
 	}
 }
