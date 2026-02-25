@@ -17,6 +17,7 @@ func (p *Pipeline) SetupBus() {
 	p.bus = p.Pipeline().GetPipelineBus()
 	p.Log.Debugw("Setting bus to non-flushing")
 	p.bus.SetFlushing(false)
+	// return
 
 	p.bus.SetSyncHandler(BusFilter)
 

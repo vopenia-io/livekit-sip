@@ -28,6 +28,9 @@ func (p *Pipeline) Monitor() {
 
 	go func() {
 		defer dotFile.Close()
+		defer func() {
+			fmt.Printf("Pipeline %s monitor exiting\n", name)
+		}()
 
 		prevDot := ""
 
@@ -36,7 +39,7 @@ func (p *Pipeline) Monitor() {
 			dotData = sanitizeDot(dotData)
 
 			if dotData != prevDot {
-				// fmt.Printf("Pipeline %s changed, updating dot file\n", name)
+				fmt.Printf("Pipeline %s changed, updating dot file\n", name)
 				prevDot = dotData
 				dotFile.Truncate(0)
 				dotFile.Seek(0, 0)
