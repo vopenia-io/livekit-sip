@@ -136,7 +136,7 @@ func (o *MediaOrchestrator) init() error {
 	}
 	o.pipeline = pipeline
 
-	pipeline.Monitor()
+	// pipeline.Monitor()
 
 	// o.bfcp = NewBFCPManager(o.ctx, o.log, o.opts, o.inbound)
 

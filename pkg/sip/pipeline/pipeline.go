@@ -22,6 +22,8 @@ type Pipeline struct {
 	bus      *gst.Bus
 	dtmfCh   chan int
 
+	dumpCH chan struct{}
+
 	*SipIo
 	*WebrtcIo
 	// *SipToWebrtc

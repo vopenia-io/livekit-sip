@@ -3,8 +3,11 @@ package pipeline
 import (
 	"errors"
 	"fmt"
+	"sync"
+	"time"
 	"weak"
 
+	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 )
 
@@ -19,7 +22,10 @@ func (p *Pipeline) SetupBus() {
 	p.bus.SetFlushing(false)
 	// return
 
-	p.bus.SetSyncHandler(BusFilter)
+	// p.bus.SetSyncHandler(BusFilter)
+
+	p.dumpCH = make(chan struct{}, 1024)
+	go p.DumpDot()
 
 	pweak := weak.Make(p)
 	if !p.bus.AddWatch(func(msg *gst.Message) bool {
@@ -52,6 +58,48 @@ func (p *Pipeline) CloseBus() {
 	p.bus.SetFlushing(true)
 	p.bus.RemoveWatch()
 	p.bus = nil
+}
+
+func (p *Pipeline) DumpDot() {
+	ticker := time.NewTicker(5000 * time.Millisecond)
+
+	dump := false
+	mu := sync.Mutex{}
+	count := 0
+
+	onDumpCH := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		dump = true
+	}
+
+	onTicker := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if dump {
+			dump = false
+			p.Log.Infow("Dumping pipeline state to dot file")
+			count++
+			done := make(chan struct{})
+			glib.IdleAdd(func() {
+				p.Pipeline().DebugBinToDotFileWithTs(gst.DebugGraphShowAll, fmt.Sprintf("%s_pipeline_%d.dot", p.Pipeline().GetName(), count))
+				close(done)
+			})
+			<-done
+		}
+	}
+
+	for {
+		select {
+		case <-p.closed.Watch():
+			p.Log.Infow("Pipeline closed, exiting DumpDot loop")
+			return
+		case <-p.dumpCH:
+			onDumpCH()
+		case <-ticker.C:
+			onTicker()
+		}
+	}
 }
 
 func (p *Pipeline) onMessage(msg *gst.Message) bool {
@@ -89,6 +137,8 @@ func (p *Pipeline) onMessage(msg *gst.Message) bool {
 			p.Log.Infow("Received dtmf-event message", "number", nb)
 			p.dtmfCh <- nb
 		}
+	case gst.MessageStateChanged:
+		p.dumpCH <- struct{}{}
 	default:
 		p.Log.Debugw("Unhandled bus message", "type", msg.Type())
 	}
