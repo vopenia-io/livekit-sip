@@ -6,8 +6,10 @@ import (
 	"slices"
 
 	"github.com/go-gst/go-gst/gst"
+	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin/tracks"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/vp8h264select"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -100,4 +102,74 @@ func roomWaitConnected(room *lksdk.Room) error {
 		}
 	}
 	return nil
+}
+
+func (e *LivekitBin) OnActiveSpeakersChanged(p []lksdk.Participant) {
+	if len(p) == 0 {
+		return
+	}
+	// e.callbackMu.Lock()
+	// defer e.callbackMu.Unlock()
+
+	self := gst.ToGstBin(e.self.Get())
+	if self == nil {
+		CAT.Log(gst.LevelError, "Failed to get parent bin")
+		return
+	}
+	if !e.Is(RoomStateJoined) {
+		self.Log(CAT, gst.LevelWarning, "Received active speakers changed callback while not joined to a room")
+		return
+	}
+
+	var ssrcs []uint32
+
+	for _, part := range p {
+		if !part.IsCameraEnabled() {
+			self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Skipping participant %s because camera is not enabled", part.Identity()))
+			continue
+		}
+		pub, ok := part.GetTrackPublication(livekit.TrackSource_CAMERA).(*lksdk.RemoteTrackPublication)
+		if !ok {
+			self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Skipping participant %s because no camera track publication found", part.Identity()))
+			continue
+		}
+
+		if !pub.IsSubscribed() {
+			continue
+		}
+
+		ssrcs = append(ssrcs, uint32(pub.TrackRemote().SSRC()))
+	}
+	if len(ssrcs) == 0 {
+		return
+	}
+
+	pads, err := self.GetSrcPads()
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get src pads: %v", err))
+		return
+	}
+
+	for _, pad := range pads {
+		pname := pad.GetName()
+		var session, ssrc, pt int
+		if _, err := fmt.Sscanf(pname, "recv_rtp_src_%d_%d_%d", &session, &ssrc, &pt); err != nil {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to parse pad name %s: %v", pname, err))
+			continue
+		}
+		if session != int(livekit.TrackSource_CAMERA) {
+			continue
+		}
+		if !slices.Contains(ssrcs, uint32(ssrc)) {
+			continue
+		}
+		structure := gst.NewStructure(vp8h264select.SelectEventName)
+		runtime.SetFinalizer(structure, nil) // give ownership to the event
+		if !pad.PushEvent(gst.NewCustomEvent(gst.EventTypeCustomDownstream, structure)) {
+			err := fmt.Errorf("failed to send selector event on pad %s with structure %v", pname, structure.Values())
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error sending selector event on pad %s: %v", pname, err))
+			self.Error(fmt.Sprintf("Error sending selector event on pad %s", pname), err)
+			continue
+		}
+	}
 }

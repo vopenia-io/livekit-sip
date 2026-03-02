@@ -173,31 +173,31 @@ func (e *IoManagerLivekit) setupCamera(self *gst.Bin) error {
 	}
 
 	var err error
-	e.Camera, err = gst.NewElementWithProperties("vp8-h264", map[string]interface{}{
+	e.Camera, err = gst.NewElementWithProperties("vp8_h264_select", map[string]interface{}{
 		"h264-pt": int(97),
 	})
 	if err != nil {
-		self.Error("Failed to create vp8-h264 element", err)
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create vp8-h264 element: %v", err))
+		self.Error("Failed to create vp8_h264_select element", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create vp8_h264_select element: %v", err))
 		return err
 	}
 
 	if err := self.Add(e.Camera); err != nil {
-		self.Error("Failed to add vp8-h264 element to SIP IO bin", err)
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add vp8-h264 element to SIP IO bin: %v", err))
+		self.Error("Failed to add vp8_h264_select element to SIP IO bin", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add vp8_h264_select element to SIP IO bin: %v", err))
 		return err
 	}
 
 	if !e.Camera.SyncStateWithParent() {
-		self.Error("Failed to sync state of vp8-h264 element with parent", nil)
-		self.Log(CAT, gst.LevelError, "Failed to sync state of vp8-h264 element with parent")
-		return fmt.Errorf("Failed to sync state of vp8-h264 element with parent")
+		self.Error("Failed to sync state of vp8_h264_select element with parent", nil)
+		self.Log(CAT, gst.LevelError, "Failed to sync state of vp8_h264_select element with parent")
+		return fmt.Errorf("Failed to sync state of vp8_h264_select element with parent")
 	}
 
 	gsrc := e.Camera.GetStaticPad("src")
 	if gsrc == nil {
-		self.Log(CAT, gst.LevelError, "Failed to get src pad from vp8-h264 element")
-		return fmt.Errorf("Failed to get src pad from vp8-h264 element")
+		self.Log(CAT, gst.LevelError, "Failed to get src pad from vp8_h264_select element")
+		return fmt.Errorf("Failed to get src pad from vp8_h264_select element")
 	}
 
 	pname := fmt.Sprintf("send_rtp_src_%d", SessionKindCamera)
@@ -220,55 +220,50 @@ func (e *IoManagerLivekit) setupCamera(self *gst.Bin) error {
 	return nil
 }
 
-func (e *IoManagerLivekit) fakeCameraSink(self *gst.Bin, session, ssrc, pt int) *gst.Pad {
-	// This is a workaround to ensure that the camera element is created and linked in the pipeline even if no remote video track is published.
-	// The vp8-h264 element requires a sink pad to be created, which only happens when a remote video track is published. By creating a fake sink pad and linking it to a fakesink, we ensure that the vp8-h264 element is properly set up and can handle incoming video tracks when they are published.
+// func (e *IoManagerLivekit) fakeCameraSink(self *gst.Bin, session, ssrc, pt int) *gst.Pad {
+// 	// This is a workaround to ensure that the camera element is created and linked in the pipeline even if no remote video track is published.
+// 	// The vp8_h264_select element requires a sink pad to be created, which only happens when a remote video track is published. By creating a fake sink pad and linking it to a fakesink, we ensure that the vp8_h264_select element is properly set up and can handle incoming video tracks when they are published.
 
-	fakesink, err := gst.NewElement("fakesink")
-	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create fakesink element: %v", err))
-		return nil
-	}
+// 	fakesink, err := gst.NewElement("fakesink")
+// 	if err != nil {
+// 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create fakesink element: %v", err))
+// 		return nil
+// 	}
 
-	if err := self.Add(fakesink); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add fakesink element to SIP IO bin: %v", err))
-		return nil
-	}
+// 	if err := self.Add(fakesink); err != nil {
+// 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add fakesink element to SIP IO bin: %v", err))
+// 		return nil
+// 	}
 
-	if !fakesink.SyncStateWithParent() {
-		self.Log(CAT, gst.LevelError, "Failed to sync state of fakesink element with parent")
-		return nil
-	}
+// 	if !fakesink.SyncStateWithParent() {
+// 		self.Log(CAT, gst.LevelError, "Failed to sync state of fakesink element with parent")
+// 		return nil
+// 	}
 
-	sinkPad := fakesink.GetStaticPad("sink")
-	if sinkPad == nil {
-		self.Log(CAT, gst.LevelError, "Failed to get sink pad from fakesink element")
-		return nil
-	}
+// 	sinkPad := fakesink.GetStaticPad("sink")
+// 	if sinkPad == nil {
+// 		self.Log(CAT, gst.LevelError, "Failed to get sink pad from fakesink element")
+// 		return nil
+// 	}
 
-	gpad, err := e.ghostSinkPad(self, session, ssrc, pt, sinkPad)
-	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create ghost pad for fake camera sink: %v", err))
-		return nil
-	}
+// 	gpad, err := e.ghostSinkPad(self, session, ssrc, pt, sinkPad)
+// 	if err != nil {
+// 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create ghost pad for fake camera sink: %v", err))
+// 		return nil
+// 	}
 
-	return gpad.Pad
-}
+// 	return gpad.Pad
+// }
 
 func (e *IoManagerLivekit) requestNewPadCamera(self *gst.Bin, session, ssrc, pt int) *gst.Pad {
 	if err := e.setupCamera(self); err != nil {
 		return nil
 	}
 
-	sink := e.Camera.GetStaticPad("sink")
+	sink := e.Camera.GetRequestPad("sink_%u")
 	if sink == nil {
 		self.Log(CAT, gst.LevelError, "Failed to get sink pad from vp8-h264 element")
 		return nil
-	}
-
-	if sink.IsLinked() {
-		self.Log(CAT, gst.LevelWarning, "Camera pad is already linked, returning fake camera sink pad")
-		return e.fakeCameraSink(self, session, ssrc, pt)
 	}
 
 	pname := fmt.Sprintf("recv_rtp_sink_%d_%d_%d", session, ssrc, pt)
@@ -350,17 +345,18 @@ func (e *IoManagerLivekit) ReleasePad(instance *gst.Element, pad *gst.Pad) {
 	case SessionKindMicrophone:
 		e.Audio.ReleaseRequestPad(target)
 	case SessionKindCamera:
-		parent := target.GetParentElement()
-		if parent == nil {
-			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Target pad %s of camera pad %s has no parent element", target.GetName(), pname))
-		} else {
-			if err := parent.SetState(gst.StateNull); err != nil {
-				self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set state of parent element of target pad %s to NULL: %v", target.GetName(), err))
-			}
-			if err := self.Remove(parent); err != nil {
-				self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to remove parent element %s of target pad %s: %v", parent.GetName(), target.GetName(), err))
-			}
-		}
+		e.Camera.ReleaseRequestPad(target)
+		// parent := target.GetParentElement()
+		// if parent == nil {
+		// 	self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Target pad %s of camera pad %s has no parent element", target.GetName(), pname))
+		// } else {
+		// 	if err := parent.SetState(gst.StateNull); err != nil {
+		// 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set state of parent element of target pad %s to NULL: %v", target.GetName(), err))
+		// 	}
+		// 	if err := self.Remove(parent); err != nil {
+		// 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to remove parent element %s of target pad %s: %v", parent.GetName(), target.GetName(), err))
+		// 	}
+		// }
 	default:
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unsupported session kind in pad name %s: %d (%s)", pname, session, SessionKind(session).String()))
 		return

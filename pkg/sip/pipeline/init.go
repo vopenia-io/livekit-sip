@@ -60,7 +60,7 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sinkwriter"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipmanager"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sourcereader"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/vp8h264"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/vp8h264select"
 )
 
 const QDataPadPeerKey = "livekitsip-pad-peer"
@@ -81,8 +81,8 @@ func init() {
 		panic("Failed to register h264-vp8")
 	}
 
-	if !vp8h264.Register() {
-		panic("Failed to register vp8-h264")
+	if !vp8h264select.Register() {
+		panic("Failed to register vp8_h264_select")
 	}
 
 	if !g711opus.Register() {
