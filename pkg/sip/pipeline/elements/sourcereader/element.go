@@ -170,12 +170,10 @@ func (s *SourceReader) SetCaps(self *base.GstBaseSrc, caps *gst.Caps) bool {
 
 func (s *SourceReader) GetCaps(self *base.GstBaseSrc, filter *gst.Caps) *gst.Caps {
 	if filter != nil && filter.Instance() != nil && !filter.IsEmpty() && !filter.IsAny() {
-		s.self.Log(CAT, gst.LevelDebug, fmt.Sprintf("caps get filter: %s", filter.String()))
 		if intersect := s.settings.caps.Intersect(filter); intersect != nil {
 			return intersect
 		}
 	}
-	s.self.Log(CAT, gst.LevelDebug, fmt.Sprintf("caps get: %s", s.settings.caps.String()))
 	return s.settings.caps.Ref()
 }
 

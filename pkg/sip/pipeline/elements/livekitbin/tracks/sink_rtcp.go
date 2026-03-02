@@ -72,12 +72,10 @@ func (s *SinkRtcp) SetCaps(self *base.GstBaseSink, caps *gst.Caps) bool {
 func (s *SinkRtcp) GetCaps(self *base.GstBaseSink, filter *gst.Caps) *gst.Caps {
 	caps := gst.NewCapsFromString("application/x-rtcp")
 	if filter != nil && filter.Instance() != nil && !filter.IsEmpty() && !filter.IsAny() {
-		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("caps get filter: %s", filter.String()))
 		if intersect := caps.Intersect(filter); intersect != nil {
 			return intersect
 		}
 	}
-	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("caps get: %s", caps.String()))
 	return caps.Copy().Ref()
 }
 
