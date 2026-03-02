@@ -43,7 +43,7 @@ type LivekitBin struct {
 
 	state
 	config
-	room       *lksdk.Room
+	room *lksdk.Room
 	// callbackMu sync.Mutex
 
 	encodingPT map[uint8]string
@@ -269,8 +269,14 @@ func (e *LivekitBin) ChangeState(instance *gst.Element, transition gst.StateChan
 
 	if transition == gst.StateChangeReadyToNull {
 		e.room.Disconnect()
-		e.RtpBin = nil
 		e.Set(RoomStateClosed)
+		e.RtpBin = nil
+		e.RtcpFunnel = nil
+		e.RtcpSink = nil
+		e.MicrophoneRtpFunnel = nil
+		e.MicrophoneRtcpFunnel = nil
+		e.CameraRtpFunnel = nil
+		e.CameraRtcpFunnel = nil
 	}
 
 	return ret

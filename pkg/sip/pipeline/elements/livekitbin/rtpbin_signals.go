@@ -9,8 +9,7 @@ import (
 
 func (e *LivekitBin) OnRtpBinRequestPtMap(session, pt uint) *gst.Caps {
 	self := gst.ToGstBin(e.self.Get())
-	if self == nil {
-		CAT.Log(gst.LevelError, "LivekitBin instance is nil in OnRtpBinRequestPtMap")
+	if self == nil || self.Instance() == nil {
 		return nil
 	}
 

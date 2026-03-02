@@ -112,8 +112,7 @@ func (e *LivekitBin) OnActiveSpeakersChanged(p []lksdk.Participant) {
 	// defer e.callbackMu.Unlock()
 
 	self := gst.ToGstBin(e.self.Get())
-	if self == nil {
-		CAT.Log(gst.LevelError, "Failed to get parent bin")
+	if self == nil || self.Instance() == nil {
 		return
 	}
 	if !e.Is(RoomStateJoined) {

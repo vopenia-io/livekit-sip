@@ -13,7 +13,7 @@ func (e *LivekitBin) callabcks() *lksdk.RoomCallback {
 	return &lksdk.RoomCallback{
 		OnDisconnected: func() {
 			self := gst.ToGstBin(e.self.Get())
-			if self == nil {
+			if self == nil || self.Instance() == nil {
 				return
 			}
 			if _, err := self.Emit("closed"); err != nil {

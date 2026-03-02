@@ -14,8 +14,7 @@ import (
 
 func (e *LivekitBin) OnRtpBinPadAdded(pad *gst.Pad) {
 	self := gst.ToGstBin(e.self.Get())
-	if self == nil {
-		CAT.Log(gst.LevelError, "LivekitBin instance is nil in OnRtpBinPadAdded")
+	if self == nil || self.Instance() == nil {
 		return
 	}
 
@@ -42,8 +41,7 @@ func (e *LivekitBin) OnRtpBinPadAdded(pad *gst.Pad) {
 
 func (e *LivekitBin) OnRtpBinPadRemoved(pad *gst.Pad) {
 	self := gst.ToGstBin(e.self.Get())
-	if self == nil {
-		CAT.Log(gst.LevelError, "LivekitBin instance is nil in OnRtpBinPadAdded")
+	if self == nil || self.Instance() == nil {
 		return
 	}
 	pname := pad.GetName()
@@ -153,8 +151,7 @@ func (e *LivekitBin) handleTrackJoin(welement *glib.WeakRef, pname string, probe
 	defer e.wg.Done()
 	err := e.Wait(RoomStateJoined)
 	self := gst.ToGstBin(e.self.Get())
-	if self == nil {
-		CAT.Log(gst.LevelError, "LivekitBin instance is nil in PublishTrack goroutine")
+	if self == nil || self.Instance() == nil {
 		return
 	}
 	element := gst.ToElement(welement.Get())
@@ -244,8 +241,7 @@ func (e *LivekitBin) SubscribeTrack(track *webrtc.TrackRemote, publication *lksd
 	// e.callbackMu.Lock()
 	// defer e.callbackMu.Unlock()
 	self := gst.ToGstBin(e.self.Get())
-	if self == nil {
-		CAT.Log(gst.LevelError, "LivekitBin instance is nil in SubscribeTrack")
+	if self == nil || self.Instance() == nil {
 		return
 	}
 	_, enc, ok := strings.Cut(track.Codec().MimeType, "/")
@@ -365,8 +361,7 @@ func (e *LivekitBin) UnsubscribeTrack(track *webrtc.TrackRemote, pub *lksdk.Remo
 	// e.callbackMu.Lock()
 	// defer e.callbackMu.Unlock()
 	self := gst.ToGstBin(e.self.Get())
-	if self == nil {
-		CAT.Log(gst.LevelError, "LivekitBin instance is nil in UnsubscribeTrack")
+	if self == nil || self.Instance() == nil {
 		return
 	}
 
