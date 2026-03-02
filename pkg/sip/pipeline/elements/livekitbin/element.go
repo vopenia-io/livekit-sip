@@ -10,7 +10,6 @@ import (
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin/tracks"
-	"github.com/pion/rtcp"
 )
 
 var CAT = gst.NewDebugCategory(
@@ -44,7 +43,11 @@ type LivekitBin struct {
 
 	state
 	config
-	room *lksdk.Room
+	room       *lksdk.Room
+	// callbackMu sync.Mutex
+
+	encodingPT map[uint8]string
+	encodingMu sync.RWMutex
 }
 
 func (e *LivekitBin) New() glib.GoObjectSubclass {
@@ -106,6 +109,7 @@ func (e *LivekitBin) InstanceInit(instance *glib.Object) {
 	eweak := weak.Make(e)
 
 	e.state.cond = sync.NewCond(&e.state.mu)
+	e.encodingPT = make(map[uint8]string)
 
 	e.self = glib.WeakRefInit(self)
 
@@ -182,21 +186,21 @@ func (e *LivekitBin) InstanceInit(instance *glib.Object) {
 		self.Error("Error creating microphone rtcp funnel", err)
 		return
 	}
-	e.MicrophoneRtcpFunnel.GetStaticPad("src").AddProbe(gst.PadProbeTypeBuffer|gst.PadProbeTypeBufferList, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
-		buffer := info.GetBuffer()
-		data := buffer.Bytes()
-		pkts, err := rtcp.Unmarshal(data)
-		if err != nil {
-			fmt.Printf("Failed to unmarshal RTCP packet in microphone rtcp funnel probe: %v => %x\n", err, data)
-			return gst.PadProbeOK
-		}
-		fmt.Printf("Received RTCP packet in microphone rtcp funnel probe: %d packets:\n", len(pkts))
-		for i, pkt := range pkts {
-			fmt.Printf("  Packet %d: %T => %+v\n", i, pkt, pkt)
-		}
+	// e.MicrophoneRtcpFunnel.GetStaticPad("src").AddProbe(gst.PadProbeTypeBuffer|gst.PadProbeTypeBufferList, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+	// 	buffer := info.GetBuffer()
+	// 	data := buffer.Bytes()
+	// 	pkts, err := rtcp.Unmarshal(data)
+	// 	if err != nil {
+	// 		fmt.Printf("Failed to unmarshal RTCP packet in microphone rtcp funnel probe: %v => %x\n", err, data)
+	// 		return gst.PadProbeOK
+	// 	}
+	// 	fmt.Printf("Received RTCP packet in microphone rtcp funnel probe: %d packets:\n", len(pkts))
+	// 	for i, pkt := range pkts {
+	// 		fmt.Printf("  Packet %d: %T => %+v\n", i, pkt, pkt)
+	// 	}
 
-		return gst.PadProbeOK
-	})
+	// 	return gst.PadProbeOK
+	// })
 
 	e.CameraRtpFunnel, err = gst.NewElementWithName("rtpfunnel", "livekitbin_camera_rtpfunnel")
 	if err != nil {

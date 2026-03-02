@@ -69,29 +69,27 @@ func (s *SrcTrackRtp) SetCaps(self *base.GstBaseSrc, caps *gst.Caps) bool {
 func (s *SrcTrackRtp) GetCaps(self *base.GstBaseSrc, filter *gst.Caps) *gst.Caps {
 	codec := s.parent.Track.Codec()
 
-	media, enc, ok := strings.Cut(codec.MimeType, "/")
-	if !ok {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid codec mime type: %s", codec.MimeType))
-		return nil
-	}
+	// media, enc, ok := strings.Cut(codec.MimeType, "/")
+	// if !ok {
+	// 	self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid codec mime type: %s", codec.MimeType))
+	// 	return nil
+	// }
 
 	capsStr := "application/x-rtp"
-	capsStr += fmt.Sprintf(", media=(string)%s", strings.ToLower(media))
-	capsStr += fmt.Sprintf(", encoding-name=(string)%s", strings.ToUpper(enc))
+	// capsStr += fmt.Sprintf(", media=(string)%s", strings.ToLower(media))
+	// capsStr += fmt.Sprintf(", encoding-name=(string)%s", strings.ToUpper(enc))
 	capsStr += fmt.Sprintf(", payload=(int)%d", codec.PayloadType)
-	capsStr += fmt.Sprintf(", clock-rate=(int)%d", codec.ClockRate)
+	// capsStr += fmt.Sprintf(", clock-rate=(int)%d", codec.ClockRate)
 	if codec.Channels > 0 {
 		capsStr += fmt.Sprintf(", channels=(int)%d", codec.Channels)
 	}
 
 	caps := gst.NewCapsFromString(capsStr)
 	if filter != nil && filter.Instance() != nil && !filter.IsEmpty() && !filter.IsAny() {
-		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("caps get filter: %s", filter.String()))
 		if intersect := caps.Intersect(filter); intersect != nil {
 			return intersect
 		}
 	}
-	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("caps get: %s", caps.String()))
 	return caps.Copy().Ref()
 }
 

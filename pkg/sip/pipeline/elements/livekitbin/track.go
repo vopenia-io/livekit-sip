@@ -58,8 +58,8 @@ func (e *LivekitBin) OnRtpBinPadRemoved(pad *gst.Pad) {
 
 func (e *LivekitBin) GhostPadRemove(self *gst.Bin, pad *gst.Pad) {
 	pname := pad.GetName()
-	gpad, ok := pad.GetQData(tracks.QDataPadPeerKey).(*gst.GhostPad)
-	if !ok {
+	gpad := self.GetStaticPad(pname)
+	if gpad == nil {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("No ghost pad found for removed pad %s", pname))
 		return
 	}
@@ -68,7 +68,7 @@ func (e *LivekitBin) GhostPadRemove(self *gst.Bin, pad *gst.Pad) {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to deactivate ghost pad %s for removal", pname))
 	}
 
-	if !self.RemovePad(gpad.Pad) {
+	if !self.RemovePad(gpad) {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove ghost pad %s for removal", pname))
 		return
 	}
@@ -241,10 +241,31 @@ func (e *LivekitBin) ForwardPublishTrack(instance *gst.Element, templ *gst.PadTe
 }
 
 func (e *LivekitBin) SubscribeTrack(track *webrtc.TrackRemote, publication *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
+	// e.callbackMu.Lock()
+	// defer e.callbackMu.Unlock()
 	self := gst.ToGstBin(e.self.Get())
 	if self == nil {
 		CAT.Log(gst.LevelError, "LivekitBin instance is nil in SubscribeTrack")
 		return
+	}
+	_, enc, ok := strings.Cut(track.Codec().MimeType, "/")
+	if !ok {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Invalid codec mime type for pt (%d): %s", track.PayloadType(), track.Codec().MimeType))
+	} else {
+		e.encodingMu.RLock()
+		existing, ok := e.encodingPT[uint8(track.PayloadType())]
+		e.encodingMu.RUnlock()
+		if !ok {
+			e.encodingMu.Lock()
+			e.encodingPT[uint8(track.PayloadType())] = strings.ToUpper(enc)
+			e.encodingMu.Unlock()
+		} else {
+			if existing != strings.ToUpper(enc) {
+				self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Codec mime type for pt (%d) changed from %s to %s", track.PayloadType(), existing, enc))
+				self.Error(fmt.Sprintf("Codec mime type for pt (%d) changed from %s to %s", track.PayloadType(), existing, enc), fmt.Errorf("codec change"))
+				return
+			}
+		}
 	}
 
 	element, err := tracks.NewSrcTrack(track, publication, rp)
@@ -328,7 +349,6 @@ func (e *LivekitBin) ForwardSubscribeTrack(self *gst.Bin, pad *gst.Pad, pname st
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating ghost pad for pad name %s", pname))
 		return
 	}
-	pad.SetQData(tracks.QDataPadPeerKey, gpad)
 	if !self.AddPad(gpad.Pad) {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error adding ghost pad for pad name %s", pname))
 		return
@@ -342,6 +362,8 @@ func (e *LivekitBin) ForwardSubscribeTrack(self *gst.Bin, pad *gst.Pad, pname st
 }
 
 func (e *LivekitBin) UnsubscribeTrack(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
+	// e.callbackMu.Lock()
+	// defer e.callbackMu.Unlock()
 	self := gst.ToGstBin(e.self.Get())
 	if self == nil {
 		CAT.Log(gst.LevelError, "LivekitBin instance is nil in UnsubscribeTrack")
@@ -352,6 +374,22 @@ func (e *LivekitBin) UnsubscribeTrack(track *webrtc.TrackRemote, pub *lksdk.Remo
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting source element for track %s: %v", track.ID(), err))
 		return
+	}
+
+	rtpPad := src.GetStaticPad("src").GetPeer()
+	if rtpPad != nil {
+		rtpParent := rtpPad.GetParentElement()
+		if rtpParent != nil {
+			defer rtpParent.ReleaseRequestPad(rtpPad)
+		}
+	}
+
+	rtcpPad := src.GetStaticPad("src_rtcp").GetPeer()
+	if rtcpPad != nil {
+		rtcpParent := rtcpPad.GetParentElement()
+		if rtcpParent != nil {
+			defer rtcpParent.ReleaseRequestPad(rtcpPad)
+		}
 	}
 
 	if err := src.SetState(gst.StateNull); err != nil {
