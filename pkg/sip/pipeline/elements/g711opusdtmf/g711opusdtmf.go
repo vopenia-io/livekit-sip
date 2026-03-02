@@ -25,6 +25,11 @@ var properties = []*glib.ParamSpec{
 	),
 }
 
+type TelephoneEventDTMF struct {
+	RtpDtmlDepay *gst.Element
+	FakeSink     *gst.Element
+}
+
 type G711OpusDtmf struct {
 	Identity      *gst.Element
 	RtpG711Depay  *gst.Element
@@ -37,8 +42,7 @@ type G711OpusDtmf struct {
 	OpusEnc       *gst.Element
 	RtpOpusPay    *gst.Element
 
-	RtpDtmlDepay *gst.Element
-	FakeSink     *gst.Element
+	TelephoneEventDTMF *TelephoneEventDTMF
 }
 
 func (e *G711OpusDtmf) New() glib.GoObjectSubclass {
@@ -64,7 +68,7 @@ func (e *G711OpusDtmf) ClassInit(klass *glib.ObjectClass) {
 	class.AddPadTemplate(gst.NewPadTemplate(
 		"sink_dtmf",
 		gst.PadDirectionSink,
-		gst.PadPresenceAlways,
+		gst.PadPresenceRequest,
 		gst.NewCapsFromString("application/x-rtp, media=(string)audio, clock-rate=(int)8000, encoding-name=(string)TELEPHONE-EVENT"),
 	))
 
@@ -89,13 +93,16 @@ func (e *G711OpusDtmf) InstanceInit(instance *glib.Object) {
 		return
 	}
 	eweak := weak.Make(e)
+	wself := glib.WeakRefInit(self)
 	e.Identity.GetStaticPad("sink").AddProbe(gst.PadProbeTypeEventDownstream, func(p *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
 		e := eweak.Value()
 		if e == nil {
 			return gst.PadProbeRemove
 		}
-		// TODO: do that cause any leaks?
-		// yes it does, we need to make a weak ref of self too but it can only be a glib weakref as the go wrapper will get dropped 
+		self := gst.ToGstBin(wself.Get())
+		if self == nil {
+			return gst.PadProbeRemove
+		}
 		return e.G711Setup(self, p, info)
 	})
 
@@ -150,22 +157,22 @@ func (e *G711OpusDtmf) InstanceInit(instance *glib.Object) {
 		return
 	}
 
-	e.RtpDtmlDepay, err = gst.NewElement("rtpdtmfdepay")
-	if err != nil {
-		self.Error("Failed to create rtpdtmfdepay element", err)
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create rtpdtmfdepay element: %v", err))
-		return
-	}
+	// e.RtpDtmlDepay, err = gst.NewElement("rtpdtmfdepay")
+	// if err != nil {
+	// 	self.Error("Failed to create rtpdtmfdepay element", err)
+	// 	self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create rtpdtmfdepay element: %v", err))
+	// 	return
+	// }
 
-	e.FakeSink, err = gst.NewElementWithProperties("fakesink", map[string]interface{}{
-		"sync":  false,
-		"async": false,
-	})
-	if err != nil {
-		self.Error("Failed to create fakesink element", err)
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create fakesink element: %v", err))
-		return
-	}
+	// e.FakeSink, err = gst.NewElementWithProperties("fakesink", map[string]interface{}{
+	// 	"sync":  false,
+	// 	"async": false,
+	// })
+	// if err != nil {
+	// 	self.Error("Failed to create fakesink element", err)
+	// 	self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create fakesink element: %v", err))
+	// 	return
+	// }
 
 	self.AddMany(
 		e.Identity,
@@ -176,8 +183,6 @@ func (e *G711OpusDtmf) InstanceInit(instance *glib.Object) {
 		e.Valve,
 		e.OpusEnc,
 		e.RtpOpusPay,
-		e.RtpDtmlDepay,
-		e.FakeSink,
 	)
 
 	if err := gst.ElementLinkMany(
@@ -194,22 +199,10 @@ func (e *G711OpusDtmf) InstanceInit(instance *glib.Object) {
 		return
 	}
 
-	if err := gst.ElementLinkMany(
-		e.RtpDtmlDepay,
-		e.FakeSink,
-	); err != nil {
-		self.Error("Failed to link DTMF elements", err)
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link DTMF elements: %v", err))
-		return
-	}
-
 	elemClass := gst.ToElementClass(self.Class())
 
 	ghostSink := gst.NewGhostPadFromTemplate("sink", e.Identity.GetStaticPad("sink"), elemClass.GetPadTemplate("sink"))
 	self.AddPad(ghostSink.Pad)
-
-	ghostSinkDtmf := gst.NewGhostPadFromTemplate("sink_dtmf", e.RtpDtmlDepay.GetStaticPad("sink"), elemClass.GetPadTemplate("sink_dtmf"))
-	self.AddPad(ghostSinkDtmf.Pad)
 
 	ghostSrc := gst.NewGhostPadFromTemplate("src", e.RtpOpusPay.GetStaticPad("src"), elemClass.GetPadTemplate("src"))
 	self.AddPad(ghostSrc.Pad)
@@ -347,9 +340,108 @@ func (e *G711OpusDtmf) ChangeState(instance *gst.Element, transition gst.StateCh
 		e.Valve = nil
 		e.OpusEnc = nil
 		e.RtpOpusPay = nil
-		
-		e.RtpDtmlDepay = nil
-		e.FakeSink = nil
+
+		e.TelephoneEventDTMF = nil
 	}
 	return ret
+}
+
+func (e *G711OpusDtmf) RequestNewPad(instance *gst.Element, templ *gst.PadTemplate, name string, caps *gst.Caps) *gst.Pad {
+	self := gst.ToGstBin(instance)
+	if templ.Name() != "sink_dtmf" {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unexpected pad template name: %s", templ.Name()))
+		return nil
+	}
+
+	if e.TelephoneEventDTMF != nil {
+		self.Log(CAT, gst.LevelError, "DTMF pad already requested")
+		return nil
+	}
+
+	dtmfDepay, err := gst.NewElement("rtpdtmfdepay")
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create rtpdtmfdepay element: %v", err))
+		return nil
+	}
+
+	fakeSink, err := gst.NewElementWithProperties("fakesink", map[string]interface{}{
+		"sync":  false,
+		"async": false,
+	})
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create fakesink element: %v", err))
+		return nil
+	}
+
+	if err := self.AddMany(dtmfDepay, fakeSink); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add DTMF elements: %v", err))
+		return nil
+	}
+
+	if err := gst.ElementLinkMany(
+		dtmfDepay,
+		fakeSink,
+	); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link DTMF elements: %v", err))
+		return nil
+	}
+
+	for _, elem := range []*gst.Element{dtmfDepay, fakeSink} {
+		if !elem.SyncStateWithParent() {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to sync state for element %s", elem.GetName()))
+			return nil
+		}
+	}
+
+	class := gst.ToElementClass(self.Class())
+	gpad := gst.NewGhostPadFromTemplate("sink_dtmf", dtmfDepay.GetStaticPad("sink"), class.GetPadTemplate("sink_dtmf"))
+
+	if !self.AddPad(gpad.Pad) {
+		self.Log(CAT, gst.LevelError, "Failed to add ghost pad for DTMF sink")
+		return nil
+	}
+
+	if !gpad.SetActive(true) {
+		self.Log(CAT, gst.LevelError, "Failed to activate ghost pad for DTMF sink")
+		return nil
+	}
+
+	e.TelephoneEventDTMF = &TelephoneEventDTMF{
+		RtpDtmlDepay: dtmfDepay,
+		FakeSink:     fakeSink,
+	}
+
+	self.Log(CAT, gst.LevelInfo, "Successfully set up DTMF detection elements")
+
+	return gpad.Pad
+}
+
+func (e *G711OpusDtmf) ReleasePad(instance *gst.Element, pad *gst.Pad) {
+	self := gst.ToGstBin(instance)
+
+	if pad.Template().Name() != "sink_dtmf" {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unexpected pad template name on release: %s", pad.Template().Name()))
+		return
+	}
+
+	if e.TelephoneEventDTMF == nil {
+		self.Log(CAT, gst.LevelWarning, "No DTMF pad to release")
+		return
+	}
+
+	if !self.RemovePad(pad) {
+		self.Log(CAT, gst.LevelError, "Failed to remove ghost pad for DTMF sink")
+		return
+	}
+
+	for _, elem := range []*gst.Element{e.TelephoneEventDTMF.RtpDtmlDepay, e.TelephoneEventDTMF.FakeSink} {
+		if err := elem.SetState(gst.StateNull); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set element %s to NULL: %v", elem.GetName(), err))
+		}
+		if err := self.Remove(elem); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to remove element %s: %v", elem.GetName(), err))
+		}
+	}
+
+	e.TelephoneEventDTMF = nil
 }

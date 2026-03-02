@@ -10,8 +10,8 @@ import (
 )
 
 type IoManagerSip struct {
-	Audio  *gst.Element // g711-opus-dtmf
-	Camera *gst.Element // h264-vp8
+	Audio        *gst.Element // g711-opus-dtmf
+	Camera       *gst.Element // h264-vp8
 }
 
 func (e *IoManagerSip) New() glib.GoObjectSubclass {
@@ -160,7 +160,7 @@ func (e *IoManagerSip) linkNewPadAudio(pad *gst.Pad, info *gst.PadProbeInfo) gst
 	case "pcmu", "pcma":
 		sink = e.Audio.GetStaticPad("sink")
 	case "telephone-event":
-		sink = e.Audio.GetStaticPad("sink_dtmf")
+		sink = e.Audio.GetRequestPad("sink_dtmf")
 	default:
 		err = fmt.Errorf("Unsupported encoding: %s", enc)
 		return gst.PadProbeRemove
@@ -302,6 +302,45 @@ func (e *IoManagerSip) requestNewPadCamera(self *gst.Bin, session, ssrc, pt int)
 	}
 
 	return gsink.Pad
+}
+
+func (e *IoManagerSip) ReleasePad(instance *gst.Element, pad *gst.Pad) {
+	self := gst.ToGstBin(instance)
+
+	pname := pad.GetName()
+	if !strings.HasPrefix(pname, "recv_rtp_sink_") {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid pad name %s, expected to start with recv_rtp_sink_", pname))
+		return
+	}
+
+	gpad := pad.AsGhostPad()
+	if gpad == nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Pad %s is not a ghost pad, cannot release", pname))
+		return
+	}
+
+	var session, ssrc, pt int
+	if _, err := fmt.Sscanf(pname, "recv_rtp_sink_%d_%d_%d", &session, &ssrc, &pt); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to parse pad name %s: %v", pname, err))
+		return
+	}
+
+	switch SessionKind(session) {
+	case SessionKindMicrophone:
+		if e.Audio != nil {
+			e.Audio.ReleaseRequestPad(gpad.GetTarget())
+		}
+	}
+	if !pad.SetActive(false) {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to deactivate ghost pad %s", pname))
+		return
+	}
+	if !self.RemovePad(pad) {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to remove ghost pad %s from SIP IO element", pname))
+		return
+	}
+
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Successfully released pad %s", pname))
 }
 
 func (e *IoManagerSip) RequestNewPad(instance *gst.Element, templ *gst.PadTemplate, name string, caps *gst.Caps) *gst.Pad {

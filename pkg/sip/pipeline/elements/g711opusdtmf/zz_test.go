@@ -5,28 +5,17 @@ import (
 	"os"
 	"runtime"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 
 	"github.com/go-gst/go-gst/gst"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/testutils"
 )
 
 func TestMain(m *testing.M) {
 	gst.Init(nil)
 	Register()
-
-	code := m.Run()
-
-	for i := 0; i < 5; i++ {
-		runtime.GC()
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	syscall.Kill(syscall.Getpid(), syscall.SIGUSR1)
-	time.Sleep(1 * time.Second)
-
-	os.Exit(code)
+	os.Exit(m.Run())
 }
 
 func TestG711OpusDtmf_Inband(t *testing.T) {
@@ -52,6 +41,8 @@ func TestG711OpusDtmf_Inband(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			defer testutils.AssertNoLeaks(t)
+
 			pipeline, err := gst.NewPipeline(fmt.Sprintf("test-g711-opus-dtmf-inband-%s", tc.name))
 			if err != nil {
 				t.Fatal("failed to create pipeline:", err)
@@ -193,14 +184,6 @@ func TestG711OpusDtmf_Inband(t *testing.T) {
 			if dtmfCount <= 0 {
 				t.Fatalf("no DTMF events detected (%s path)", tc.name)
 			}
-
-			for i := 0; i < 5; i++ {
-				runtime.GC()
-				time.Sleep(100 * time.Millisecond)
-			}
-
-			syscall.Kill(syscall.Getpid(), syscall.SIGUSR1)
-			time.Sleep(1 * time.Second)
 		})
 	}
 }
@@ -228,6 +211,8 @@ func TestG711OpusDtmf_Outofband(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			defer testutils.AssertNoLeaks(t)
+
 			pipeline, err := gst.NewPipeline(fmt.Sprintf("test-g711-opus-dtmf-outofband-%s", tc.name))
 			if err != nil {
 				t.Fatal("failed to create pipeline:", err)
@@ -284,14 +269,14 @@ func TestG711OpusDtmf_Outofband(t *testing.T) {
 				t.Fatal("failed to link audio elements:", err)
 			}
 
-			// Manual pad link: rtpdtmfsrc → sink_dtmf
+			// Manual pad link: rtpdtmfsrc → sink_dtmf (request pad)
 			dtmfSrcPad := dtmfSrc.GetStaticPad("src")
 			if dtmfSrcPad == nil {
 				t.Fatal("failed to get src pad from rtpdtmfsrc")
 			}
-			dtmfSinkPad := transcoder.GetStaticPad("sink_dtmf")
+			dtmfSinkPad := transcoder.GetRequestPad("sink_dtmf")
 			if dtmfSinkPad == nil {
-				t.Fatal("failed to get sink_dtmf pad from transcoder")
+				t.Fatal("failed to request sink_dtmf pad from transcoder")
 			}
 			if ret := dtmfSrcPad.Link(dtmfSinkPad); ret != gst.PadLinkOK {
 				t.Fatalf("failed to link rtpdtmfsrc to sink_dtmf: %v", ret)
@@ -315,7 +300,7 @@ func TestG711OpusDtmf_Outofband(t *testing.T) {
 				t.Fatal("failed to set pipeline to PLAYING:", err)
 			}
 
-			// Goroutine to trigger DTMF event on rtpdtmfsrc
+			// Goroutine to trigger DTMF event on rtpdtmfsrc via sink_dtmf pad
 			go func() {
 				time.Sleep(200 * time.Millisecond)
 
@@ -325,10 +310,10 @@ func TestG711OpusDtmf_Outofband(t *testing.T) {
 				startStructure.SetValue("number", 1)
 				startStructure.SetValue("volume", 25)
 				startStructure.SetValue("start", true)
-				startStructure.SetValue("method", 2)
+				startStructure.SetValue("method", 1)
 				runtime.SetFinalizer(startStructure, nil)
 				startEvent := gst.NewCustomEvent(gst.EventTypeCustomUpstream, startStructure)
-				if !dtmfSrc.SendEvent(startEvent) {
+				if !dtmfSrcPad.SendEvent(startEvent) {
 					t.Log("warning: failed to send DTMF start event")
 				}
 
@@ -340,12 +325,17 @@ func TestG711OpusDtmf_Outofband(t *testing.T) {
 				stopStructure.SetValue("number", 1)
 				stopStructure.SetValue("volume", 25)
 				stopStructure.SetValue("start", false)
-				stopStructure.SetValue("method", 2)
+				stopStructure.SetValue("method", 1)
 				runtime.SetFinalizer(stopStructure, nil)
 				stopEvent := gst.NewCustomEvent(gst.EventTypeCustomUpstream, stopStructure)
-				if !dtmfSrc.SendEvent(stopEvent) {
+				if !dtmfSrcPad.SendEvent(stopEvent) {
 					t.Log("warning: failed to send DTMF stop event")
 				}
+
+				// Send EOS to rtpdtmfsrc so it pushes EOS to sink_dtmf,
+				// allowing the bin to aggregate EOS from all sink pads.
+				time.Sleep(100 * time.Millisecond)
+				dtmfSrc.SendEvent(gst.NewEOSEvent())
 			}()
 
 			bus := pipeline.GetPipelineBus()
@@ -398,14 +388,6 @@ func TestG711OpusDtmf_Outofband(t *testing.T) {
 			if dtmfCount <= 0 {
 				t.Fatalf("no DTMF events detected (%s path)", tc.name)
 			}
-
-			for i := 0; i < 5; i++ {
-				runtime.GC()
-				time.Sleep(100 * time.Millisecond)
-			}
-
-			syscall.Kill(syscall.Getpid(), syscall.SIGUSR1)
-			time.Sleep(1 * time.Second)
 		})
 	}
 }
