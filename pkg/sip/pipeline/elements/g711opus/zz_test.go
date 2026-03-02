@@ -3,30 +3,18 @@ package g711opus
 import (
 	"fmt"
 	"os"
-	"runtime"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 
 	"github.com/go-gst/go-gst/gst"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/testutils"
 )
 
 func TestMain(m *testing.M) {
 	gst.Init(nil)
 	Register()
-
-	code := m.Run()
-
-	for i := 0; i < 5; i++ {
-		runtime.GC()
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	syscall.Kill(syscall.Getpid(), syscall.SIGUSR1)
-	time.Sleep(1 * time.Second)
-
-	os.Exit(code)
+	os.Exit(m.Run())
 }
 
 func TestG711Opus_Pipeline(t *testing.T) {
@@ -52,6 +40,8 @@ func TestG711Opus_Pipeline(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			defer testutils.AssertNoLeaks(t)
+
 			// Create pipeline
 			pipeline, err := gst.NewPipeline(fmt.Sprintf("test-g711-opus-%s", tc.name))
 			if err != nil {
@@ -159,15 +149,6 @@ func TestG711Opus_Pipeline(t *testing.T) {
 			if count <= 0 {
 				t.Fatalf("no buffers received through g711-opus element (%s path)", tc.name)
 			}
-
-			// Per-path teardown: GC and leak check
-			for i := 0; i < 5; i++ {
-				runtime.GC()
-				time.Sleep(100 * time.Millisecond)
-			}
-
-			syscall.Kill(syscall.Getpid(), syscall.SIGUSR1)
-			time.Sleep(1 * time.Second)
 		})
 	}
 }

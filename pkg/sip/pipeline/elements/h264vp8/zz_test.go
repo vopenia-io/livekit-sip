@@ -3,34 +3,24 @@ package h264vp8
 import (
 	"fmt"
 	"os"
-	"runtime"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 
 	"github.com/go-gst/go-gst/gst"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/testutils"
 )
 
 func TestMain(m *testing.M) {
 	gst.Init(nil)
 	Register()
-
-	code := m.Run()
-
-	for i := 0; i < 5; i++ {
-		runtime.GC()
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	syscall.Kill(syscall.Getpid(), syscall.SIGUSR1)
-	time.Sleep(1 * time.Second)
-
-	os.Exit(code)
+	os.Exit(m.Run())
 }
 
 func TestH264Vp8_Pipeline(t *testing.T) {
+	defer testutils.AssertNoLeaks(t)
+
 	// Create pipeline
 	pipeline, err := gst.NewPipeline("test-h264-vp8")
 	if err != nil {
