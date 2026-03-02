@@ -14,8 +14,6 @@ var CAT = gst.NewDebugCategory(
 )
 
 type H264Vp8 struct {
-	self *gst.Bin
-
 	H264Depay    *gst.Element
 	H264Parse    *gst.Element
 	H264Dec      *gst.Element
@@ -57,14 +55,14 @@ func (h *H264Vp8) ClassInit(klass *glib.ObjectClass) {
 	))
 }
 
-func (h *H264Vp8) InstanceInit(self *glib.Object) {
-	h.self = gst.ToGstBin(self)
+func (h *H264Vp8) InstanceInit(instance *glib.Object) {
+	self := gst.ToGstBin(instance)
 	var err error
 
 	h.H264Depay, err = gst.NewElementWithProperties("rtph264depay", map[string]interface{}{})
 	if err != nil {
-		h.self.Error("Failed to create rtph264depay element", err)
-		h.self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create rtph264depay element: %v", err))
+		self.Error("Failed to create rtph264depay element", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create rtph264depay element: %v", err))
 		return
 	}
 
@@ -72,8 +70,8 @@ func (h *H264Vp8) InstanceInit(self *glib.Object) {
 		"config-interval": int(1),
 	})
 	if err != nil {
-		h.self.Error("Failed to create h264parse element", err)
-		h.self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create h264parse element: %v", err))
+		self.Error("Failed to create h264parse element", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create h264parse element: %v", err))
 		return
 	}
 
@@ -81,15 +79,15 @@ func (h *H264Vp8) InstanceInit(self *glib.Object) {
 		"max-threads": int(4),
 	})
 	if err != nil {
-		h.self.Error("Failed to create avdec_h264 element", err)
-		h.self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create avdec_h264 element: %v", err))
+		self.Error("Failed to create avdec_h264 element", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create avdec_h264 element: %v", err))
 		return
 	}
 
 	h.VideoConvert, err = gst.NewElementWithProperties("videoconvert", map[string]interface{}{})
 	if err != nil {
-		h.self.Error("Failed to create videoconvert element", err)
-		h.self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create videoconvert element: %v", err))
+		self.Error("Failed to create videoconvert element", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create videoconvert element: %v", err))
 		return
 	}
 
@@ -97,8 +95,8 @@ func (h *H264Vp8) InstanceInit(self *glib.Object) {
 		"add-borders": true, // Add black bars for aspect ratio preservation
 	})
 	if err != nil {
-		h.self.Error("Failed to create videoscale element", err)
-		h.self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create videoscale element: %v", err))
+		self.Error("Failed to create videoscale element", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create videoscale element: %v", err))
 		return
 	}
 
@@ -107,8 +105,8 @@ func (h *H264Vp8) InstanceInit(self *glib.Object) {
 		"skip-to-first": true,
 	})
 	if err != nil {
-		h.self.Error("Failed to create videorate element", err)
-		h.self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create videorate element: %v", err))
+		self.Error("Failed to create videorate element", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create videorate element: %v", err))
 		return
 	}
 
@@ -116,8 +114,8 @@ func (h *H264Vp8) InstanceInit(self *glib.Object) {
 		"caps": gst.NewCapsFromString("video/x-raw,width=1280,height=720,pixel-aspect-ratio=1/1,framerate=24/1"),
 	})
 	if err != nil {
-		h.self.Error("Failed to create capsfilter element", err)
-		h.self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create capsfilter element: %v", err))
+		self.Error("Failed to create capsfilter element", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create capsfilter element: %v", err))
 		return
 	}
 
@@ -138,8 +136,8 @@ func (h *H264Vp8) InstanceInit(self *glib.Object) {
 		"end-usage":           int(1),
 	})
 	if err != nil {
-		h.self.Error("Failed to create vp8enc element", err)
-		h.self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create vp8enc element: %v", err))
+		self.Error("Failed to create vp8enc element", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create vp8enc element: %v", err))
 		return
 	}
 
@@ -149,13 +147,13 @@ func (h *H264Vp8) InstanceInit(self *glib.Object) {
 		"picture-id-mode": int(2),
 	})
 	if err != nil {
-		h.self.Error("Failed to create rtpvp8pay element", err)
-		h.self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create rtpvp8pay element: %v", err))
+		self.Error("Failed to create rtpvp8pay element", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create rtpvp8pay element: %v", err))
 		return
 	}
 
 	// Add all elements to the bin
-	h.self.AddMany(
+	if err := self.AddMany(
 		h.H264Depay,
 		h.H264Parse,
 		h.H264Dec,
@@ -165,7 +163,11 @@ func (h *H264Vp8) InstanceInit(self *glib.Object) {
 		h.Filter,
 		h.Vp8Enc,
 		h.Vp8Pay,
-	)
+	); err != nil {
+		self.Error("Failed to add elements to bin", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add elements to bin: %v", err))
+		return
+	}
 
 	// Link the elements together
 	if err := gst.ElementLinkMany(
@@ -179,18 +181,18 @@ func (h *H264Vp8) InstanceInit(self *glib.Object) {
 		h.Vp8Enc,
 		h.Vp8Pay,
 	); err != nil {
-		h.self.Error("Failed to link elements", err)
-		h.self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link elements: %v", err))
+		self.Error("Failed to link elements", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link elements: %v", err))
 		return
 	}
 
-	elemClass := gst.ToElementClass(h.self.Class())
+	class := gst.ToElementClass(self.Class())
 
-	ghostSink := gst.NewGhostPadFromTemplate("sink", h.H264Depay.GetStaticPad("sink"), elemClass.GetPadTemplate("sink"))
-	h.self.AddPad(ghostSink.Pad)
+	ghostSink := gst.NewGhostPadFromTemplate("sink", h.H264Depay.GetStaticPad("sink"), class.GetPadTemplate("sink"))
+	self.AddPad(ghostSink.Pad)
 
-	ghostSrc := gst.NewGhostPadFromTemplate("src", h.Vp8Pay.GetStaticPad("src"), elemClass.GetPadTemplate("src"))
-	h.self.AddPad(ghostSrc.Pad)
+	ghostSrc := gst.NewGhostPadFromTemplate("src", h.Vp8Pay.GetStaticPad("src"), class.GetPadTemplate("src"))
+	self.AddPad(ghostSrc.Pad)
 }
 
 func (h *H264Vp8) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
