@@ -3,11 +3,8 @@ package pipeline
 import (
 	"errors"
 	"fmt"
-	"sync"
-	"time"
 	"weak"
 
-	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 )
 

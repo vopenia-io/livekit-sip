@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"sync"
 	"time"
 
+	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 )
 
