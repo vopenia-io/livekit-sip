@@ -135,6 +135,7 @@ func (s *SinkTrack) Stop(self *base.GstBaseSink) bool {
 	s.track = nil
 	s.pt.CloseTrack()
 	s.pt = nil
+	s.Participant = nil
 
 	return true
 }

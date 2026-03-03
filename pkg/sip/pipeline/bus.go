@@ -107,7 +107,7 @@ func (p *Pipeline) onMessage(msg *gst.Message) bool {
 	switch msg.Type() {
 	case gst.MessageError:
 		gErr := msg.ParseError()
-		p.Log.Errorw("Pipeline error", gErr)
+		p.Log.Errorw("Pipeline error", gErr, "debug", gErr.DebugString())
 	// case gst.MessageStateChanged:
 	// 	oldState, newState := msg.ParseStateChanged()
 	// 	p.Log.Debugw("Pipeline state changed", "old", oldState.String(), "new", newState.String())
