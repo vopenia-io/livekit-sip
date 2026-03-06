@@ -74,6 +74,9 @@ func (s *SrcTrackRtp) SetCaps(self *base.GstBaseSrc, caps *gst.Caps) bool {
 }
 
 func (s *SrcTrackRtp) GetCaps(self *base.GstBaseSrc, filter *gst.Caps) *gst.Caps {
+	if s.parent == nil || s.parent.track == nil {
+		return gst.NewCapsFromString("application/x-rtp")
+	}
 	codec := s.parent.track.Codec()
 
 	media, enc, ok := strings.Cut(codec.MimeType, "/")

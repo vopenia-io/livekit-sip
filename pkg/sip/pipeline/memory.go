@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// Call this after p.SetState(gst.StateNull) and p.Unref()
+// Call this after p.SetState(gst.StateNull)
 func ForceMemoryRelease() {
 	for range 5 {
 		runtime.GC()

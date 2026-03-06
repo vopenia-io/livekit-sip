@@ -3,7 +3,6 @@ package vp8h264select
 import (
 	"fmt"
 	"sync"
-	"weak"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
@@ -31,6 +30,7 @@ type Branch struct {
 	Depay        *gst.Element
 	Vp8Dec       *gst.Element
 	VideoConvert *gst.Element
+	Queue        *gst.Element
 }
 
 type Vp8H264Select struct {
@@ -245,15 +245,15 @@ func (e *Vp8H264Select) RequestNewPad(instance *gst.Element, templ *gst.PadTempl
 		self.Log(CAT, gst.LevelError, "Failed to get request pad")
 		return nil
 	}
-	sink.SetQData(QDataPadSwitching, false)
+	// sink.SetQData(QDataPadSwitching, false)
 
-	eweak := weak.Make(e)
-	sink.AddProbe(gst.PadProbeTypeEventDownstream, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
-		if ptr := eweak.Value(); ptr != nil {
-			return ptr.OnSelectorEvent(pad, info)
-		}
-		return gst.PadProbeRemove
-	})
+	// eweak := weak.Make(e)
+	// sink.AddProbe(gst.PadProbeTypeEventDownstream, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+	// 	if ptr := eweak.Value(); ptr != nil {
+	// 		return ptr.OnSelectorEvent(pad, info)
+	// 	}
+	// 	return gst.PadProbeRemove
+	// })
 
 	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Creating new branch for pad: %s", sink.GetName()))
 
@@ -275,22 +275,28 @@ func (e *Vp8H264Select) RequestNewPad(instance *gst.Element, templ *gst.PadTempl
 		return nil
 	}
 
-	if err := self.AddMany(depay, vp8dec, videoconvert); err != nil {
+	queue, err := gst.NewElementWithProperties("queue", map[string]interface{}{})
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create queue element: %v", err))
+		return nil
+	}
+
+	if err := self.AddMany(depay, vp8dec, videoconvert, queue); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add branch elements to bin: %v", err))
 		return nil
 	}
 
-	if err := gst.ElementLinkMany(depay, vp8dec, videoconvert); err != nil {
+	if err := gst.ElementLinkMany(depay, vp8dec, videoconvert, queue); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link branch elements: %v", err))
 		return nil
 	}
 
-	if ret := videoconvert.GetStaticPad("src").Link(sink); ret != gst.PadLinkOK {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link videoconvert to input selector: %v", ret))
+	if ret := queue.GetStaticPad("src").Link(sink); ret != gst.PadLinkOK {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link queue to input selector: %v", ret))
 		return nil
 	}
 
-	for _, elem := range []*gst.Element{depay, vp8dec, videoconvert} {
+	for _, elem := range []*gst.Element{depay, vp8dec, videoconvert, queue} {
 		if !elem.SyncStateWithParent() {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to sync element %s state with parent", elem.GetName()))
 			return nil
@@ -318,6 +324,7 @@ func (e *Vp8H264Select) RequestNewPad(instance *gst.Element, templ *gst.PadTempl
 		Depay:        depay,
 		Vp8Dec:       vp8dec,
 		VideoConvert: videoconvert,
+		Queue:        queue,
 	}
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Added new pad: %s", gpad.GetName()))
@@ -366,11 +373,11 @@ func (e *Vp8H264Select) ReleasePad(instance *gst.Element, pad *gst.Pad) {
 	}
 
 	// Get the InputSelector sink pad before tearing down the branch
-	selectorSink := branch.VideoConvert.GetStaticPad("src").GetPeer()
+	selectorSink := branch.Queue.GetStaticPad("src").GetPeer()
 
 	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Releasing pad: %s", pad.GetName()))
 
-	for _, elem := range []*gst.Element{branch.Depay, branch.Vp8Dec, branch.VideoConvert} {
+	for _, elem := range []*gst.Element{branch.Depay, branch.Vp8Dec, branch.VideoConvert, branch.Queue} {
 		if err := elem.SetState(gst.StateNull); err != nil {
 			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set element %s state to null: %v", elem.GetName(), err))
 		}

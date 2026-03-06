@@ -10,6 +10,7 @@ import (
 	"github.com/frostbyte73/core"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/logger"
+	"github.com/livekit/sip/pkg/sip/pipeline/debug"
 )
 
 type Pipeline struct {
@@ -22,7 +23,8 @@ type Pipeline struct {
 	bus      *gst.Bus
 	dtmfCh   chan int
 
-	dumpCH chan struct{}
+	dumpCH   chan bool
+	debugSrv *debug.Server
 
 	*SipIo
 	*WebrtcIo
@@ -172,6 +174,10 @@ func (p *Pipeline) Close() error {
 		p.Log.Debugw("Pipeline cleanup complete")
 	}
 
+	if p.debugSrv != nil {
+		p.debugSrv.Stop(context.Background())
+	}
+
 	p.CloseBus()
 	p.Log.Infow("Pipeline bus closed")
 
@@ -200,12 +206,24 @@ func New(ctx context.Context, log logger.Logger, sipOpt SipOpt) (*Pipeline, erro
 		ctx:      ctx,
 		cancel:   cancel,
 		dtmfCh:   make(chan int, 10),
+		dumpCH:   make(chan bool, 1024),
 	}
 	p.cleanup = p.cleanupChains
 
 	p.Log.Debugw("Setting up bus")
 	p.SetupBus()
 	p.Log.Debugw("Bus set up complete")
+
+	p.debugSrv = debug.NewServer(":8888", p.dumpCH)
+	if err := p.debugSrv.Start(); err != nil {
+		p.Log.Warnw("Failed to start debug server", err)
+	}
+	p.pipeline.Connect("deep-element-added", func(_ any, _ any, child *gst.Element) {
+		p.debugSrv.OnElementAdded(child)
+	})
+	p.pipeline.Connect("deep-element-removed", func(_ any, _ any, child *gst.Element) {
+		p.debugSrv.OnElementRemoved(child)
+	})
 
 	p.Log.Debugw("Adding SIP IO chain")
 	p.SipIo, err = AddChain(p, NewSipInput(log, p, sipOpt))
