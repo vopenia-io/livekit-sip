@@ -12,66 +12,8 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
-func (e *LivekitBin) OnRtpBinPadAdded(pad *gst.Pad) {
-	self := gst.ToGstBin(e.self.Get())
-	if self == nil || self.Instance() == nil {
-		return
-	}
-
-	pname := pad.GetName()
-	if strings.Contains(pname, "_sink_") {
-		return
-	}
-
-	handles := []struct {
-		prefix  string
-		handler func(self *gst.Bin, pad *gst.Pad, pname string)
-	}{
-		{"send_rtp_src_", e.PublishTrack},
-		{"recv_rtp_src_", e.ForwardSubscribeTrack},
-	}
-
-	for _, h := range handles {
-		if strings.HasPrefix(pname, h.prefix) {
-			h.handler(self, pad, pname)
-			return
-		}
-	}
-}
-
-func (e *LivekitBin) OnRtpBinPadRemoved(pad *gst.Pad) {
-	self := gst.ToGstBin(e.self.Get())
-	if self == nil || self.Instance() == nil {
-		return
-	}
-	pname := pad.GetName()
-	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Pad removed: %s", pname))
-	for _, prefix := range []string{"send_rtp_src_", "recv_rtp_src_"} {
-		if strings.HasPrefix(pname, prefix) {
-			e.GhostPadRemove(self, pad)
-			return
-		}
-	}
-}
-
-func (e *LivekitBin) GhostPadRemove(self *gst.Bin, pad *gst.Pad) {
-	pname := pad.GetName()
-	gpad := self.GetStaticPad(pname)
-	if gpad == nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("No ghost pad found for removed pad %s", pname))
-		return
-	}
-
-	if !gpad.SetActive(false) {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to deactivate ghost pad %s for removal", pname))
-	}
-
-	if !self.RemovePad(gpad) {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove ghost pad %s for removal", pname))
-		return
-	}
-	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Removed ghost pad %s", pname))
-}
+const QDataPadPeerRef = "livekitbin-pad-peer-ref"
+const QDataSessionID = "livekitbin-session-id"
 
 func (e *LivekitBin) PublishTrack(self *gst.Bin, pad *gst.Pad, pname string) {
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Publishing track with pad name: %s", pname))
@@ -127,6 +69,8 @@ func (e *LivekitBin) PublishTrack(self *gst.Bin, pad *gst.Pad, pname string) {
 		return
 	}
 
+	pad.SetQData(QDataSessionID, session)
+
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Added sink track for pad name: %s", pname))
 
 	e.wg.Add(1)
@@ -138,11 +82,13 @@ func (e *LivekitBin) PublishTrack(self *gst.Bin, pad *gst.Pad, pname string) {
 			self.Error(fmt.Sprintf("Failed to get RTCP source pad for session: %d", session), fmt.Errorf("pad error"))
 			return
 		}
-		if ret := rtcpSrc.Link(e.RtcpFunnel.GetRequestPad("sink_%u")); ret != gst.PadLinkOK {
+		dstPad := e.RtcpFunnel.GetRequestPad(fmt.Sprintf("sink_%d", session))
+		if ret := rtcpSrc.Link(dstPad); ret != gst.PadLinkOK {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error linking RTCP source pad to RTCP funnel for session %d: %v", session, ret))
 			self.Error(fmt.Sprintf("Error linking RTCP source pad to RTCP funnel for session %d", session), fmt.Errorf("link error: %v", ret))
 			return
 		}
+
 		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Linked RTCP source pad to RTCP funnel for session: %d", session))
 	}()
 }
@@ -238,12 +184,22 @@ func (e *LivekitBin) ForwardPublishTrack(instance *gst.Element, templ *gst.PadTe
 }
 
 func (e *LivekitBin) SubscribeTrack(track *webrtc.TrackRemote, publication *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
-	// e.callbackMu.Lock()
-	// defer e.callbackMu.Unlock()
 	self := gst.ToGstBin(e.self.Get())
 	if self == nil || self.Instance() == nil {
 		return
 	}
+	if err := e.Wait(RoomStateJoined); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error waiting for room to be joined: %v", err))
+		self.Error(fmt.Sprintf("Error waiting for room to be joined: %v", err), err)
+		return
+	}
+
+	// if err := e.Wait(RoomStatePlaying); err != nil {
+	// 	self.Log(CAT, gst.LevelError, fmt.Sprintf("Error waiting for room to be playing: %v", err))
+	// 	self.Error(fmt.Sprintf("Error waiting for room to be playing: %v", err), err)
+	// 	return
+	// }
+
 	_, enc, ok := strings.Cut(track.Codec().MimeType, "/")
 	if !ok {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Invalid codec mime type for pt (%d): %s", track.PayloadType(), track.Codec().MimeType))
@@ -264,20 +220,24 @@ func (e *LivekitBin) SubscribeTrack(track *webrtc.TrackRemote, publication *lksd
 		}
 	}
 
+	if element, err := self.GetElementByName(tracks.SrcTrackName(publication.SID())); err == nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Track with SID %s already exists", publication.SID()))
+		if err := element.SetProperty("subscribed", true); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error setting subscribed property for track %s: %v", track.ID(), err))
+			self.Error(fmt.Sprintf("Error setting subscribed property for track %s", track.ID()), err)
+		}
+		return
+	}
+
 	element, err := tracks.NewSrcTrack(track, publication, rp)
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating source track for track %s: %v", track.ID(), err))
 		return
 	}
+	element.GetStaticPad("src").AddProbe(gst.PadProbeTypeEventDownstream, tracks.PadProbeDropEOS)
 	if err := self.Add(element); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error adding source track for track %s: %v", track.ID(), err))
 		self.Error(fmt.Sprintf("Error adding source track for track %s", track.ID()), err)
-		return
-	}
-
-	if !element.SyncStateWithParent() {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error syncing state with parent for track %s: %v", track.ID(), err))
-		self.Error(fmt.Sprintf("Error syncing state with parent for track %s", track.ID()), fmt.Errorf("sync error"))
 		return
 	}
 
@@ -297,21 +257,24 @@ func (e *LivekitBin) SubscribeTrack(track *webrtc.TrackRemote, publication *lksd
 		return
 	}
 
-	rtpSrc := element.GetStaticPad("src")
+	element.SetQData(QDataSessionID, int(publication.Source()))
 
-	if ret := rtpSrc.Link(rtpFunnel.GetRequestPad("sink_%u")); ret != gst.PadLinkOK {
+	if ret := element.GetStaticPad("src").Link(rtpFunnel.GetRequestPad(fmt.Sprintf("sink_%d", track.SSRC()))); ret != gst.PadLinkOK {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error linking source pad to sink funnel for track %s: %v", track.ID(), ret))
 		self.Error(fmt.Sprintf("Error linking source pad to sink funnel for track %s", track.ID()), fmt.Errorf("link error: %v", ret))
 		return
 	}
-
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Linked source pad to sink funnel for track ID: %s", track.ID()))
 
-	rtcpSrc := element.GetStaticPad("src_rtcp")
-
-	if ret := rtcpSrc.Link(rtcpFunnel.GetRequestPad("sink_%u")); ret != gst.PadLinkOK {
+	if ret := element.GetStaticPad("src_rtcp").Link(rtcpFunnel.GetRequestPad(fmt.Sprintf("sink_%d", track.SSRC()))); ret != gst.PadLinkOK {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error linking RTCP source pad to sink funnel for track %s: %v", track.ID(), ret))
 		self.Error(fmt.Sprintf("Error linking RTCP source pad to sink funnel for track %s", track.ID()), fmt.Errorf("link error: %v", ret))
+		return
+	}
+
+	if !element.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error syncing state with parent for track %s: %v", track.ID(), err))
+		self.Error(fmt.Sprintf("Error syncing state with parent for track %s", track.ID()), fmt.Errorf("sync error"))
 		return
 	}
 
@@ -337,6 +300,18 @@ func (e *LivekitBin) ForwardSubscribeTrack(self *gst.Bin, pad *gst.Pad, pname st
 		return
 	}
 
+	srcElem := e.TrackSourceFromSessionSSRC(uint(session), uint(ssrc))
+	if srcElem == nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to find track source element for pad name: %s", pname))
+		return
+	}
+	src, ok := gst.SubclassFromElement[*tracks.SrcTrack](srcElem)
+	if !ok {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to cast track source element to SrcTrack for pad name: %s", pname))
+		return
+	}
+	sid := src.Pub.SID()
+
 	class := gst.ToElementClass(self.Class())
 
 	gpname := fmt.Sprintf("recv_rtp_src_%d_%d_%d", session, ssrc, pt)
@@ -345,6 +320,22 @@ func (e *LivekitBin) ForwardSubscribeTrack(self *gst.Bin, pad *gst.Pad, pname st
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating ghost pad for pad name %s", pname))
 		return
 	}
+	gpad.SetQData(tracks.QDataSrcTrackSource, sid)
+
+	wpad := glib.WeakRefInit(gpad)
+	srcPad := srcElem.GetStaticPad("src")
+	srcPad.AddProbe(gst.PadProbeTypeEventDownstream, PadProbeForwardTrackSourceInfo(wpad))
+	srcPad.StickyEventsForEach(func(pad *gst.Pad, event *gst.Event) bool {
+		if event.Type() == gst.EventTypeCustomDownstreamSticky && event.HasName(tracks.EventTrackSourceInfo) {
+			dest := gst.ToPad(wpad.Get())
+			if dest != nil {
+				dest.PushEvent(event.Copy())
+			}
+			return false
+		}
+		return true
+	})
+
 	if !self.AddPad(gpad.Pad) {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error adding ghost pad for pad name %s", pname))
 		return
@@ -355,45 +346,4 @@ func (e *LivekitBin) ForwardSubscribeTrack(self *gst.Bin, pad *gst.Pad, pname st
 	}
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("new track with pad name: %s", pname))
-}
-
-func (e *LivekitBin) UnsubscribeTrack(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
-	// e.callbackMu.Lock()
-	// defer e.callbackMu.Unlock()
-	self := gst.ToGstBin(e.self.Get())
-	if self == nil || self.Instance() == nil {
-		return
-	}
-
-	src, err := self.GetElementByName(tracks.SinkTrackName(pub.SID()))
-	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting source element for track %s: %v", track.ID(), err))
-		return
-	}
-
-	rtpPad := src.GetStaticPad("src").GetPeer()
-	if rtpPad != nil {
-		rtpParent := rtpPad.GetParentElement()
-		if rtpParent != nil {
-			defer rtpParent.ReleaseRequestPad(rtpPad)
-		}
-	}
-
-	rtcpPad := src.GetStaticPad("src_rtcp").GetPeer()
-	if rtcpPad != nil {
-		rtcpParent := rtcpPad.GetParentElement()
-		if rtcpParent != nil {
-			defer rtcpParent.ReleaseRequestPad(rtcpPad)
-		}
-	}
-
-	if err := src.SetState(gst.StateNull); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error setting source element to NULL for track %s: %v", track.ID(), err))
-		return
-	}
-
-	if err := self.Remove(src); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error removing source element for track %s: %v", track.ID(), err))
-		return
-	}
 }

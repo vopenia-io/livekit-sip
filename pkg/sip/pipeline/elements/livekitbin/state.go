@@ -2,6 +2,7 @@ package livekitbin
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -12,22 +13,35 @@ const (
 	RoomStateNone    RoomState = 0
 	RoomStateJoined  RoomState = 2
 	RoomStateJoining RoomState = 4
-	RoomStateClosed  RoomState = 8
+	RoomStatePlaying RoomState = 8
+	RoomStateClosed  RoomState = 16
 )
 
 func (s RoomState) String() string {
-	switch s {
-	case RoomStateNone:
+	states := []string{}
+
+	if s == 0 {
 		return "none"
-	case RoomStateJoined:
-		return "joined"
-	case RoomStateJoining:
-		return "joining"
-	case RoomStateClosed:
-		return "closed"
-	default:
-		return fmt.Sprintf("unknown(%d)", s)
 	}
+
+	if s&RoomStateJoined != 0 {
+		states = append(states, "joined")
+	}
+	if s&RoomStateJoining != 0 {
+		states = append(states, "joining")
+	}
+	if s&RoomStatePlaying != 0 {
+		states = append(states, "playing")
+	}
+	if s&RoomStateClosed != 0 {
+		states = append(states, "closed")
+	}
+
+	if len(states) == 0 {
+		return "unknown"
+	}
+
+	return strings.Join(states, "|")
 }
 
 type state struct {
@@ -42,23 +56,28 @@ func (s *state) Is(state RoomState) bool {
 }
 
 func (s *state) Set(state RoomState) RoomState {
+	s.mu.Lock()
 	old := s.state.Or(int64(state))
+	s.mu.Unlock()
 	s.cond.Broadcast()
 	return RoomState(old)
 }
 
 func (s *state) Unset(state RoomState) RoomState {
+	s.mu.Lock()
 	old := s.state.And(^int64(state))
+	s.mu.Unlock()
 	s.cond.Broadcast()
 	return RoomState(old)
 }
 
 func (s *state) Wait(state RoomState) error {
-	var current int64
-	for current = s.state.Load(); (current&int64(state)) == 0 && (current&int64(RoomStateClosed)) == 0; current = s.state.Load() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for (s.state.Load()&int64(state)) == 0 && (s.state.Load()&int64(RoomStateClosed)) == 0 {
 		s.cond.Wait()
 	}
-	if (current & int64(state)) != 0 {
+	if (s.state.Load() & int64(state)) != 0 {
 		return nil
 	}
 	return fmt.Errorf("room closed while waiting for state %d", state)

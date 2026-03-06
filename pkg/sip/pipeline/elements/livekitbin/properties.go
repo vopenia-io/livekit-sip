@@ -58,6 +58,15 @@ var properties = []*glib.ParamSpec{
 		gst.TypeStructure,
 		glib.ParameterReadable|glib.ParameterWritable,
 	),
+	glib.NewUintParam(
+		"max-active-participants",
+		"Max Active Participants",
+		"Maximum number of active participants. If more participants are in the room, participant tracks will be enabled/disabled based on active speaker detection. Set to 0 for unlimited active participants.",
+		0,
+		uint(MAX_ACTIVE_PARTICIPANTS),
+		0,
+		glib.ParameterReadable|glib.ParameterWritable,
+	),
 }
 
 func stringPropSetter(dst *string) func(self *gst.Bin, param *glib.ParamSpec, value *glib.Value) {
@@ -136,7 +145,18 @@ func (e *LivekitBin) SetProperty(instance *glib.Object, id uint, value *glib.Val
 		} else {
 			e.room.LocalParticipant.SetAttributes(participantAttributes)
 		}
-
+	case "max-active-participants":
+		gv, err := value.GoValue()
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting max-active-participants property value: %v", err))
+			return
+		}
+		val, ok := gv.(uint)
+		if !ok {
+			self.Log(CAT, gst.LevelError, "Invalid type for max-active-participants property")
+			return
+		}
+		e.maxActiveParticipants = val
 	default:
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown property %s", param.Name()))
 	}
@@ -182,6 +202,13 @@ func (e *LivekitBin) GetProperty(instance *glib.Object, id uint) *glib.Value {
 		value, err := glib.GValue(structure)
 		if err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting participant-attributes property value: %v", err))
+			return nil
+		}
+		return value
+	case "max-active-participants":
+		value, err := glib.GValue(e.maxActiveParticipants)
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting max-active-participants property value: %v", err))
 			return nil
 		}
 		return value

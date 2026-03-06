@@ -3,6 +3,9 @@ package tracks
 import (
 	"errors"
 	"fmt"
+	"runtime"
+	"time"
+	"weak"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
@@ -11,12 +14,27 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
-func SinkTrackName(sid string) string {
-	return "livekitbin_sinktrack_" + sid
+const (
+	QDataSrcTrackSource = "livekitbin_srctrack-element-source"
+	SrcTrackNamePrefix  = "livekitbin_srctrack_"
+)
+
+var srcTrackProperties = []*glib.ParamSpec{
+	glib.NewBoolParam(
+		"enabled",
+		"Enabled",
+		"Whether the track is enabled",
+		false,
+		glib.ParameterReadable|glib.ParameterWritable,
+	),
+}
+
+func SrcTrackName(sid string) string {
+	return SrcTrackNamePrefix + sid
 }
 
 func NewSrcTrack(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) (*gst.Element, error) {
-	element, err := gst.NewElementWithName("livekitbin_srctrack", SinkTrackName(pub.SID()))
+	element, err := gst.NewElementWithName("livekitbin_srctrack", SrcTrackName(pub.SID()))
 	if err != nil {
 		return nil, err
 	}
@@ -28,6 +46,8 @@ func NewSrcTrack(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, r
 	src.Pub = pub
 	src.Rp = rp
 
+	src.SSRC = uint32(track.SSRC())
+
 	return element, nil
 }
 
@@ -36,7 +56,10 @@ type SrcTrack struct {
 	Pub   *lksdk.RemoteTrackPublication
 	Rp    *lksdk.RemoteParticipant
 
-	src *gst.Element
+	SSRC uint32
+
+	src   *gst.Element
+	Queue *gst.Element
 }
 
 func (*SrcTrack) New() glib.GoObjectSubclass {
@@ -52,7 +75,13 @@ func (*SrcTrack) ClassInit(klass *glib.ObjectClass) {
 		"Maxime SENARD <senard.maxime@gmail.com>",
 	)
 
-	CAT.Log(gst.LevelDebug, "Adding pad template")
+	gst.SignalNew(
+		class.Type(),
+		"send-info",
+		gst.SignalRunLast,
+		glib.TYPE_NONE,
+	)
+
 	class.AddPadTemplate(gst.NewPadTemplate(
 		"src",
 		gst.PadDirectionSource,
@@ -64,6 +93,8 @@ func (*SrcTrack) ClassInit(klass *glib.ObjectClass) {
 		gst.PadDirectionSource,
 		gst.PadPresenceAlways,
 		gst.NewCapsFromString("application/x-rtcp")))
+
+	class.InstallProperties(srcTrackProperties)
 }
 
 func (s *SrcTrack) InstanceInit(instance *glib.Object) {
@@ -78,19 +109,49 @@ func (s *SrcTrack) InstanceInit(instance *glib.Object) {
 		return
 	}
 
-	if err := self.Add(s.src); err != nil {
+	s.Queue, err = gst.NewElement("queue")
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating queue element: %v", err))
+		self.Error("Error creating queue element", err)
+		return
+	}
+
+	if err := self.AddMany(s.src, s.Queue); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error adding srctrack_rtp: %v", err))
 		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error adding srctrack_rtp", err.Error())
 		return
 	}
 
-	gsrcPad := gst.NewGhostPadFromTemplate("src", s.src.GetStaticPad("src"), class.GetPadTemplate("src"))
+	if ret := s.src.GetStaticPad("src").Link(s.Queue.GetStaticPad("sink")); ret != gst.PadLinkOK {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error linking srctrack_rtp to queue: %v", ret))
+		self.Error("Error linking srctrack_rtp to queue", errors.New("failed to link srctrack_rtp to queue"))
+		return
+	}
+
+	gsrcPad := gst.NewGhostPadFromTemplate("src", s.Queue.GetStaticPad("src"), class.GetPadTemplate("src"))
 	self.AddPad(gsrcPad.Pad)
 
 	// rtcp
 	rtcpPad := gst.NewPadFromTemplate(class.GetPadTemplate("src_rtcp"), "src_rtcp")
 	rtcpPad.UseFixedCaps()
 	self.AddPad(rtcpPad)
+
+	sweak := weak.Make(s)
+	if _, err := self.Connect("send-info", func(self *gst.Element) {
+		ptr := sweak.Value()
+		if ptr == nil {
+			CAT.Log(gst.LevelError, "SrcTrack instance is nil in send-info signal callback")
+			return
+		}
+		if err := ptr.SendSourceInfo(); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error sending source info: %v", err))
+			self.Error("Error sending source info", err)
+		}
+	}); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error connecting to send-info signal: %v", err))
+		self.Error("Error connecting to send-info signal", err)
+		return
+	}
 }
 
 func (s *SrcTrack) open(self *gst.Bin) gst.StateChangeReturn {
@@ -157,28 +218,37 @@ func (s *SrcTrack) stop(self *gst.Bin) gst.StateChangeReturn {
 
 	s.Pub.OnRTCP(nil)
 
-	rtcpPad := self.GetStaticPad("src_rtcp")
-	if rtcpPad == nil {
-		self.Log(CAT, gst.LevelWarning, "Failed to get src_rtcp pad while stopping SrcTrack element")
-		return gst.StateChangeSuccess
+	done := make(chan struct{})
+	go func() {
+		s.SendRtcpBye(self)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(1 * time.Second):
+		self.Log(CAT, gst.LevelWarning, "Timeout waiting for SendRtcpBye to complete")
 	}
 
-	if err := s.src.SetState(gst.StateReady); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set src element to READY: %v", err))
-		self.Error("Failed to set src element to READY", err)
-		return gst.StateChangeFailure
-	}
-
-	s.onRtcp(self, rtcpPad)(&rtcp.Goodbye{
-		Sources: []uint32{uint32(s.Track.SSRC())},
-	})
+	self.Log(CAT, gst.LevelInfo, "Stopped SrcTrack element and sent RTCP BYE")
 
 	return gst.StateChangeSuccess
 }
 
+func (s *SrcTrack) SendRtcpBye(self *gst.Bin) {
+	rtcpPad := self.GetStaticPad("src_rtcp")
+	if rtcpPad == nil {
+		self.Log(CAT, gst.LevelWarning, "Failed to get src_rtcp pad while sending RTCP BYE in SrcTrack element")
+		return
+	}
+	s.pushRtcp(self, rtcpPad, &rtcp.Goodbye{
+		Sources: []uint32{uint32(s.Track.SSRC())},
+	})
+}
+
 func (s *SrcTrack) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
 	self := gst.ToGstBin(instance)
-	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("ChangeState: %v", transition))
+	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("SrcTrack %s state change: %s", s.Pub.SID(), transition.String()))
+	defer self.Log(CAT, gst.LevelDebug, fmt.Sprintf("SrcTrack %s state change completed: %s", s.Pub.SID(), transition.String()))
 
 	switch transition {
 	case gst.StateChangeNullToReady:
@@ -190,9 +260,7 @@ func (s *SrcTrack) ChangeState(instance *gst.Element, transition gst.StateChange
 			return ret
 		}
 	case gst.StateChangePlayingToPaused:
-		if ret := s.stop(self); ret != gst.StateChangeSuccess {
-			return ret
-		}
+		s.stop(self)
 	}
 
 	ret := self.ParentChangeState(transition)
@@ -266,8 +334,32 @@ func filterSSRC(pkt rtcp.Packet, ssrc uint32) rtcp.Packet {
 	return nil
 }
 
+func (s *SrcTrack) pushRtcp(self *gst.Bin, rtcpPad *gst.Pad, pkt rtcp.Packet) {
+	raw, err := pkt.Marshal()
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to marshal RTCP packet: %v", err))
+		self.Error("Failed to marshal RTCP packet", err)
+		return
+	}
+
+	buf := gst.NewBufferFromBytes(raw)
+	if ret := rtcpPad.Push(buf); ret != gst.FlowOK {
+		if ret == gst.FlowNotLinked {
+			self.Log(CAT, gst.LevelDebug, "RTCP pad is not linked, dropping RTCP packet")
+			return
+		}
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to push RTCP buffer: %v", ret))
+	}
+	// self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Pushed RTCP packet of size %d: %+v", len(raw), filtered))
+}
+
 func (s *SrcTrack) onRtcp(self *gst.Bin, rtcpPad *gst.Pad) func(p rtcp.Packet) {
 	return func(p rtcp.Packet) {
+
+		if _, ok := p.(*rtcp.Goodbye); ok {
+			return
+		}
+
 		filtered := filterSSRC(p, uint32(s.Track.SSRC()))
 		if filtered == nil {
 			return
@@ -275,22 +367,57 @@ func (s *SrcTrack) onRtcp(self *gst.Bin, rtcpPad *gst.Pad) func(p rtcp.Packet) {
 
 		self.Log(CAT, gst.LevelTrace, fmt.Sprintf("Pushing RTCP packet: %T", filtered))
 
-		raw, err := filtered.Marshal()
+		s.pushRtcp(self, rtcpPad, filtered)
+	}
+}
+
+func (s *SrcTrack) SendSourceInfo() error {
+	structure := NewTrackSourceInfo(s.Rp, s.Pub).Structure()
+	if structure == nil {
+		return fmt.Errorf("failed to create structure for track source info")
+	}
+	runtime.SetFinalizer(structure, nil)
+	evt := gst.NewCustomEvent(gst.EventTypeCustomDownstreamSticky, structure)
+	s.src.GetStaticPad("src").PushEvent(evt)
+	return nil
+}
+
+func (s *SrcTrack) GetProperty(instance *glib.Object, id uint) *glib.Value {
+	self := gst.ToGstBin(instance)
+	param := srcTrackProperties[id]
+	switch param.Name() {
+	case "enabled":
+		enabled := s.Pub.IsEnabled()
+		val, err := glib.GValue(enabled)
 		if err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to marshal RTCP packet: %v", err))
-			self.Error("Failed to marshal RTCP packet", err)
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting enabled property value: %v", err))
+			return nil
+		}
+		return val
+	default:
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown property %s", param.Name()))
+		return nil
+	}
+}
+
+func (s *SrcTrack) SetProperty(instance *glib.Object, id uint, value *glib.Value) {
+	self := gst.ToGstBin(instance)
+	param := srcTrackProperties[id]
+	switch param.Name() {
+	case "enabled":
+		enabledVal, err := value.GoValue()
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting bool value for enabled property: %v", err))
 			return
 		}
-
-		buf := gst.NewBufferFromBytes(raw)
-		if ret := rtcpPad.Push(buf); ret != gst.FlowOK {
-			if ret == gst.FlowNotLinked {
-				self.Log(CAT, gst.LevelDebug, "RTCP pad is not linked, dropping RTCP packet")
-				return
-			}
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to push RTCP buffer: %v", ret))
-			self.Error("Failed to push RTCP buffer", errors.New("push buffer failed"))
+		enabled, ok := enabledVal.(bool)
+		if !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error converting enabled property value to bool: %v", enabledVal))
+			return
 		}
-		// self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Pushed RTCP packet of size %d: %+v", len(raw), filtered))
+		s.Pub.SetEnabled(enabled)
+
+	default:
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown property %s", param.Name()))
 	}
 }

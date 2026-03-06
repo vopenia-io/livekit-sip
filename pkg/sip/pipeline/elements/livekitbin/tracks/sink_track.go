@@ -40,8 +40,12 @@ func (t TrackCfg) Label() string {
 	return livekit.TrackSource(t).String()
 }
 
+func SinkTrackName(session int) string {
+	return fmt.Sprintf("livekitbin_sinktrack_%d", session)
+}
+
 func NewSinkTrack(participant *lksdk.LocalParticipant, kind livekit.TrackSource) (*gst.Element, *SinkTrack, error) {
-	element, err := gst.NewElement("livekitbin_sinktrack")
+	element, err := gst.NewElementWithName("livekitbin_sinktrack", SinkTrackName(int(kind)))
 	if err != nil {
 		return nil, nil, err
 	}
