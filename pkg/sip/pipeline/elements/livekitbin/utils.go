@@ -19,6 +19,7 @@ func PadProbeForwardTrackSourceInfo(wpad *glib.WeakRef) func(pad *gst.Pad, info 
 		if event.Type() == gst.EventTypeCustomDownstreamSticky && event.HasName(tracks.EventTrackSourceInfo) {
 			dest := gst.ToPad(wpad.Get())
 			if dest != nil {
+				CAT.Log(gst.LevelInfo, fmt.Sprintf("Forwarding track source info event for pad %s", pad.GetName()))
 				dest.PushEvent(event.Copy())
 			}
 			return gst.PadProbePass

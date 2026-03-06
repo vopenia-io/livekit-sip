@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"weak"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin/tracks"
 )
 
 type IoManagerLivekit struct {
@@ -28,6 +30,14 @@ func (e *IoManagerLivekit) ClassInit(klass *glib.ObjectClass) {
 		"Maxime SENARD <senard.maxime@gmail.com>",
 	)
 
+	gst.SignalNew(
+		class.Type(),
+		"active-speakers-changed",
+		gst.SignalRunLast,
+		glib.TYPE_NONE,
+		gst.TypeStructure, // TrackSourceInfo
+	)
+
 	class.AddPadTemplate(gst.NewPadTemplate(
 		"recv_rtp_sink_%u_%u_%u",
 		gst.PadDirectionSink,
@@ -41,6 +51,63 @@ func (e *IoManagerLivekit) ClassInit(klass *glib.ObjectClass) {
 		gst.PadPresenceSometimes,
 		gst.NewCapsFromString("application/x-rtp"),
 	))
+}
+
+func (e *IoManagerLivekit) InstanceInit(instance *glib.Object) {
+	self := gst.ToGstBin(instance)
+	eweak := weak.Make(e)
+	if _, err := self.Connect("active-speakers-changed", func(instance *gst.Element, structure *gst.Structure) {
+		ptr := eweak.Value()
+		if ptr != nil {
+			ptr.onActiveSpeakersChanged(instance, structure)
+		}
+	}); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to connect to active-speakers-changed signal: %v", err))
+		self.Error("Failed to connect to active-speakers-changed signal", err)
+		return
+	}
+}
+
+func (e *IoManagerLivekit) onActiveSpeakersChanged(instance *gst.Element, structure *gst.Structure) {
+	self := gst.ToGstBin(instance)
+
+	if e.Camera == nil {
+		self.Log(CAT, gst.LevelWarning, "Camera element not set up yet, skipping active speaker change handling")
+		return
+	}
+
+	info, err := tracks.ActiveSpeakerChangeInfoFromStructure(structure)
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to parse active speaker change info from structure: %v", err))
+		self.Error("Failed to parse active speaker change info from structure", err)
+		return
+	}
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Active speakers changed: %v", info))
+
+	pads, err := e.Camera.GetSinkPads()
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get camera sink pads: %v", err))
+		self.Error("Failed to get camera sink pads", err)
+		return
+	}
+
+	for _, sid := range info.ParticipantsSID {
+		for _, pad := range pads {
+			padInfo, err := tracks.PadGetTrackSourceInfo(pad)
+			if err != nil {
+				self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get track source info for pad %s: %v", pad.GetName(), err))
+				continue
+			}
+			if padInfo.ParticipantSID == sid {
+				self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Setting active pad to %s for participant %s", pad.GetName(), sid))
+				if err := e.Camera.SetProperty("active-pad", pad); err != nil {
+					self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set active pad to %s: %v", pad.GetName(), err))
+				}
+				return
+			}
+		}
+	}
+	self.Log(CAT, gst.LevelInfo, "No active speaker pad found, setting active pad to nil")
 }
 
 func (e *IoManagerLivekit) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {

@@ -22,8 +22,8 @@ type TrackSourceInfo struct {
 	Source          livekit.TrackSource
 	Kind            lksdk.TrackKind
 	MimeType        string
-	SSRC            uint32
-	PT              uint8
+	SSRC            uint
+	PT              uint
 }
 
 func NewTrackSourceInfo(participant *lksdk.RemoteParticipant, publication *lksdk.RemoteTrackPublication) TrackSourceInfo {
@@ -35,8 +35,8 @@ func NewTrackSourceInfo(participant *lksdk.RemoteParticipant, publication *lksdk
 		Source:          publication.Source(),
 		Kind:            publication.Kind(),
 		MimeType:        track.Codec().MimeType,
-		SSRC:            uint32(track.SSRC()),
-		PT:              uint8(track.PayloadType()),
+		SSRC:            uint(track.SSRC()),
+		PT:              uint(track.PayloadType()),
 	}
 }
 
@@ -117,18 +117,18 @@ func TrackSourceInfoFromStructure(s *gst.Structure) (TrackSourceInfo, error) {
 	if err != nil {
 		return TrackSourceInfo{}, err
 	}
-	ssrc, ok := ssrcVal.(uint32)
+	ssrc, ok := ssrcVal.(uint)
 	if !ok {
-		return TrackSourceInfo{}, fmt.Errorf("invalid ssrc value: expected uint32, got %T", ssrcVal)
+		return TrackSourceInfo{}, fmt.Errorf("invalid ssrc value: expected uint, got %T", ssrcVal)
 	}
 	sourceInfo.SSRC = ssrc
 	ptVal, err := s.GetValue("pt")
 	if err != nil {
 		return TrackSourceInfo{}, err
 	}
-	pt, ok := ptVal.(uint8)
+	pt, ok := ptVal.(uint)
 	if !ok {
-		return TrackSourceInfo{}, fmt.Errorf("invalid pt value: expected uint8, got %T", ptVal)
+		return TrackSourceInfo{}, fmt.Errorf("invalid pt value: expected uint, got %T", ptVal)
 	}
 	sourceInfo.PT = pt
 
@@ -151,7 +151,6 @@ func PadGetTrackSourceInfo(pad *gst.Pad) (TrackSourceInfo, error) {
 		return TrackSourceInfo{}, fmt.Errorf("no event found")
 	}
 	return TrackSourceInfoFromStructure(event.GetStructure())
-
 }
 
 type ActiveSpeakerChangeInfo struct {

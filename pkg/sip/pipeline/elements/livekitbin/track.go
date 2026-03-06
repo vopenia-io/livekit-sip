@@ -322,10 +322,11 @@ func (e *LivekitBin) ForwardSubscribeTrack(self *gst.Bin, pad *gst.Pad, pname st
 	}
 	gpad.SetQData(tracks.QDataSrcTrackSource, sid)
 
-	wpad := glib.WeakRefInit(gpad)
 	srcPad := srcElem.GetStaticPad("src")
+
+	wpad := glib.WeakRefInit(pad)
 	srcPad.AddProbe(gst.PadProbeTypeEventDownstream, PadProbeForwardTrackSourceInfo(wpad))
-	srcPad.StickyEventsForEach(func(pad *gst.Pad, event *gst.Event) bool {
+	srcPad.StickyEventsForEach(func(_ *gst.Pad, event *gst.Event) bool {
 		if event.Type() == gst.EventTypeCustomDownstreamSticky && event.HasName(tracks.EventTrackSourceInfo) {
 			dest := gst.ToPad(wpad.Get())
 			if dest != nil {

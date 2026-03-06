@@ -61,30 +61,30 @@ function render() {
     div.className = 'pad' + (p.active ? ' active' : '');
     div.innerHTML = '<span class="pad-name">' + esc(p.name) + '</span>' +
       '<span class="pad-status">' + (p.active ? 'active' : 'inactive') + '</span>' +
-      '<button class="pad-btn" onclick="event.stopPropagation(); switchPad(\'' + esc(p.name) + '\')">switch</button>' +
+      // '<button class="pad-btn" onclick="event.stopPropagation(); switchPad(\'' + esc(p.name) + '\')">switch</button>' +
       '<button class="pad-btn force" onclick="event.stopPropagation(); forceSwitchPad(\'' + esc(p.name) + '\')">force</button>';
     container.appendChild(div);
   }
 }
 
-async function switchPad(name) {
-  try {
-    const resp = await fetch('api/switch', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pad: name }),
-    });
-    if (!resp.ok) {
-      const text = await resp.text();
-      setStatus('Error: ' + text, true);
-      return;
-    }
-    setStatus('Switched to ' + name + ' (via event)', false);
-    setTimeout(refresh, 300);
-  } catch (e) {
-    setStatus('Error: ' + e.message, true);
-  }
-}
+// async function switchPad(name) {
+//   try {
+//     const resp = await fetch('api/switch', {
+//       method: 'POST',
+//       headers: { 'Content-Type': 'application/json' },
+//       body: JSON.stringify({ pad: name }),
+//     });
+//     if (!resp.ok) {
+//       const text = await resp.text();
+//       setStatus('Error: ' + text, true);
+//       return;
+//     }
+//     setStatus('Switched to ' + name + ' (via event)', false);
+//     setTimeout(refresh, 300);
+//   } catch (e) {
+//     setStatus('Error: ' + e.message, true);
+//   }
+// }
 
 async function forceSwitchPad(name) {
   try {

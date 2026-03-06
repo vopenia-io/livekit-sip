@@ -22,7 +22,14 @@ var properties = []*glib.ParamSpec{
 		0,
 		127,
 		96,
-		glib.ParameterWritable,
+		glib.ParameterWritable|glib.ParameterReadable,
+	),
+	glib.NewObjectParam(
+		"active-pad",
+		"Active Pad",
+		"The currently active pad",
+		gst.TypePad,
+		glib.ParameterReadable|glib.ParameterWritable,
 	),
 }
 
@@ -204,7 +211,104 @@ func (e *Vp8H264Select) SetProperty(instance *glib.Object, id uint, value *glib.
 		if err := e.RtpH264Pay.SetProperty("pt", val); err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set H264 PT: %v", err))
 		}
+	case "active-pad":
+		gv, _ := value.GoValue()
+		pad, ok := gv.(*gst.Pad)
+		if !ok {
+			self.Log(CAT, gst.LevelError, "Invalid active-pad value")
+			return
+		}
+		e.SwitchActivePad(self, pad)
+	default:
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unknown property ID: %d", id))
 	}
+}
+
+func (e *Vp8H264Select) GetProperty(instance *glib.Object, id uint) *glib.Value {
+	self := gst.ToGstBin(instance)
+	param := properties[id]
+	switch param.Name() {
+	case "h264-pt":
+		val, err := e.RtpH264Pay.GetProperty("pt")
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get H264 PT: %v", err))
+			return nil
+		}
+		pt, ok := val.(uint)
+		if !ok {
+			self.Log(CAT, gst.LevelError, "Invalid type for H264 PT")
+			return nil
+		}
+		gv, err := glib.GValue(pt)
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create GValue for H264 PT: %v", err))
+			return nil
+		}
+		return gv
+	case "active-pad":
+		e.mu.Lock()
+		defer e.mu.Unlock()
+
+		activeVal, err := e.InputSelector.GetProperty("active-pad")
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get active pad: %v", err))
+			return nil
+		}
+		activePad, ok := activeVal.(*gst.Pad)
+		if !ok {
+			self.Log(CAT, gst.LevelError, "Invalid type for active pad")
+			return nil
+		}
+
+		if _, ok := e.Branches[activePad.GetName()]; !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Active pad %s not found in branches", activePad.GetName()))
+			return nil
+		}
+
+		pad := self.GetStaticPad(activePad.GetName())
+		if pad == nil {
+			self.Log(CAT, gst.LevelError, "Active pad not found in bin")
+			return nil
+		}
+		gv, err := glib.GValue(pad)
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create GValue for active pad: %v", err))
+			return nil
+		}
+		return gv
+	default:
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unknown property ID: %d", id))
+		return nil
+	}
+}
+
+func (e *Vp8H264Select) SwitchActivePad(self *gst.Bin, pad *gst.Pad) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if pad == nil {
+		self.Log(CAT, gst.LevelWarning, "Setting active pad to nil, no stream will be selected")
+		return
+	}
+
+	_, ok := e.Branches[pad.GetName()]
+	if !ok {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Pad not found in branches: %s", pad.GetName()))
+		return
+	}
+
+	sink := e.InputSelector.GetStaticPad(pad.GetName())
+	if sink == nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get sink pad for branch: %s", pad.GetName()))
+		return
+	}
+
+	if err := e.InputSelector.SetProperty("active-pad", sink); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set active pad: %v", err))
+		return
+	}
+
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Switched active pad to: %s", pad.GetName()))
 }
 
 func (e *Vp8H264Select) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
@@ -245,15 +349,6 @@ func (e *Vp8H264Select) RequestNewPad(instance *gst.Element, templ *gst.PadTempl
 		self.Log(CAT, gst.LevelError, "Failed to get request pad")
 		return nil
 	}
-	// sink.SetQData(QDataPadSwitching, false)
-
-	// eweak := weak.Make(e)
-	// sink.AddProbe(gst.PadProbeTypeEventDownstream, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
-	// 	if ptr := eweak.Value(); ptr != nil {
-	// 		return ptr.OnSelectorEvent(pad, info)
-	// 	}
-	// 	return gst.PadProbeRemove
-	// })
 
 	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Creating new branch for pad: %s", sink.GetName()))
 
@@ -296,13 +391,6 @@ func (e *Vp8H264Select) RequestNewPad(instance *gst.Element, templ *gst.PadTempl
 		return nil
 	}
 
-	for _, elem := range []*gst.Element{depay, vp8dec, videoconvert, queue} {
-		if !elem.SyncStateWithParent() {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to sync element %s state with parent", elem.GetName()))
-			return nil
-		}
-	}
-
 	class := gst.ToElementClass(self.Class())
 	gpad := gst.NewGhostPadFromTemplate(sink.GetName(), depay.GetStaticPad("sink"), class.GetPadTemplate("sink_%u"))
 	if gpad == nil {
@@ -325,6 +413,13 @@ func (e *Vp8H264Select) RequestNewPad(instance *gst.Element, templ *gst.PadTempl
 		Vp8Dec:       vp8dec,
 		VideoConvert: videoconvert,
 		Queue:        queue,
+	}
+
+	for _, elem := range []*gst.Element{depay, vp8dec, videoconvert, queue} {
+		if !elem.SyncStateWithParent() {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to sync element %s state with parent", elem.GetName()))
+			return nil
+		}
 	}
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Added new pad: %s", gpad.GetName()))

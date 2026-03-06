@@ -6,7 +6,6 @@ import (
 	_ "embed"
 	"encoding/json"
 	"net/http"
-	"runtime"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
@@ -69,44 +68,44 @@ func newDebugHandler(e *Vp8H264Select) http.Handler {
 		json.NewEncoder(w).Encode(pads)
 	})
 
-	mux.HandleFunc("POST /api/switch", func(w http.ResponseWriter, r *http.Request) {
-		var req switchRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
-			return
-		}
+	// mux.HandleFunc("POST /api/switch", func(w http.ResponseWriter, r *http.Request) {
+	// 	var req switchRequest
+	// 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// 		http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
+	// 		return
+	// 	}
 
-		e.mu.Lock()
-		branch, ok := e.Branches[req.Pad]
-		e.mu.Unlock()
+	// 	e.mu.Lock()
+	// 	branch, ok := e.Branches[req.Pad]
+	// 	e.mu.Unlock()
 
-		if !ok {
-			http.Error(w, "pad not found: "+req.Pad, http.StatusNotFound)
-			return
-		}
+	// 	if !ok {
+	// 		http.Error(w, "pad not found: "+req.Pad, http.StatusNotFound)
+	// 		return
+	// 	}
 
-		srcPad := branch.VideoConvert.GetStaticPad("src")
-		if srcPad == nil {
-			http.Error(w, "failed to get src pad from branch videoconvert", http.StatusInternalServerError)
-			return
-		}
+	// 	srcPad := branch.VideoConvert.GetStaticPad("src")
+	// 	if srcPad == nil {
+	// 		http.Error(w, "failed to get src pad from branch videoconvert", http.StatusInternalServerError)
+	// 		return
+	// 	}
 
-		done := make(chan struct{})
-		defer close(done)
-		glib.IdleAdd(func() {
-			defer func() { done <- struct{}{} }()
-			structure := gst.NewStructure(SelectEventName)
-			runtime.SetFinalizer(structure, nil) // give ownership to the event
-			if !srcPad.PushEvent(gst.NewCustomEvent(gst.EventTypeCustomDownstream, structure)) {
-				http.Error(w, "failed to push switch event on pad "+req.Pad, http.StatusInternalServerError)
-				return
-			}
-		})
-		<-done
+	// 	done := make(chan struct{})
+	// 	defer close(done)
+	// 	glib.IdleAdd(func() {
+	// 		defer func() { done <- struct{}{} }()
+	// 		structure := gst.NewStructure(SelectEventName)
+	// 		runtime.SetFinalizer(structure, nil) // give ownership to the event
+	// 		if !srcPad.PushEvent(gst.NewCustomEvent(gst.EventTypeCustomDownstream, structure)) {
+	// 			http.Error(w, "failed to push switch event on pad "+req.Pad, http.StatusInternalServerError)
+	// 			return
+	// 		}
+	// 	})
+	// 	<-done
 
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-	})
+	// 	w.Header().Set("Content-Type", "application/json")
+	// 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	// })
 
 	mux.HandleFunc("POST /api/force-switch", func(w http.ResponseWriter, r *http.Request) {
 		var req switchRequest

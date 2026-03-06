@@ -10,7 +10,6 @@ import (
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/iomanager"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin/tracks"
 )
 
 func NewWebrtcIo(log logger.Logger, parent *Pipeline) *WebrtcIo {
@@ -64,12 +63,9 @@ func (wio *WebrtcIo) Create() error {
 	if _, err := wio.LivekitBin.Connect("active-speakers-changed", func(_ *gst.Element, structure *gst.Structure) {
 		ptr := wiow.Value()
 		if ptr != nil {
-			info, err := tracks.ActiveSpeakerChangeInfoFromStructure(structure)
-			if err != nil {
-				ptr.log.Errorw("Failed to parse active speaker change info from structure", err)
-				return
+			if _, err := ptr.pipeline.LkController.Emit("active-speakers-changed", structure); err != nil {
+				ptr.log.Errorw("Failed to emit active-speakers-changed signal from livekitbin to io manager", err)
 			}
-			ptr.log.Infow("Active speakers changed", "speakers", info)
 		}
 	}); err != nil {
 		return fmt.Errorf("failed to connect to livekitbin active-speakers-changed signal: %w", err)
