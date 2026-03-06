@@ -17,11 +17,8 @@ func (p *Pipeline) SetupBus() {
 	p.bus = p.Pipeline().GetPipelineBus()
 	p.Log.Debugw("Setting bus to non-flushing")
 	p.bus.SetFlushing(false)
-	// return
-
 	// p.bus.SetSyncHandler(BusFilter)
 
-	p.dumpCH = make(chan struct{}, 1024)
 	go p.DumpDot()
 
 	pweak := weak.Make(p)
@@ -63,9 +60,6 @@ func (p *Pipeline) onMessage(msg *gst.Message) bool {
 	case gst.MessageError:
 		gErr := msg.ParseError()
 		p.Log.Errorw("Pipeline error", gErr, "debug", gErr.DebugString())
-	// case gst.MessageStateChanged:
-	// 	oldState, newState := msg.ParseStateChanged()
-	// 	p.Log.Debugw("Pipeline state changed", "old", oldState.String(), "new", newState.String())
 	case gst.MessageLatency:
 		p.Log.Debugw("Pipeline latency changed")
 		if !p.Pipeline().RecalculateLatency() {
@@ -93,7 +87,7 @@ func (p *Pipeline) onMessage(msg *gst.Message) bool {
 			p.dtmfCh <- nb
 		}
 	case gst.MessageStateChanged:
-		p.dumpCH <- struct{}{}
+		p.dumpCH <- false
 	default:
 		p.Log.Debugw("Unhandled bus message", "type", msg.Type())
 	}

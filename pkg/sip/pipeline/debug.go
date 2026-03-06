@@ -32,7 +32,7 @@ func (p *Pipeline) DumpDot() {
 		dump = true
 	}
 
-	onTicker := func() {
+	dumpPipeline := func() {
 		mu.Lock()
 		defer mu.Unlock()
 		if dump {
@@ -41,10 +41,11 @@ func (p *Pipeline) DumpDot() {
 			count++
 			done := make(chan struct{})
 			glib.IdleAdd(func() {
-				p.Pipeline().DebugBinToDotFileWithTs(gst.DebugGraphShowAll, fmt.Sprintf("%s_pipeline_%d", p.Pipeline().GetName(), count))
+				p.Pipeline().DebugBinToDotFileWithTs(gst.DebugGraphShowAll, fmt.Sprintf("%s_pipeline_%d.dot", p.Pipeline().GetName(), count))
 				close(done)
 			})
 			<-done
+			p.Log.Infow("Pipeline state dumped to dot file")
 		}
 	}
 
@@ -53,10 +54,13 @@ func (p *Pipeline) DumpDot() {
 		case <-p.closed.Watch():
 			p.Log.Infow("Pipeline closed, exiting DumpDot loop")
 			return
-		case <-p.dumpCH:
+		case now := <-p.dumpCH:
 			onDumpCH()
+			if now {
+				dumpPipeline()
+			}
 		case <-ticker.C:
-			onTicker()
+			dumpPipeline()
 		}
 	}
 }
@@ -64,7 +68,7 @@ func (p *Pipeline) DumpDot() {
 func (p *Pipeline) Monitor() {
 	name := p.Pipeline().GetName()
 
-	dotFile, err := os.Create(fmt.Sprintf("%s_pipeline_live.dot", name))
+	dotFile, err := os.Create(fmt.Sprintf("%s_pipeline_live", name))
 	if err != nil {
 		fmt.Printf("failed to create pipeline live log file: %v\n", err)
 		return

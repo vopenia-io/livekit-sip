@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Track Subscriptions</title>
+<style>
+  body { font-family: monospace; margin: 20px; background: #1a1a1a; color: #e0e0e0; }
+  h1 { font-size: 16px; margin-bottom: 16px; }
+  .participant { border: 1px solid #444; padding: 10px; margin-bottom: 10px; }
+  .participant-header { font-weight: bold; margin-bottom: 6px; }
+  .participant-sid { color: #888; font-size: 12px; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #333; }
+  th { color: #aaa; font-size: 12px; }
+  td.muted { color: #f44; }
+  button { margin-top: 12px; padding: 6px 16px; cursor: pointer; background: #2a6; color: #fff; border: none; font-family: monospace; }
+  button:hover { background: #3b7; }
+  .status { margin-top: 8px; font-size: 12px; color: #888; }
+  .status.error { color: #f44; }
+</style>
+</head>
+<body>
+<h1>Track Subscriptions</h1>
+<div id="participants"></div>
+<button onclick="apply()">Apply</button>
+<div id="status" class="status"></div>
+
+<script>
+let data = [];
+
+async function refresh() {
+  try {
+    const resp = await fetch('api/participants');
+    data = await resp.json();
+    render();
+  } catch (e) {
+    setStatus('Fetch error: ' + e.message, true);
+  }
+}
+
+function render() {
+  const container = document.getElementById('participants');
+  container.innerHTML = '';
+  if (!data || data.length === 0) {
+    container.innerHTML = '<div style="color:#888">No remote participants</div>';
+    return;
+  }
+  for (const p of data) {
+    const div = document.createElement('div');
+    div.className = 'participant';
+    let html = '<div class="participant-header">' + esc(p.name || p.identity) +
+      ' <span class="participant-sid">' + esc(p.sid) + '</span></div>';
+    if (p.tracks && p.tracks.length > 0) {
+      html += '<table><tr><th>Sub</th><th>Track</th><th>Kind</th><th>Source</th><th>Mime</th><th>Muted</th></tr>';
+      for (const t of p.tracks) {
+        html += '<tr>' +
+          '<td><input type="checkbox" data-track-sid="' + esc(t.sid) + '" data-participant-sid="' + esc(p.sid) + '"' + (t.enabled ? ' checked' : '') + '></td>' +
+          '<td>' + esc(t.name) + ' <span class="participant-sid">' + esc(t.sid) + '</span></td>' +
+          '<td>' + esc(t.kind) + '</td>' +
+          '<td>' + esc(t.source) + '</td>' +
+          '<td>' + esc(t.mimeType) + '</td>' +
+          '<td' + (t.muted ? ' class="muted"' : '') + '>' + (t.muted ? 'yes' : 'no') + '</td>' +
+          '</tr>';
+      }
+      html += '</table>';
+    } else {
+      html += '<div style="color:#888">No tracks</div>';
+    }
+    div.innerHTML = html;
+    container.appendChild(div);
+  }
+}
+
+async function apply() {
+  const checkboxes = document.querySelectorAll('input[data-track-sid]');
+  const changes = [];
+  for (const cb of checkboxes) {
+    changes.push({ trackSID: cb.dataset.trackSid, participantSID: cb.dataset.participantSid, enable: cb.checked });
+  }
+  try {
+    const resp = await fetch('api/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(changes),
+    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      setStatus('Error: ' + text, true);
+      return;
+    }
+    setStatus('Applied ' + changes.length + ' change(s)', false);
+    setTimeout(refresh, 500);
+  } catch (e) {
+    setStatus('Error: ' + e.message, true);
+  }
+}
+
+function setStatus(msg, isError) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = 'status' + (isError ? ' error' : '');
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s || '';
+  return d.innerHTML;
+}
+
+refresh();
+</script>
+</body>
+</html>
