@@ -298,3 +298,30 @@ func (e *LivekitBin) RequestNewPad(instance *gst.Element, templ *gst.PadTemplate
 	self.Log(CAT, gst.LevelError, fmt.Sprintf("Unknown pad template name: %s", templ.Name()))
 	return nil
 }
+
+func (e *LivekitBin) ReleasePad(instance *gst.Element, pad *gst.Pad) {
+	self := gst.ToGstBin(instance)
+
+	if pad.Template() == nil || pad.Template().Name() != "send_rtp_sink_%u" {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unknown pad template for released pad %s: %v", pad.GetName(), pad.Template()))
+		return
+	}
+
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Releasing pad %s from template %s", pad.GetName(), pad.Template().Name()))
+
+	gpad := pad.AsGhostPad()
+	if gpad == nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Released pad %s is not a ghost pad", pad.GetName()))
+		return
+	}
+
+	target := gpad.GetTarget()
+	if target != nil && e.RtpBin != nil {
+		e.RtpBin.ReleaseRequestPad(target)
+	}
+
+	if !self.RemovePad(gpad.Pad) {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to remove ghost pad %s for released pad %s", gpad.GetName(), pad.GetName()))
+		return
+	}
+}
