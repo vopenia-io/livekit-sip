@@ -61,6 +61,8 @@ type LeakDetector struct {
 
 	r *os.File
 	w *os.File
+
+	wg sync.WaitGroup
 }
 
 func (d *LeakDetector) Close() {
@@ -70,6 +72,7 @@ func (d *LeakDetector) Close() {
 	syscall.Dup2(d.oldStderrFD, int(os.Stderr.Fd()))
 	syscall.Close(d.oldStderrFD)
 	d.r.Close()
+	d.wg.Wait()
 	d.w.Close()
 
 	if len(d.leaks) > 0 {
@@ -99,9 +102,12 @@ func SetupLeakDetection(t *testing.T) *LeakDetector {
 		w:           w,
 	}
 
+	l.wg.Add(1)
 	go func() {
+		defer l.wg.Done()
 		stderr := os.NewFile(uintptr(l.oldStderrFD), "/dev/stderr")
 		scanner := bufio.NewScanner(r)
+		verbose := testing.Verbose()
 		for scanner.Scan() {
 			line := scanner.Text()
 			if IsLeak(line) {
@@ -109,7 +115,9 @@ func SetupLeakDetection(t *testing.T) *LeakDetector {
 				l.leaks = append(l.leaks, line)
 				l.mu.Unlock()
 			}
-			stderr.WriteString(line + "\n")
+			if verbose {
+				stderr.WriteString(line + "\n")
+			}
 
 		}
 	}()

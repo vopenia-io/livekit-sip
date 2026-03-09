@@ -60,6 +60,15 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sinkwriter"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipmanager"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sourcereader"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audiog711"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audioopus"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/g711audio"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/g711dtmfaudio"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/h264video"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/opusaudio"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videoh264"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videovp8"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/vp8video"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/vp8h264select"
 )
 
@@ -115,6 +124,42 @@ func init() {
 
 	if !iomanager.Register() {
 		panic("Failed to register io_manager")
+	}
+
+	if !g711audio.Register() {
+		panic("Failed to register g711-audio")
+	}
+
+	if !audioopus.Register() {
+		panic("Failed to register audio-opus")
+	}
+
+	if !opusaudio.Register() {
+		panic("Failed to register opus-audio")
+	}
+
+	if !audiog711.Register() {
+		panic("Failed to register audio-g711")
+	}
+
+	if !g711dtmfaudio.Register() {
+		panic("Failed to register g711-dtmf-audio")
+	}
+
+	if !h264video.Register() {
+		panic("Failed to register h264-video")
+	}
+
+	if !videovp8.Register() {
+		panic("Failed to register video-vp8")
+	}
+
+	if !vp8video.Register() {
+		panic("Failed to register vp8-video")
+	}
+
+	if !videoh264.Register() {
+		panic("Failed to register video-h264")
 	}
 
 	MainLoop = glib.NewMainLoop(glib.MainContextDefault(), false)
