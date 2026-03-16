@@ -63,7 +63,7 @@ func (e *Vp8H264Select) ClassInit(klass *glib.ObjectClass) {
 		"VP8 to H264 Transcoder/Selector",
 		"Video/Converter",
 		"Decodes VP8 video and re-encodes it as H264. Can be used to select between VP8 streams in a pipeline.",
-		"Your Name <you@example.com>",
+		"Maxime SENARD <senard.maxime@gmail.com>",
 	)
 
 	class.AddPadTemplate(gst.NewPadTemplate(

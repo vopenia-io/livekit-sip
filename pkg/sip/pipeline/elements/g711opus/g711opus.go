@@ -70,8 +70,7 @@ func (e *G711Opus) InstanceInit(instance *glib.Object) {
 		if e == nil {
 			return gst.PadProbeRemove
 		}
-		// TODO: do that cause any leaks?
-		// yes it does, we need to make a weak ref of self too but it can only be a glib weakref as the go wrapper will get dropped 
+		// TODO: self is captured strongly in this probe callback — use glib.WeakRef to avoid leak
 		return e.G711Setup(self, p, info)
 	})
 

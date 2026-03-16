@@ -11,7 +11,7 @@ import (
 	"github.com/go-gst/go-gst/gst"
 )
 
-var ErrPipielineNotRunning = fmt.Errorf("pipeline not running")
+var ErrPipelineNotRunning = fmt.Errorf("pipeline not running")
 
 var runningTimeRegex = regexp.MustCompile(`running-time=\d+`)
 

@@ -97,22 +97,9 @@ func (e *OpusG711) InstanceInit(instance *glib.Object) {
 		if e == nil {
 			return gst.PadProbeRemove
 		}
-		return e.G711Setup(self, p, info) // TODO: do that cause any leaks?
+		// TODO: self is captured strongly in this probe callback — use glib.WeakRef to avoid leak
+		return e.G711Setup(self, p, info)
 	})
-
-	// e.MuLawEnc, err = gst.NewElement("mulawenc")
-	// if err != nil {
-	// 	self.Error("Failed to create mulawenc element", err)
-	// 	self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create mulawenc element: %v", err))
-	// 	return
-	// }
-
-	// e.RtpPcmuPay, err = gst.NewElement("rtppcmupay")
-	// if err != nil {
-	// 	self.Error("Failed to create rtppcmupay element", err)
-	// 	self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create rtppcmupay element: %v", err))
-	// 	return
-	// }
 
 	e.Identity, err = gst.NewElement("identity")
 	if err != nil {
