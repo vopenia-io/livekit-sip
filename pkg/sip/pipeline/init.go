@@ -49,18 +49,12 @@ import "C"
 import (
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/activeselector"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/g711opus"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/g711opusdtmf"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/h264vp8"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/iomanager"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitcompositor"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/opusg711"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/opusg711mix"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/sinkwriter"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipmanager"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/sourcereader"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audiog711"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audioopus"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/g711audio"
@@ -70,7 +64,6 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videoh264"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videovp8"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/vp8video"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/vp8h264select"
 )
 
 const QDataPadPeerKey = "livekitsip-pad-peer"
@@ -79,36 +72,13 @@ var MainLoop *glib.MainLoop
 
 func init() {
 	gst.Init(nil)
-	if !sourcereader.Register() {
-		panic("failed to register sourcereader element")
-	}
-
-	if !sinkwriter.Register() {
-		panic("failed to register sinkwriter element")
-	}
-
-	if !h264vp8.Register() {
-		panic("Failed to register h264-vp8")
-	}
-
-	if !vp8h264select.Register() {
-		panic("Failed to register vp8_h264_select")
-	}
-
-	if !g711opus.Register() {
-		panic("Failed to register g711-opus")
-	}
 
 	if !g711opusdtmf.Register() {
 		panic("Failed to register g711-opus-dtmf")
 	}
 
-	if !opusg711.Register() {
-		panic("Failed to register opus-g711")
-	}
-
-	if !opusg711mix.Register() {
-		panic("Failed to register opus_g711_mix")
+	if !h264vp8.Register() {
+		panic("Failed to register h264-vp8")
 	}
 
 	if !sipmanager.Register() {
@@ -117,10 +87,6 @@ func init() {
 
 	if !livekitbin.Register() {
 		panic("Failed to register livekitbin")
-	}
-
-	if !activeselector.Register() {
-		panic("Failed to register active-selector")
 	}
 
 	if !iomanager.Register() {
