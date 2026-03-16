@@ -155,7 +155,7 @@ func (s *lkroom) InstanceInit(instance *glib.Object) {
 	sinkRTCP, err := gst.NewElement("lkroom_sinkrtcp")
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create sink_rtcp %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to create sink_rtcp", err.Error())
+		self.Error("Failed to create sink_rtcp", err)
 		return
 	}
 
@@ -167,7 +167,7 @@ func (s *lkroom) InstanceInit(instance *glib.Object) {
 
 	if err := self.AddMany(sinkRTCP); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add elements to bin: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to add elements to bin", err.Error())
+		self.Error("Failed to add elements to bin", err)
 		return
 	}
 
@@ -195,7 +195,7 @@ func (s *lkroom) Constructed(instance *glib.Object) {
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to connect join-room signal: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to connect join-room signal", err.Error())
+		self.Error("Failed to connect join-room signal", err)
 	}
 }
 
@@ -211,7 +211,7 @@ func (s *lkroom) start(self *gst.Bin) gst.StateChangeReturn {
 			err := s.joinRoom(self)
 			if err != nil {
 				self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to connect to room: %v", err))
-				self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to connect to room", err.Error())
+				self.Error("Failed to connect to room", err)
 				return
 			}
 		}()
@@ -235,7 +235,7 @@ func (s *lkroom) joinRoom(self *gst.Bin) error {
 	err := s.room.JoinWithToken(s.WsURL, s.Token, s.Opt...)
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to connect to room: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to connect to room", err.Error())
+		self.Error("Failed to connect to room", err)
 		return fmt.Errorf("error connecting to room: %w", err)
 	}
 	for {
@@ -329,13 +329,13 @@ func (s *lkroom) startTrack(self *gst.Bin, cfg TrackCfg) *gst.Pad {
 	sink, err := NewTrackSink(s, cfg)
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create sink_track: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to create sink_track", err.Error())
+		self.Error("Failed to create sink_track", err)
 		return nil
 	}
 
 	if err := self.Add(sink); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add sink_track to bin: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to add sink_track to bin", err.Error())
+		self.Error("Failed to add sink_track to bin", err)
 		return nil
 	}
 

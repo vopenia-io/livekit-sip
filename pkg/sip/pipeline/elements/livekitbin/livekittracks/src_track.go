@@ -105,7 +105,7 @@ func (s *SrcTrack) InstanceInit(instance *glib.Object) {
 	s.src, err = NewSrcTrackRtp(s)
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create srctrack_rtp: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to create srctrack_rtp", err.Error())
+		self.Error("Failed to create srctrack_rtp", err)
 		return
 	}
 
@@ -118,7 +118,7 @@ func (s *SrcTrack) InstanceInit(instance *glib.Object) {
 
 	if err := self.AddMany(s.src, s.Queue); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add srctrack_rtp: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to add srctrack_rtp", err.Error())
+		self.Error("Failed to add srctrack_rtp", err)
 		return
 	}
 
@@ -160,13 +160,13 @@ func (s *SrcTrack) open(self *gst.Bin) gst.StateChangeReturn {
 	rtcpPad := self.GetStaticPad("src_rtcp")
 	if rtcpPad == nil {
 		self.Log(CAT, gst.LevelError, "Failed to get src_rtcp pad from srcTrack element")
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to get src_rtcp pad from srcTrack element", "pad is nil")
+		self.Error("Failed to get src_rtcp pad from srcTrack element", errors.New("pad is nil"))
 		return gst.StateChangeFailure
 	}
 
 	if !rtcpPad.SetActive(true) {
 		self.Log(CAT, gst.LevelError, "Failed to activate src_rtcp pad for srcTrack element")
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to activate src_rtcp pad for srcTrack element", "failed to activate src_rtcp pad")
+		self.Error("Failed to activate src_rtcp pad for srcTrack element", errors.New("failed to activate src_rtcp pad"))
 		return gst.StateChangeFailure
 	}
 

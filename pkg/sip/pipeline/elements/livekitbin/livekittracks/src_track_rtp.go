@@ -114,7 +114,7 @@ func (s *SrcTrackRtp) Start(self *base.GstBaseSrc) bool {
 	s.unblock.Store(false)
 	if err := s.parent.Track.SetReadDeadline(time.Time{}); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to reset read deadline on track: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to reset read deadline on track", err.Error())
+		self.Error("Failed to reset read deadline on track", err)
 		return false
 	}
 
@@ -153,7 +153,7 @@ func (s *SrcTrackRtp) Fill(self *base.GstBaseSrc, offset uint64, length uint, bu
 			return gst.FlowEOS
 		}
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to read from io.Reader: %T: %v", err, err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorRead, "Failed to read from io.Reader", err.Error())
+		self.Error("Failed to read from io.Reader", err)
 		return gst.FlowError
 	}
 
@@ -172,7 +172,7 @@ func (s *SrcTrackRtp) Unlock(self *base.GstBaseSrc) bool {
 
 	if err := s.parent.Track.SetReadDeadline(time.Now()); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set read deadline on track: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to set read deadline on track", err.Error())
+		self.Error("Failed to set read deadline on track", err)
 		return false
 	}
 
@@ -184,7 +184,7 @@ func (s *SrcTrackRtp) UnlockStop(self *base.GstBaseSrc) bool {
 	s.unblock.Store(false)
 	if err := s.parent.Track.SetReadDeadline(time.Time{}); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to reset read deadline on track: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to reset read deadline on track", err.Error())
+		self.Error("Failed to reset read deadline on track", err)
 		return false
 	}
 	return true

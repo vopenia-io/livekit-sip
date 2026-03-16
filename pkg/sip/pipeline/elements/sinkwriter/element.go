@@ -1,6 +1,7 @@
 package sinkwriter
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -191,7 +192,7 @@ func (s *sinkWriter) closeWriter() bool {
 	if s.state.writer != nil {
 		if err := s.state.writer.Close(); err != nil {
 			s.self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to close io.Writer: %v", err))
-			s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorWrite, "Failed to close io.Writer", err.Error())
+			s.self.Error("Failed to close io.Writer", err)
 			return false
 		}
 	}
@@ -213,13 +214,13 @@ func (s *sinkWriter) Render(self *base.GstBaseSink, buffer *gst.Buffer) gst.Flow
 	s.self.Log(CAT, gst.LevelTrace, fmt.Sprintf("Render called: buffer size=%d", buffer.GetSize()))
 	if s.state.closed.Load() {
 		s.self.Log(CAT, gst.LevelError, "io.Writer is already closed")
-		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorWrite, "io.Writer is already closed", "")
+		s.self.Error("io.Writer is already closed", errors.New("io.Writer is already closed"))
 		return gst.FlowEOS
 	}
 
 	if s.state.writer == nil {
 		s.self.Log(CAT, gst.LevelError, "io.Writer is not set")
-		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "io.Writer is not set", "")
+		s.self.Error("io.Writer is not set", errors.New("io.Writer is not set"))
 		return gst.FlowError
 	}
 	n, err := s.state.writer.Write(buffer.Bytes())
@@ -229,7 +230,7 @@ func (s *sinkWriter) Render(self *base.GstBaseSink, buffer *gst.Buffer) gst.Flow
 			return gst.FlowEOS
 		}
 		s.self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to write to io.Writer: %v", err))
-		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorWrite, "Failed to write to io.Writer", err.Error())
+		s.self.Error("Failed to write to io.Writer", err)
 		return gst.FlowError
 	}
 	if n < int(buffer.GetSize()) {

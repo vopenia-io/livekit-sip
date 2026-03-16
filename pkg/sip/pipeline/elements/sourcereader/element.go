@@ -1,6 +1,7 @@
 package sourcereader
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -193,7 +194,7 @@ func (s *SourceReader) closeReader() bool {
 	if s.state.reader != nil {
 		if err := s.state.reader.Close(); err != nil {
 			s.self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to close io.Reader: %v", err))
-			s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorRead, "Failed to close io.Reader", err.Error())
+			s.self.Error("Failed to close io.Reader", err)
 			return false
 		}
 	}
@@ -216,13 +217,13 @@ func (s *SourceReader) Fill(self *base.GstBaseSrc, offset uint64, length uint, b
 
 	if s.state.closed.Load() {
 		s.self.Log(CAT, gst.LevelError, "io.Reader is already closed")
-		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorRead, "io.Reader is already closed", "")
+		s.self.Error("io.Reader is already closed", errors.New("io.Reader is already closed"))
 		return gst.FlowEOS
 	}
 
 	if s.state.reader == nil {
 		s.self.Log(CAT, gst.LevelError, "io.Reader is not set")
-		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "io.Reader is not set", "")
+		s.self.Error("io.Reader is not set", errors.New("io.Reader is not set"))
 		return gst.FlowError
 	}
 
@@ -238,7 +239,7 @@ func (s *SourceReader) Fill(self *base.GstBaseSrc, offset uint64, length uint, b
 			return gst.FlowEOS
 		}
 		s.self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to read from io.Reader: %v", err))
-		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorRead, "Failed to read from io.Reader", err.Error())
+		s.self.Error("Failed to read from io.Reader", err)
 		return gst.FlowError
 	}
 

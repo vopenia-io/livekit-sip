@@ -260,18 +260,18 @@ func (s *sipconn) InstanceInit(instance *glib.Object) {
 
 	if err := self.AddMany(s.RtpSrc, s.RtcpSrc, s.RtpFilter, s.RtpSink, s.RtcpFilter, s.RtcpSink); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add elements to bin: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to add elements to bin", err.Error())
+		self.Error("Failed to add elements to bin", err)
 		return
 	}
 
 	if err := s.RtpFilter.Link(s.RtpSink); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link RTP elements: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to link RTP elements", err.Error())
+		self.Error("Failed to link RTP elements", err)
 		return
 	}
 	if err := s.RtcpFilter.Link(s.RtcpSink); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link RTCP elements: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to link RTCP elements", err.Error())
+		self.Error("Failed to link RTCP elements", err)
 		return
 	}
 
@@ -430,7 +430,7 @@ func (s *sipconn) open(self *gst.Bin) gst.StateChangeReturn {
 	s.rtpconn, s.rtcpconn, err = NewUDPConnPair(s.props.portStart, s.props.portEnd, s.props.local.IP)
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create UDP connection pair: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to create UDP connection pair", err.Error())
+		self.Error("Failed to create UDP connection pair", err)
 		return gst.StateChangeFailure
 	}
 
@@ -446,26 +446,26 @@ func (s *sipconn) open(self *gst.Bin) gst.StateChangeReturn {
 	gRtpSock, err := GSocketFromUDPConn(s.rtpconn)
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create GSocket from RTP UDPConn: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to create GSocket from RTP UDPConn", err.Error())
+		self.Error("Failed to create GSocket from RTP UDPConn", err)
 		return gst.StateChangeFailure
 	}
 
 	gRtcpSock, err := GSocketFromUDPConn(s.rtcpconn)
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create GSocket from RTCP UDPConn: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to create GSocket from RTCP UDPConn", err.Error())
+		self.Error("Failed to create GSocket from RTCP UDPConn", err)
 		return gst.StateChangeFailure
 	}
 
 	if err := s.RtpSrc.SetProperty("socket", gRtpSock); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set socket property on RTP source: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to set socket property on RTP source", err.Error())
+		self.Error("Failed to set socket property on RTP source", err)
 		return gst.StateChangeFailure
 	}
 
 	if err := s.RtcpSrc.SetProperty("socket", gRtcpSock); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set socket property on RTCP source: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to set socket property on RTCP source", err.Error())
+		self.Error("Failed to set socket property on RTCP source", err)
 		return gst.StateChangeFailure
 	}
 
