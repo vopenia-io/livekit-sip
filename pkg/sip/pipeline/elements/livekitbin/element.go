@@ -156,55 +156,55 @@ func (e *LivekitBin) InstanceInit(instance *glib.Object) {
 		"latency":                  uint(200),
 	})
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating rtpbin: %v", err))
-		self.Error("Error creating rtpbin", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create rtpbin: %v", err))
+		self.Error("Failed to create rtpbin", err)
 		return
 	}
 	e.setupRtpBinSignals(self)
 
 	e.RtcpFunnel, err = gst.NewElementWithName("funnel", "livekitbin_rtcp_funnel")
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating rtcp funnel: %v", err))
-		self.Error("Error creating rtcp funnel", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create rtcp funnel: %v", err))
+		self.Error("Failed to create rtcp funnel", err)
 		return
 	}
 	e.RtcpSink, err = gst.NewElement("livekitbin_sinkrtcp")
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating rtcp sink element: %v", err))
-		self.Error("Error creating rtcp sink element", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create rtcp sink element: %v", err))
+		self.Error("Failed to create rtcp sink element", err)
 		return
 	}
 
 	e.MicrophoneRtpFunnel, err = gst.NewElementWithName("rtpfunnel", "livekitbin_microphone_rtpfunnel")
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating microphone rtpfunnel: %v", err))
-		self.Error("Error creating microphone rtpfunnel", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create microphone rtpfunnel: %v", err))
+		self.Error("Failed to create microphone rtpfunnel", err)
 		return
 	}
 	e.MicrophoneRtpFunnel.GetStaticPad("src").AddProbe(gst.PadProbeTypeEventDownstream, PadProbeDropTrackSourceInfo)
 	e.MicrophoneRtcpFunnel, err = gst.NewElementWithName("funnel", "livekitbin_microphone_rtcp_funnel")
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating microphone rtcp funnel: %v", err))
-		self.Error("Error creating microphone rtcp funnel", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create microphone rtcp funnel: %v", err))
+		self.Error("Failed to create microphone rtcp funnel", err)
 		return
 	}
 	e.CameraRtpFunnel, err = gst.NewElementWithName("rtpfunnel", "livekitbin_camera_rtpfunnel")
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating camera rtpfunnel: %v", err))
-		self.Error("Error creating camera rtpfunnel", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create camera rtpfunnel: %v", err))
+		self.Error("Failed to create camera rtpfunnel", err)
 		return
 	}
 	e.CameraRtpFunnel.GetStaticPad("src").AddProbe(gst.PadProbeTypeEventDownstream, PadProbeDropTrackSourceInfo)
 	e.CameraRtcpFunnel, err = gst.NewElementWithName("funnel", "livekitbin_camera_rtcp_funnel")
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating camera rtcp funnel: %v", err))
-		self.Error("Error creating camera rtcp funnel", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create camera rtcp funnel: %v", err))
+		self.Error("Failed to create camera rtcp funnel", err)
 		return
 	}
 
 	if err := self.AddMany(e.RtpBin, e.RtcpFunnel, e.RtcpSink, e.MicrophoneRtpFunnel, e.MicrophoneRtcpFunnel, e.CameraRtpFunnel, e.CameraRtcpFunnel); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error adding children to livekitbin: %v", err))
-		self.Error("Error adding children to livekitbin", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add children to livekitbin: %v", err))
+		self.Error("Failed to add children to livekitbin", err)
 		return
 	}
 
@@ -221,30 +221,30 @@ func (e *LivekitBin) InstanceInit(instance *glib.Object) {
 	})
 
 	if err := e.RtcpFunnel.Link(e.RtcpSink); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error linking rtcp funnel to rtcp sink: %v", err))
-		self.Error("Error linking rtcp funnel to rtcp sink", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link rtcp funnel to rtcp sink: %v", err))
+		self.Error("Failed to link rtcp funnel to rtcp sink", err)
 		return
 	}
 
 	if ret := e.MicrophoneRtpFunnel.GetStaticPad("src").Link(e.RtpBin.GetRequestPad(fmt.Sprintf("recv_rtp_sink_%d", livekit.TrackSource_MICROPHONE))); ret != gst.PadLinkOK {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error linking microphone rtpfunnel to rtpbin: %v", ret))
-		self.Error("Error linking microphone rtpfunnel to rtpbin", fmt.Errorf("link error: %v", ret))
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link microphone rtpfunnel to rtpbin: %v", ret))
+		self.Error("Failed to link microphone rtpfunnel to rtpbin", fmt.Errorf("link error: %v", ret))
 		return
 	}
 	if ret := e.MicrophoneRtcpFunnel.GetStaticPad("src").Link(e.RtpBin.GetRequestPad(fmt.Sprintf("recv_rtcp_sink_%d", livekit.TrackSource_MICROPHONE))); ret != gst.PadLinkOK {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error linking microphone rtcpfunnel to rtpbin: %v", ret))
-		self.Error("Error linking microphone rtcpfunnel to rtpbin", fmt.Errorf("link error: %v", ret))
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link microphone rtcpfunnel to rtpbin: %v", ret))
+		self.Error("Failed to link microphone rtcpfunnel to rtpbin", fmt.Errorf("link error: %v", ret))
 		return
 	}
 
 	if ret := e.CameraRtpFunnel.GetStaticPad("src").Link(e.RtpBin.GetRequestPad(fmt.Sprintf("recv_rtp_sink_%d", livekit.TrackSource_CAMERA))); ret != gst.PadLinkOK {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error linking camera rtpfunnel to rtpbin: %v", ret))
-		self.Error("Error linking camera rtpfunnel to rtpbin", fmt.Errorf("link error: %v", ret))
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link camera rtpfunnel to rtpbin: %v", ret))
+		self.Error("Failed to link camera rtpfunnel to rtpbin", fmt.Errorf("link error: %v", ret))
 		return
 	}
 	if ret := e.CameraRtcpFunnel.GetStaticPad("src").Link(e.RtpBin.GetRequestPad(fmt.Sprintf("recv_rtcp_sink_%d", livekit.TrackSource_CAMERA))); ret != gst.PadLinkOK {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error linking camera rtcpfunnel to rtpbin: %v", ret))
-		self.Error("Error linking camera rtcpfunnel to rtpbin", fmt.Errorf("link error: %v", ret))
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link camera rtcpfunnel to rtpbin: %v", ret))
+		self.Error("Failed to link camera rtcpfunnel to rtpbin", fmt.Errorf("link error: %v", ret))
 		return
 	}
 }

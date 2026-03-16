@@ -53,14 +53,14 @@ func (s *ActiveSelector) InstanceInit(instance *glib.Object) {
 
 	s.InputSelector, err = gst.NewElement("input-selector")
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating input-selector: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error creating input-selector", err.Error())
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create input-selector: %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to create input-selector", err.Error())
 		return
 	}
 
 	if err := self.Add(s.InputSelector); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error adding input-selector: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error adding input-selector", err.Error())
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add input-selector: %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to add input-selector", err.Error())
 		return
 	}
 

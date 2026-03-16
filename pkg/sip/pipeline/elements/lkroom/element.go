@@ -154,20 +154,20 @@ func (s *lkroom) InstanceInit(instance *glib.Object) {
 
 	sinkRTCP, err := gst.NewElement("lkroom_sinkrtcp")
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating sink_rtcp %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error creating sink_rtcp", err.Error())
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create sink_rtcp %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to create sink_rtcp", err.Error())
 		return
 	}
 
 	if obj, ok := gst.SubclassFromElement[*sinkRtcp](sinkRTCP); ok {
 		obj.parent = s
 	} else {
-		self.Log(CAT, gst.LevelError, "Error casting sink_rtcp to sinkRtcp subclass")
+		self.Log(CAT, gst.LevelError, "Failed to cast sink_rtcp to sinkRtcp subclass")
 	}
 
 	if err := self.AddMany(sinkRTCP); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error adding elements to bin: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error adding elements to bin", err.Error())
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add elements to bin: %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to add elements to bin", err.Error())
 		return
 	}
 
@@ -187,15 +187,15 @@ func (s *lkroom) Constructed(instance *glib.Object) {
 		go func() {
 			err := s.joinRoom(self)
 			if err != nil {
-				self.Log(CAT, gst.LevelError, fmt.Sprintf("Error joining room: %v", err))
-				self.Error("Error joining room", err)
+				self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to join room: %v", err))
+				self.Error("Failed to join room", err)
 				return
 			}
 		}()
 	})
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error connecting join-room signal: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error connecting join-room signal", err.Error())
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to connect join-room signal: %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to connect join-room signal", err.Error())
 	}
 }
 
@@ -210,8 +210,8 @@ func (s *lkroom) start(self *gst.Bin) gst.StateChangeReturn {
 			self.Log(CAT, gst.LevelInfo, "Auto-joining room")
 			err := s.joinRoom(self)
 			if err != nil {
-				self.Log(CAT, gst.LevelError, fmt.Sprintf("Error connecting to room: %v", err))
-				self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error connecting to room", err.Error())
+				self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to connect to room: %v", err))
+				self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to connect to room", err.Error())
 				return
 			}
 		}()
@@ -228,14 +228,14 @@ func (s *lkroom) joinRoom(self *gst.Bin) error {
 	}
 	defer func() {
 		if _, err := self.Emit("room-joined", s.state.IsJoined()); err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error emitting room-joined signal: %v", err))
-			self.Error("Error emitting room-joined signal", err)
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to emit room-joined signal: %v", err))
+			self.Error("Failed to emit room-joined signal", err)
 		}
 	}()
 	err := s.room.JoinWithToken(s.WsURL, s.Token, s.Opt...)
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error connecting to room: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error connecting to room", err.Error())
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to connect to room: %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to connect to room", err.Error())
 		return fmt.Errorf("error connecting to room: %w", err)
 	}
 	for {
@@ -328,14 +328,14 @@ func (s *lkroom) startTrack(self *gst.Bin, cfg TrackCfg) *gst.Pad {
 	self.Log(CAT, gst.LevelDebug, "startTrack")
 	sink, err := NewTrackSink(s, cfg)
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating sink_track: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error creating sink_track", err.Error())
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create sink_track: %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to create sink_track", err.Error())
 		return nil
 	}
 
 	if err := self.Add(sink); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error adding sink_track to bin: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error adding sink_track to bin", err.Error())
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add sink_track to bin: %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to add sink_track to bin", err.Error())
 		return nil
 	}
 

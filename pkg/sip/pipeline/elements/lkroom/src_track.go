@@ -55,14 +55,14 @@ func (s *SrcTrack) InstanceInit(instance *glib.Object) {
 	var err error
 	s.src, err = NewSrcTrackRtp(s)
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating srctrack_rtp: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error creating srctrack_rtp", err.Error())
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create srctrack_rtp: %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to create srctrack_rtp", err.Error())
 		return
 	}
 
 	if err := self.Add(s.src); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error adding srctrack_rtp: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error adding srctrack_rtp", err.Error())
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add srctrack_rtp: %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to add srctrack_rtp", err.Error())
 		return
 	}
 
@@ -86,14 +86,14 @@ func (s *SrcTrack) open(self *gst.Bin) gst.StateChangeReturn {
 
 	rtcpPad := self.GetStaticPad("src_rtcp")
 	if rtcpPad == nil {
-		self.Log(CAT, gst.LevelError, "Error getting src_rtcp pad from srcTrack element")
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error getting src_rtcp pad from srcTrack element", "pad is nil")
+		self.Log(CAT, gst.LevelError, "Failed to get src_rtcp pad from srcTrack element")
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to get src_rtcp pad from srcTrack element", "pad is nil")
 		return gst.StateChangeFailure
 	}
 
 	if !rtcpPad.SetActive(true) {
-		self.Log(CAT, gst.LevelError, "Error activating src_rtcp pad for srcTrack element")
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error activating src_rtcp pad for srcTrack element", "failed to activate src_rtcp pad")
+		self.Log(CAT, gst.LevelError, "Failed to activate src_rtcp pad for srcTrack element")
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to activate src_rtcp pad for srcTrack element", "failed to activate src_rtcp pad")
 		return gst.StateChangeFailure
 	}
 

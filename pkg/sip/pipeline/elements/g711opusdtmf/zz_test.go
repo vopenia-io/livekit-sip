@@ -8,11 +8,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/testutils"
 )
 
 func TestMain(m *testing.M) {
+	glib.SetEnv("GST_DEBUG", glib.GetEnv("GST_DEBUG")+",g711-opus-dtmf:5", true)
+	println("GST_DEBUG:", glib.GetEnv("GST_DEBUG"))
 	gst.Init(nil)
 	Register()
 	os.Exit(m.Run())

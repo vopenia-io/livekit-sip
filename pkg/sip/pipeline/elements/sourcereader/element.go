@@ -124,7 +124,7 @@ func (s *SourceReader) SetProperty(self *glib.Object, id uint, value *glib.Value
 	case "caps":
 		val, err := value.GoValue()
 		if err != nil {
-			s.self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting caps property value: %v", err))
+			s.self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get caps property value: %v", err))
 			return
 		}
 		caps, ok := val.(*gst.Caps)
@@ -192,8 +192,8 @@ func (s *SourceReader) closeReader() bool {
 
 	if s.state.reader != nil {
 		if err := s.state.reader.Close(); err != nil {
-			s.self.Log(CAT, gst.LevelError, fmt.Sprintf("Error closing io.Reader: %v", err))
-			s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorRead, "Error closing io.Reader", err.Error())
+			s.self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to close io.Reader: %v", err))
+			s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorRead, "Failed to close io.Reader", err.Error())
 			return false
 		}
 	}
@@ -204,7 +204,7 @@ func (s *SourceReader) Stop(self *base.GstBaseSrc) bool {
 	s.self.Log(CAT, gst.LevelInfo, "stopped")
 
 	if !s.closeReader() {
-		s.self.Log(CAT, gst.LevelError, "Error closing io.Reader")
+		s.self.Log(CAT, gst.LevelError, "Failed to close io.Reader")
 		return false
 	}
 
@@ -237,8 +237,8 @@ func (s *SourceReader) Fill(self *base.GstBaseSrc, offset uint64, length uint, b
 			s.self.Log(CAT, gst.LevelInfo, "reached EOF")
 			return gst.FlowEOS
 		}
-		s.self.Log(CAT, gst.LevelError, fmt.Sprintf("Error reading from io.Reader: %v", err))
-		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorRead, "Error reading from io.Reader", err.Error())
+		s.self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to read from io.Reader: %v", err))
+		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorRead, "Failed to read from io.Reader", err.Error())
 		return gst.FlowError
 	}
 
@@ -255,7 +255,7 @@ func (s *SourceReader) Unlock(self *base.GstBaseSrc) bool {
 	s.self.Log(CAT, gst.LevelInfo, "unlocked")
 
 	if !s.closeReader() {
-		s.self.Log(CAT, gst.LevelError, "Error closing io.Reader")
+		s.self.Log(CAT, gst.LevelError, "Failed to close io.Reader")
 		return false
 	}
 	return true

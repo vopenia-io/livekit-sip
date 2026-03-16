@@ -122,8 +122,8 @@ func (s *SrcTrackRtp) Stop(self *base.GstBaseSrc) bool {
 			self.Log(CAT, gst.LevelWarning, "Transport is not connected, skipping unsubscribe")
 			return true
 		}
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error unsubscribing from track: %T::%v", err, err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error unsubscribing from track", err.Error())
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to unsubscribe from track: %T::%v", err, err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to unsubscribe from track", err.Error())
 		return true // return true to avoid blocking shutdown
 	}
 
@@ -145,8 +145,8 @@ func (s *SrcTrackRtp) Fill(self *base.GstBaseSrc, offset uint64, length uint, bu
 			self.Log(CAT, gst.LevelInfo, "reached EOF")
 			return gst.FlowEOS
 		}
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error reading from io.Reader: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorRead, "Error reading from io.Reader", err.Error())
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to read from io.Reader: %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorRead, "Failed to read from io.Reader", err.Error())
 		return gst.FlowError
 	}
 
@@ -162,8 +162,8 @@ func (s *SrcTrackRtp) Unlock(self *base.GstBaseSrc) bool {
 	self.Log(CAT, gst.LevelInfo, "unlocked")
 
 	if err := s.parent.track.SetReadDeadline(time.Now()); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error setting read deadline on track: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error setting read deadline on track", err.Error())
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set read deadline on track: %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to set read deadline on track", err.Error())
 		return false
 	}
 

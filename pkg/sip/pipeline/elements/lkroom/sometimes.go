@@ -32,8 +32,8 @@ func (s *lkroom) SometimesTrackAdded(track *webrtc.TrackRemote, pub *lksdk.Remot
 
 	srcTrack, err := gst.NewElement("lkroom_srctrack")
 	if err != nil {
-		s.self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating srcTrack element: %v", err))
-		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error creating srcTrack element", err.Error())
+		s.self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create srcTrack element: %v", err))
+		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to create srcTrack element", err.Error())
 		return
 	}
 
@@ -43,72 +43,72 @@ func (s *lkroom) SometimesTrackAdded(track *webrtc.TrackRemote, pub *lksdk.Remot
 		obj.rp = rp
 		obj.parent = s
 	} else {
-		s.self.Log(CAT, gst.LevelError, "Error casting srcTrack to SrcTrack subclass")
-		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error casting srcTrack to SrcTrack subclass", "type assertion failed")
+		s.self.Log(CAT, gst.LevelError, "Failed to cast srcTrack to SrcTrack subclass")
+		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to cast srcTrack to SrcTrack subclass", "type assertion failed")
 		return
 	}
 
 	if err := s.self.Add(srcTrack); err != nil {
-		s.self.Log(CAT, gst.LevelError, fmt.Sprintf("Error adding srcTrack element: %v", err))
-		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error adding srcTrack element", err.Error())
+		s.self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add srcTrack element: %v", err))
+		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to add srcTrack element", err.Error())
 		return
 	}
 
 	pad := srcTrack.GetStaticPad("src")
 	if pad == nil {
-		s.self.Log(CAT, gst.LevelError, "Error getting src pad from srcTrack element")
-		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error getting src pad from srcTrack element", "pad is nil")
+		s.self.Log(CAT, gst.LevelError, "Failed to get src pad from srcTrack element")
+		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to get src pad from srcTrack element", "pad is nil")
 		return
 	}
 
 	gpad := gst.NewGhostPad(padname, pad)
 	if gpad == nil {
-		s.self.Log(CAT, gst.LevelError, "Error creating ghost pad for srcTrack element")
-		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error creating ghost pad for srcTrack element", "ghost pad is nil")
+		s.self.Log(CAT, gst.LevelError, "Failed to create ghost pad for srcTrack element")
+		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to create ghost pad for srcTrack element", "ghost pad is nil")
 		return
 	}
 
 	if !gpad.SetActive(true) {
-		s.self.Log(CAT, gst.LevelError, "Error activating ghost pad for srcTrack element")
-		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error activating ghost pad for srcTrack element", "failed to activate ghost pad")
+		s.self.Log(CAT, gst.LevelError, "Failed to activate ghost pad for srcTrack element")
+		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to activate ghost pad for srcTrack element", "failed to activate ghost pad")
 		return
 	}
 
 	if !s.self.AddPad(gpad.Pad) {
-		s.self.Log(CAT, gst.LevelError, "Error adding ghost pad to lkroom element")
-		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error adding ghost pad to lkroom element", "failed to add ghost pad")
+		s.self.Log(CAT, gst.LevelError, "Failed to add ghost pad to lkroom element")
+		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to add ghost pad to lkroom element", "failed to add ghost pad")
 		return
 	}
 
 	rtcpPad := srcTrack.GetStaticPad("src_rtcp")
 	if rtcpPad == nil {
-		s.self.Log(CAT, gst.LevelError, "Error getting rtcp src pad from srcTrack element")
-		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error getting rtcp src pad from srcTrack element", "pad is nil")
+		s.self.Log(CAT, gst.LevelError, "Failed to get rtcp src pad from srcTrack element")
+		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to get rtcp src pad from srcTrack element", "pad is nil")
 		return
 	}
 
 	rtcpGPad := gst.NewGhostPad(padname+"_rtcp", rtcpPad)
 	if rtcpGPad == nil {
-		s.self.Log(CAT, gst.LevelError, "Error creating ghost rtcp pad for srcTrack element")
-		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error creating ghost rtcp pad for srcTrack element", "ghost pad is nil")
+		s.self.Log(CAT, gst.LevelError, "Failed to create ghost rtcp pad for srcTrack element")
+		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to create ghost rtcp pad for srcTrack element", "ghost pad is nil")
 		return
 	}
 
 	if !rtcpGPad.SetActive(true) {
-		s.self.Log(CAT, gst.LevelError, "Error activating ghost rtcp pad for srcTrack element")
-		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error activating ghost rtcp pad for srcTrack element", "failed to activate ghost pad")
+		s.self.Log(CAT, gst.LevelError, "Failed to activate ghost rtcp pad for srcTrack element")
+		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to activate ghost rtcp pad for srcTrack element", "failed to activate ghost pad")
 		return
 	}
 
 	if !s.self.AddPad(rtcpGPad.Pad) {
-		s.self.Log(CAT, gst.LevelError, "Error adding ghost rtcp pad to lkroom element")
-		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error adding ghost rtcp pad to lkroom element", "failed to add ghost pad")
+		s.self.Log(CAT, gst.LevelError, "Failed to add ghost rtcp pad to lkroom element")
+		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to add ghost rtcp pad to lkroom element", "failed to add ghost pad")
 		return
 	}
 
 	if !srcTrack.SyncStateWithParent() {
-		s.self.Log(CAT, gst.LevelError, "Error syncing state of srcTrack element")
-		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error syncing state of srcTrack element", "failed to sync state")
+		s.self.Log(CAT, gst.LevelError, "Failed to sync state of srcTrack element")
+		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to sync state of srcTrack element", "failed to sync state")
 		return
 	}
 

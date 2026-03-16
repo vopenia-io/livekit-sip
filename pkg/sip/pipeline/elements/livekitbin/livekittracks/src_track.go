@@ -104,27 +104,27 @@ func (s *SrcTrack) InstanceInit(instance *glib.Object) {
 	var err error
 	s.src, err = NewSrcTrackRtp(s)
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating srctrack_rtp: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error creating srctrack_rtp", err.Error())
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create srctrack_rtp: %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to create srctrack_rtp", err.Error())
 		return
 	}
 
 	s.Queue, err = gst.NewElement("queue")
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating queue element: %v", err))
-		self.Error("Error creating queue element", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create queue element: %v", err))
+		self.Error("Failed to create queue element", err)
 		return
 	}
 
 	if err := self.AddMany(s.src, s.Queue); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error adding srctrack_rtp: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error adding srctrack_rtp", err.Error())
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add srctrack_rtp: %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to add srctrack_rtp", err.Error())
 		return
 	}
 
 	if ret := s.src.GetStaticPad("src").Link(s.Queue.GetStaticPad("sink")); ret != gst.PadLinkOK {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error linking srctrack_rtp to queue: %v", ret))
-		self.Error("Error linking srctrack_rtp to queue", errors.New("failed to link srctrack_rtp to queue"))
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link srctrack_rtp to queue: %v", ret))
+		self.Error("Failed to link srctrack_rtp to queue", errors.New("failed to link srctrack_rtp to queue"))
 		return
 	}
 
@@ -144,12 +144,12 @@ func (s *SrcTrack) InstanceInit(instance *glib.Object) {
 			return
 		}
 		if err := ptr.SendSourceInfo(); err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error sending source info: %v", err))
-			self.Error("Error sending source info", err)
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to send source info: %v", err))
+			self.Error("Failed to send source info", err)
 		}
 	}); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error connecting to send-info signal: %v", err))
-		self.Error("Error connecting to send-info signal", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to connect to send-info signal: %v", err))
+		self.Error("Failed to connect to send-info signal", err)
 		return
 	}
 }
@@ -159,14 +159,14 @@ func (s *SrcTrack) open(self *gst.Bin) gst.StateChangeReturn {
 
 	rtcpPad := self.GetStaticPad("src_rtcp")
 	if rtcpPad == nil {
-		self.Log(CAT, gst.LevelError, "Error getting src_rtcp pad from srcTrack element")
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error getting src_rtcp pad from srcTrack element", "pad is nil")
+		self.Log(CAT, gst.LevelError, "Failed to get src_rtcp pad from srcTrack element")
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to get src_rtcp pad from srcTrack element", "pad is nil")
 		return gst.StateChangeFailure
 	}
 
 	if !rtcpPad.SetActive(true) {
-		self.Log(CAT, gst.LevelError, "Error activating src_rtcp pad for srcTrack element")
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error activating src_rtcp pad for srcTrack element", "failed to activate src_rtcp pad")
+		self.Log(CAT, gst.LevelError, "Failed to activate src_rtcp pad for srcTrack element")
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to activate src_rtcp pad for srcTrack element", "failed to activate src_rtcp pad")
 		return gst.StateChangeFailure
 	}
 
@@ -390,7 +390,7 @@ func (s *SrcTrack) GetProperty(instance *glib.Object, id uint) *glib.Value {
 		enabled := s.Pub.IsEnabled()
 		val, err := glib.GValue(enabled)
 		if err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting enabled property value: %v", err))
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get enabled property value: %v", err))
 			return nil
 		}
 		return val
@@ -407,12 +407,12 @@ func (s *SrcTrack) SetProperty(instance *glib.Object, id uint, value *glib.Value
 	case "enabled":
 		enabledVal, err := value.GoValue()
 		if err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting bool value for enabled property: %v", err))
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get bool value for enabled property: %v", err))
 			return
 		}
 		enabled, ok := enabledVal.(bool)
 		if !ok {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error converting enabled property value to bool: %v", enabledVal))
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to convert enabled property value to bool: %v", enabledVal))
 			return
 		}
 		s.Pub.SetEnabled(enabled)

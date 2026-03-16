@@ -259,19 +259,19 @@ func (s *sipconn) InstanceInit(instance *glib.Object) {
 	}
 
 	if err := self.AddMany(s.RtpSrc, s.RtcpSrc, s.RtpFilter, s.RtpSink, s.RtcpFilter, s.RtcpSink); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error adding elements to bin: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error adding elements to bin", err.Error())
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add elements to bin: %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to add elements to bin", err.Error())
 		return
 	}
 
 	if err := s.RtpFilter.Link(s.RtpSink); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error linking RTP elements: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error linking RTP elements", err.Error())
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link RTP elements: %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to link RTP elements", err.Error())
 		return
 	}
 	if err := s.RtcpFilter.Link(s.RtcpSink); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error linking RTCP elements: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error linking RTCP elements", err.Error())
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link RTCP elements: %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to link RTCP elements", err.Error())
 		return
 	}
 
@@ -310,13 +310,13 @@ func (s *sipconn) SetProperty(instance *glib.Object, id uint, value *glib.Value)
 		}
 		s.props.local.IP = ip
 		if err := s.RtpSrc.SetProperty("address", s.props.local.IP.String()); err != nil {
-			self.Error("Error setting RTP source address", err)
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error setting RTP source address: %v", err))
+			self.Error("Failed to set RTP source address", err)
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set RTP source address: %v", err))
 			return
 		}
 		if err := s.RtcpSrc.SetProperty("address", s.props.local.IP.String()); err != nil {
-			self.Error("Error setting RTCP source address", err)
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error setting RTCP source address: %v", err))
+			self.Error("Failed to set RTCP source address", err)
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set RTCP source address: %v", err))
 			return
 		}
 	case "remote-ip":
@@ -333,13 +333,13 @@ func (s *sipconn) SetProperty(instance *glib.Object, id uint, value *glib.Value)
 		}
 		s.props.remote.IP = ip
 		if err := s.RtpSink.SetProperty("host", s.props.remote.IP.String()); err != nil {
-			self.Error("Error setting RTP sink host", err)
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error setting RTP sink host: %v", err))
+			self.Error("Failed to set RTP sink host", err)
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set RTP sink host: %v", err))
 			return
 		}
 		if err := s.RtcpSink.SetProperty("host", s.props.remote.IP.String()); err != nil {
-			self.Error("Error setting RTCP sink host", err)
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error setting RTCP sink host: %v", err))
+			self.Error("Failed to set RTCP sink host", err)
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set RTCP sink host: %v", err))
 			return
 		}
 	case "remote-rtp-port":
@@ -347,8 +347,8 @@ func (s *sipconn) SetProperty(instance *glib.Object, id uint, value *glib.Value)
 		val, _ := gv.(int)
 		s.props.remote.RTP = uint16(val)
 		if err := s.RtpSink.SetProperty("port", int(s.props.remote.RTP)); err != nil {
-			self.Error("Error setting RTP sink port", err)
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error setting RTP sink port: %v", err))
+			self.Error("Failed to set RTP sink port", err)
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set RTP sink port: %v", err))
 			return
 		}
 	case "remote-rtcp-port":
@@ -356,14 +356,14 @@ func (s *sipconn) SetProperty(instance *glib.Object, id uint, value *glib.Value)
 		val, _ := gv.(int)
 		s.props.remote.RTCP = uint16(val)
 		if err := s.RtcpSink.SetProperty("port", int(s.props.remote.RTCP)); err != nil {
-			self.Error("Error setting RTCP sink port", err)
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error setting RTCP sink port: %v", err))
+			self.Error("Failed to set RTCP sink port", err)
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set RTCP sink port: %v", err))
 			return
 		}
 	case "caps":
 		val, err := value.GoValue()
 		if err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting caps property value: %v", err))
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get caps property value: %v", err))
 			return
 		}
 		caps, ok := val.(*gst.Caps)
@@ -378,13 +378,13 @@ func (s *sipconn) SetProperty(instance *glib.Object, id uint, value *glib.Value)
 		s.props.caps = caps
 		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Element caps set to: %v", caps))
 		if err := s.RtpSrc.SetProperty("caps", s.props.caps.Copy().Ref()); err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error setting RTP source caps: %v", err))
-			self.Error("Error setting RTP source caps", err)
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set RTP source caps: %v", err))
+			self.Error("Failed to set RTP source caps", err)
 			return
 		}
 		if err := s.RtpFilter.SetProperty("caps", s.props.caps.Copy().Ref()); err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error setting RTP filter caps: %v", err))
-			self.Error("Error setting RTP filter caps", err)
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set RTP filter caps: %v", err))
+			self.Error("Failed to set RTP filter caps", err)
 			return
 		}
 	}
@@ -429,8 +429,8 @@ func (s *sipconn) open(self *gst.Bin) gst.StateChangeReturn {
 	var err error
 	s.rtpconn, s.rtcpconn, err = NewUDPConnPair(s.props.portStart, s.props.portEnd, s.props.local.IP)
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating UDP connection pair: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error creating UDP connection pair", err.Error())
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create UDP connection pair: %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to create UDP connection pair", err.Error())
 		return gst.StateChangeFailure
 	}
 
@@ -445,27 +445,27 @@ func (s *sipconn) open(self *gst.Bin) gst.StateChangeReturn {
 
 	gRtpSock, err := GSocketFromUDPConn(s.rtpconn)
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating GSocket from RTP UDPConn: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error creating GSocket from RTP UDPConn", err.Error())
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create GSocket from RTP UDPConn: %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to create GSocket from RTP UDPConn", err.Error())
 		return gst.StateChangeFailure
 	}
 
 	gRtcpSock, err := GSocketFromUDPConn(s.rtcpconn)
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating GSocket from RTCP UDPConn: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error creating GSocket from RTCP UDPConn", err.Error())
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create GSocket from RTCP UDPConn: %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to create GSocket from RTCP UDPConn", err.Error())
 		return gst.StateChangeFailure
 	}
 
 	if err := s.RtpSrc.SetProperty("socket", gRtpSock); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error setting socket property on RTP source: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error setting socket property on RTP source", err.Error())
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set socket property on RTP source: %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to set socket property on RTP source", err.Error())
 		return gst.StateChangeFailure
 	}
 
 	if err := s.RtcpSrc.SetProperty("socket", gRtcpSock); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error setting socket property on RTCP source: %v", err))
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Error setting socket property on RTCP source", err.Error())
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set socket property on RTCP source: %v", err))
+		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Failed to set socket property on RTCP source", err.Error())
 		return gst.StateChangeFailure
 	}
 
@@ -477,15 +477,15 @@ func (s *sipconn) close(self *gst.Bin) gst.StateChangeReturn {
 
 	if s.rtpconn != nil {
 		if err := s.rtpconn.Close(); err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error closing RTP UDP connection: %v", err))
-			self.Error("Error closing RTP UDP connection", err)
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to close RTP UDP connection: %v", err))
+			self.Error("Failed to close RTP UDP connection", err)
 		}
 		s.rtpconn = nil
 	}
 	if s.rtcpconn != nil {
 		if err := s.rtcpconn.Close(); err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error closing RTCP UDP connection: %v", err))
-			self.Error("Error closing RTCP UDP connection", err)
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to close RTCP UDP connection: %v", err))
+			self.Error("Failed to close RTCP UDP connection", err)
 		}
 		s.rtcpconn = nil
 	}

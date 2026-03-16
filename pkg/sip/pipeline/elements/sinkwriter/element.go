@@ -122,7 +122,7 @@ func (s *sinkWriter) SetProperty(self *glib.Object, id uint, value *glib.Value) 
 	case "caps":
 		val, err := value.GoValue()
 		if err != nil {
-			s.self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting caps property value: %v", err))
+			s.self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get caps property value: %v", err))
 			return
 		}
 		caps, ok := val.(*gst.Caps)
@@ -190,8 +190,8 @@ func (s *sinkWriter) closeWriter() bool {
 
 	if s.state.writer != nil {
 		if err := s.state.writer.Close(); err != nil {
-			s.self.Log(CAT, gst.LevelError, fmt.Sprintf("Error closing io.Writer: %v", err))
-			s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorWrite, "Error closing io.Writer", err.Error())
+			s.self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to close io.Writer: %v", err))
+			s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorWrite, "Failed to close io.Writer", err.Error())
 			return false
 		}
 	}
@@ -202,7 +202,7 @@ func (s *sinkWriter) Stop(self *base.GstBaseSink) bool {
 	s.self.Log(CAT, gst.LevelInfo, "stopped")
 
 	if !s.closeWriter() {
-		s.self.Log(CAT, gst.LevelError, "Error closing io.Writer")
+		s.self.Log(CAT, gst.LevelError, "Failed to close io.Writer")
 		return false
 	}
 
@@ -228,8 +228,8 @@ func (s *sinkWriter) Render(self *base.GstBaseSink, buffer *gst.Buffer) gst.Flow
 			s.self.Log(CAT, gst.LevelInfo, "reached EOF on write")
 			return gst.FlowEOS
 		}
-		s.self.Log(CAT, gst.LevelError, fmt.Sprintf("Error writing to io.Writer: %v", err))
-		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorWrite, "Error writing to io.Writer", err.Error())
+		s.self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to write to io.Writer: %v", err))
+		s.self.ErrorMessage(gst.DomainResource, gst.ResourceErrorWrite, "Failed to write to io.Writer", err.Error())
 		return gst.FlowError
 	}
 	if n < int(buffer.GetSize()) {
@@ -244,7 +244,7 @@ func (s *sinkWriter) Unlock(self *base.GstBaseSink) bool {
 	s.self.Log(CAT, gst.LevelInfo, "unlocked")
 
 	if !s.closeWriter() {
-		s.self.Log(CAT, gst.LevelError, "Error closing io.Writer")
+		s.self.Log(CAT, gst.LevelError, "Failed to close io.Writer")
 		return false
 	}
 	return true
