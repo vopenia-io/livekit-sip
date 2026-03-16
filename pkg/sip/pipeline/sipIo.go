@@ -70,7 +70,7 @@ func (sio *SipIo) Add() error {
 }
 
 func (sio *SipIo) binPadAddedRecvRtpSrc(_ *gst.Element, pad *gst.Pad) {
-	sio.log.Debugw("RTPBIN PAD ADDED", "pad", pad.GetName())
+	sio.log.Debugw("RTP bin pad added", "pad", pad.GetName())
 
 	padName := pad.GetName()
 	if !strings.HasPrefix(padName, "recv_rtp_src_") {
@@ -100,7 +100,7 @@ func (sio *SipIo) binPadAddedRecvRtpSrc(_ *gst.Element, pad *gst.Pad) {
 }
 
 func (sio *SipIo) binPadAddedSendRtpSrc(_ *gst.Element, pad *gst.Pad) {
-	sio.log.Debugw("SIP RTPBIN PAD ADDED", "pad", pad.GetName())
+	sio.log.Debugw("SIP RTP bin pad added", "pad", pad.GetName())
 	padName := pad.GetName()
 
 	if !strings.HasPrefix(padName, "send_rtp_src_") {

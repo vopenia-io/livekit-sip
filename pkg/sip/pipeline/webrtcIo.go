@@ -84,7 +84,7 @@ func (wio *WebrtcIo) Add() error {
 }
 
 func (wio *WebrtcIo) binPadAdded(_ *gst.Element, pad *gst.Pad) {
-	wio.log.Debugw("RTPBIN PAD ADDED", "pad", pad.GetName())
+	wio.log.Debugw("RTP bin pad added", "pad", pad.GetName())
 	padName := pad.GetName()
 	if !strings.HasPrefix(padName, "recv_rtp_src_") {
 		return
@@ -117,7 +117,7 @@ func (wio *WebrtcIo) binPadAdded(_ *gst.Element, pad *gst.Pad) {
 }
 
 func (wio *WebrtcIo) binPadRemoved(_ *gst.Element, pad *gst.Pad) {
-	wio.log.Debugw("RTPBIN PAD REMOVED", "pad", pad.GetName())
+	wio.log.Debugw("RTP bin pad removed", "pad", pad.GetName())
 	padName := pad.GetName()
 	if !strings.HasPrefix(padName, "recv_rtp_src_") {
 		return
