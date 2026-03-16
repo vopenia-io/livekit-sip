@@ -78,12 +78,12 @@ func (c *IOManager) handleSipControllerPadAdded(_ *gst.Element, pad *gst.Pad) {
 
 	destPad := c.pipeline.WebrtcIo.LivekitBin.GetRequestPad(fmt.Sprintf("send_rtp_sink_%d", session))
 	if destPad == nil {
-		c.log.Errorw("Failed to get request pad", nil, "pad", fmt.Sprintf("send_rtp_sink_%d", session))
+		c.log.Warnw("Failed to get request pad", nil, "pad", fmt.Sprintf("send_rtp_sink_%d", session))
 		return
 	}
 
 	if ret := pad.Link(destPad); ret != gst.PadLinkOK {
-		c.log.Errorw("Failed to link pads", nil, "result", ret, "src_pad", pad.GetName(), "dest_pad", destPad.GetName())
+		c.log.Errorw("Failed to link pads", fmt.Errorf("pad link result: %v", ret), "src_pad", pad.GetName(), "dest_pad", destPad.GetName())
 		return
 	}
 }
@@ -104,12 +104,12 @@ func (c *IOManager) handleLivekitCompositorPadAdded(_ *gst.Element, pad *gst.Pad
 
 	destPad := c.pipeline.SipIo.SipRtpBin.GetRequestPad(fmt.Sprintf("send_rtp_sink_%d", session))
 	if destPad == nil {
-		c.log.Errorw("Failed to get request pad", nil, "pad", fmt.Sprintf("send_rtp_sink_%d", session))
+		c.log.Warnw("Failed to get request pad", nil, "pad", fmt.Sprintf("send_rtp_sink_%d", session))
 		return
 	}
 
 	if ret := pad.Link(destPad); ret != gst.PadLinkOK {
-		c.log.Errorw("Failed to link pads", nil, "result", ret, "src_pad", pad.GetName(), "dest_pad", destPad.GetName())
+		c.log.Errorw("Failed to link pads", fmt.Errorf("pad link result: %v", ret), "src_pad", pad.GetName(), "dest_pad", destPad.GetName())
 		return
 	}
 }

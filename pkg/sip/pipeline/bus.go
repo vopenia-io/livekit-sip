@@ -30,7 +30,7 @@ func (p *Pipeline) SetupBus() {
 		success := p.onMessage(msg)
 		return success
 	}) {
-		p.Log.Errorw("Failed to set bus to non-flushing", nil)
+		p.Log.Errorw("Failed to add bus watch", errors.New("bus watch add failed"))
 	}
 }
 

@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"reflect"
@@ -160,7 +161,7 @@ func (p *Pipeline) Close() error {
 	}
 
 	if !closed {
-		p.Log.Errorw("Failed to set pipeline to null state after breaking clock", nil)
+		p.Log.Errorw("Failed to set pipeline to null state after breaking clock", errors.New("timeout waiting for null state"))
 		return fmt.Errorf("failed to set pipeline to null state")
 	}
 

@@ -84,7 +84,7 @@ func (sio *SipIo) binPadAddedRecvRtpSrc(_ *gst.Element, pad *gst.Pad) {
 
 	destPad := sio.pipeline.IOManager.SipController.GetRequestPad(fmt.Sprintf("recv_rtp_sink_%d_%d_%d", session, ssrc, payloadType))
 	if destPad == nil {
-		sio.log.Errorw("Track rejected by remote, no matching pad available in SIP IO bin", nil, "pad", fmt.Sprintf("recv_rtp_sink_%d_%d_%d", session, ssrc, payloadType))
+		sio.log.Warnw("Track rejected by remote, no matching pad available in SIP IO bin", nil, "pad", fmt.Sprintf("recv_rtp_sink_%d_%d_%d", session, ssrc, payloadType))
 		return
 	}
 
@@ -270,7 +270,7 @@ func (sio *SipIo) PtMap(_ *gst.Element, pt uint32) *gst.Caps {
 	}
 	caps, ok := val.(*gst.Caps)
 	if !ok {
-		sio.log.Errorw("Invalid return type from pt-map signal", nil, "type", fmt.Sprintf("%T", val))
+		sio.log.Errorw("Invalid return type from pt-map signal", fmt.Errorf("expected *gst.Caps, got %T", val))
 		return nil
 	}
 	return caps
