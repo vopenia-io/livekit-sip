@@ -96,23 +96,7 @@ func (s *ActiveSelector) HandleTrackSelect(self *gst.Bin, pad *gst.Pad, curPad *
 }
 
 func (s *ActiveSelector) RequestTrackKeyframe(self *gst.Bin, pad *gst.Pad, ssrc uint32) error {
-	// self.Log(CAT, gst.LevelInfo, fmt.Sprintf("RequestTrackKeyframe called for ssrc %d", ssrc))
-
-	// fkuStruct := gst.NewStructure("GstForceKeyUnit")
-	// runtime.SetFinalizer(fkuStruct, nil)
-	// fkuStruct.SetValue("ssrc", ssrc)
-	// fkuStruct.SetValue("running-time", gst.ClockTimeNone)
-	// fkuStruct.SetValue("all-headers", false)
-	// fkuStruct.SetValue("count", uint(0))
-
-	// fkuEvent := gst.NewCustomEvent(gst.EventTypeCustomUpstream, fkuStruct)
-
-	// if !pad.SendEvent(fkuEvent.Ref()) {
-	// 	self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to send GstForceKeyUnit event upstream for ssrc %d", ssrc))
-	// 	return fmt.Errorf("failed to send GstForceKeyUnit event upstream for ssrc %d", ssrc)
-	// }
-	// self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Sent GstForceKeyUnit event upstream for ssrc %d", ssrc))
-
+	// TODO: implement GstForceKeyUnit event upstream for keyframe requests
 	return nil
 }
 

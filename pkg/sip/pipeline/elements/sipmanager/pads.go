@@ -62,48 +62,6 @@ func (s *SipManager) mediaGhostPadAddSrc(self *gst.Bin, sipMedia *GstSipMedia, i
 		return fmt.Errorf("failed to add RTCP ghost pad to bin")
 	}
 
-	// // sink pads
-	// sinkRtpPadName := fmt.Sprintf("sink_%s_%d", kind, id)
-	// sinkRtcpPadName := fmt.Sprintf("sink_rtcp_%s_%d", kind, id)
-
-	// sinkRtpPad := sipMedia.Element.GetStaticPad("sink")
-	// if sinkRtpPad == nil {
-	// 	self.Log(CAT, gst.LevelError, "Failed to get RTP sink pad")
-	// 	return fmt.Errorf("failed to get RTP sink pad")
-	// }
-	// sinkRtpGhostPad := gst.NewGhostPad(sinkRtpPadName, sinkRtpPad)
-	// if sinkRtpGhostPad == nil {
-	// 	self.Log(CAT, gst.LevelError, "Failed to create RTP sink ghost pad")
-	// 	return fmt.Errorf("failed to create RTP sink ghost pad")
-	// }
-	// if !sinkRtpGhostPad.SetActive(true) {
-	// 	self.Log(CAT, gst.LevelError, "Failed to activate RTP sink ghost pad")
-	// 	return fmt.Errorf("failed to activate RTP sink ghost pad")
-	// }
-	// if !self.AddPad(sinkRtpGhostPad.Pad) {
-	// 	self.Log(CAT, gst.LevelError, "Failed to add RTP sink ghost pad to bin")
-	// 	return fmt.Errorf("failed to add RTP sink ghost pad to bin")
-	// }
-
-	// sinkRtcpPad := sipMedia.Element.GetStaticPad("sink_rtcp")
-	// if sinkRtcpPad == nil {
-	// 	self.Log(CAT, gst.LevelError, "Failed to get RTCP sink pad")
-	// 	return fmt.Errorf("failed to get RTCP sink pad")
-	// }
-	// sinkRtcpGhostPad := gst.NewGhostPad(sinkRtcpPadName, sinkRtcpPad)
-	// if sinkRtcpGhostPad == nil {
-	// 	self.Log(CAT, gst.LevelError, "Failed to create RTCP sink ghost pad")
-	// 	return fmt.Errorf("failed to create RTCP sink ghost pad")
-	// }
-	// if !sinkRtcpGhostPad.SetActive(true) {
-	// 	self.Log(CAT, gst.LevelError, "Failed to activate RTCP sink ghost pad")
-	// 	return fmt.Errorf("failed to activate RTCP sink ghost pad")
-	// }
-	// if !self.AddPad(sinkRtcpGhostPad.Pad) {
-	// 	self.Log(CAT, gst.LevelError, "Failed to add RTCP sink ghost pad to bin")
-	// 	return fmt.Errorf("failed to add RTCP sink ghost pad to bin")
-	// }
-
 	return nil
 }
 
@@ -218,7 +176,7 @@ func (s *SipManager) RequestNewPadSinkRtp(self *gst.Bin, templ *gst.PadTemplate,
 	}
 
 	// TODO: trigger media creation with a reinvite.
-	// should we create the pad here or durring the answer?
+	// should we create the pad here or during the answer?
 	self.Log(CAT, gst.LevelWarning, "No existing media for requested pad, dynamic media creation not implemented yet")
 
 	return nil

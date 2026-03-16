@@ -150,19 +150,6 @@ func (*SipManager) ClassInit(klass *glib.ObjectClass) {
 		glib.TYPE_STRING,
 		glib.TYPE_STRING)
 
-	// gst.SignalNew(class.Type(),
-	// 	"on-remote-answer",
-	// 	gst.SignalRunLast,
-	// 	glib.TYPE_NONE,
-	// 	glib.TYPE_STRING)
-
-	// gst.SignalNew(class.Type(),
-	// 	"on-local-offer",
-	// 	gst.SignalRunLast,
-	// 	glib.TYPE_STRING,
-	// 	glib.TYPE_NONE,
-	// )
-
 	gst.SignalNew(class.Type(),
 		"pt-map",
 		gst.SignalRunLast,
@@ -254,7 +241,6 @@ func (s *SipManager) SetProperty(instance *glib.Object, id uint, value *glib.Val
 }
 
 func (s *SipManager) GetProperty(instance *glib.Object, id uint) *glib.Value {
-	// self := gst.ToGstBin(instance)
 	param := properties[id]
 	switch param.Name() {
 	case "ip":
@@ -264,21 +250,9 @@ func (s *SipManager) GetProperty(instance *glib.Object, id uint) *glib.Value {
 	return nil
 }
 
-const LOCAL_SDP_TEMPLATE = `v=0
-o=gateway 999 999 IN IP4 %s
-s=-
-c=IN IP4 %s
-t=0 0
-`
-
 func (s *SipManager) Constructed(instance *glib.Object) {
 	self := gst.ToGstBin(instance)
 	self.Log(CAT, gst.LevelDebug, "Constructed")
-
-	// self.Log(CAT, gst.LevelDebug, "Generating local SDP with ip "+s.settings.IP.String())
-
-	// localSdp := []byte(fmt.Sprintf(LOCAL_SDP_TEMPLATE, s.settings.IP.String(), s.settings.IP.String()))
-
 }
 
 func (s *SipManager) open(self *gst.Bin) gst.StateChangeReturn {

@@ -9,46 +9,6 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
-// type ParticipantCallback struct {
-// 	// for local participant
-// 	OnLocalTrackPublished   func(publication *LocalTrackPublication, lp *LocalParticipant)
-// 	OnLocalTrackUnpublished func(publication *LocalTrackPublication, lp *LocalParticipant)
-
-// 	// for all participants
-// 	OnTrackMuted               func(pub TrackPublication, p Participant)
-// 	OnTrackUnmuted             func(pub TrackPublication, p Participant)
-// 	OnMetadataChanged          func(oldMetadata string, p Participant)
-// 	OnAttributesChanged        ParticipantAttributesChangedFunc
-// 	OnIsSpeakingChanged        func(p Participant)
-// 	OnConnectionQualityChanged func(update *livekit.ConnectionQualityInfo, p Participant)
-
-// 	// for remote participants
-// 	OnTrackSubscribed         func(track *webrtc.TrackRemote, publication *RemoteTrackPublication, rp *RemoteParticipant)
-// 	OnTrackUnsubscribed       func(track *webrtc.TrackRemote, publication *RemoteTrackPublication, rp *RemoteParticipant)
-// 	OnTrackSubscriptionFailed func(sid string, rp *RemoteParticipant)
-// 	OnTrackPublished          func(publication *RemoteTrackPublication, rp *RemoteParticipant)
-// 	OnTrackUnpublished        func(publication *RemoteTrackPublication, rp *RemoteParticipant)
-// 	OnDataReceived            func(data []byte, params DataReceiveParams) // Deprecated: Use OnDataPacket instead
-// 	OnDataPacket              func(data DataPacket, params DataReceiveParams)
-// 	OnTranscriptionReceived   func(transcriptionSegments []*TranscriptionSegment, p Participant, publication TrackPublication)
-// }
-
-// type RoomCallback struct {
-// 	OnDisconnected            func()
-// 	OnDisconnectedWithReason  func(reason DisconnectionReason)
-// 	OnParticipantConnected    func(*RemoteParticipant)
-// 	OnParticipantDisconnected func(*RemoteParticipant)
-// 	OnActiveSpeakersChanged   func([]Participant)
-// 	OnRoomMetadataChanged     func(metadata string)
-// 	OnRoomMoved               func(roomName string, token string)
-// 	OnReconnecting            func()
-// 	OnReconnected             func()
-// 	OnLocalTrackSubscribed    func(publication *LocalTrackPublication, lp *LocalParticipant)
-
-// 	// participant events are sent to the room as well
-// 	ParticipantCallback
-// }
-
 func (s *lkroom) toCallbacks() *lksdk.RoomCallback {
 	return &lksdk.RoomCallback{
 		OnDisconnected:            s.OnDisconnected,
@@ -83,11 +43,6 @@ func (s *lkroom) toCallbacks() *lksdk.RoomCallback {
 func (s *lkroom) OnDisconnected() {
 	s.self.Log(CAT, gst.LevelInfo, "Room disconnected")
 	s.callbacks.OnDisconnected()
-	// if err := s.self.SetState(gst.StateNull); err != nil {
-	// 	s.self.Log(CAT, gst.LevelError, fmt.Sprintf("Could not set state to NULL after reconnection: %v", err))
-	// }
-	// s.self = nil
-	// s.SinkRTCP = nil
 }
 
 func (s *lkroom) OnDisconnectedWithReason(reason lksdk.DisconnectionReason) {
@@ -107,7 +62,6 @@ func (s *lkroom) OnParticipantDisconnected(p *lksdk.RemoteParticipant) {
 
 func (s *lkroom) OnActiveSpeakersChanged(participants []lksdk.Participant) {
 	s.self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Active speakers changed: %d participants", len(participants)))
-	// s.SelectActiveSpeaker(participants) // TODO: enable back
 	s.callbacks.OnActiveSpeakersChanged(participants)
 }
 

@@ -129,25 +129,6 @@ func (wio *WebrtcIo) binPadRemoved(_ *gst.Element, pad *gst.Pad) {
 		return
 	}
 	wio.pipeline.IOManager.LivekitController.ReleaseRequestPad(peer)
-
-	// var session, ssrc, payloadType int
-	// if _, err := fmt.Sscanf(padName, "recv_rtp_src_%d_%d_%d", &session, &ssrc, &payloadType); err != nil {
-	// 	wio.log.Warnw("Invalid RTP pad format", err, "pad", padName)
-	// 	return
-	// }
-
-	// switch livekit.TrackSource(session) {
-	// case livekit.TrackSource_CAMERA:
-	// 	session = int(iomanager.SessionKindCamera)
-	// case livekit.TrackSource_MICROPHONE:
-	// 	session = int(iomanager.SessionKindMicrophone)
-	// default:
-	// 	wio.log.Warnw("Unknown track source in RTP pad name", nil, "session", session, "pad", padName)
-	// 	return
-	// }
-
-	// sinkPad := wio.pipeline.IOManager.LkController.GetStaticPad(fmt.Sprintf("recv_rtp_sink_%d_%d_%d", session, ssrc, payloadType))
-	// wio.pipeline.IOManager.LkController.ReleaseRequestPad()
 }
 
 // Link implements [GstChain].

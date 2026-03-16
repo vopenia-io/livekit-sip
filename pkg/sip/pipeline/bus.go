@@ -17,7 +17,6 @@ func (p *Pipeline) SetupBus() {
 	p.bus = p.Pipeline().GetPipelineBus()
 	p.Log.Debugw("Setting bus to non-flushing")
 	p.bus.SetFlushing(false)
-	// p.bus.SetSyncHandler(BusFilter)
 
 	go p.DumpDot()
 
@@ -55,7 +54,6 @@ func (p *Pipeline) CloseBus() {
 }
 
 func (p *Pipeline) onMessage(msg *gst.Message) bool {
-	// p.Log.Infow("Received bus message", "type", msg.Type())
 	switch msg.Type() {
 	case gst.MessageError:
 		gErr := msg.ParseError()

@@ -9,8 +9,6 @@ import (
 func MakeCallback[Callback any]() (Callback, reflect.Value, reflect.Value) {
 	typ := reflect.TypeFor[Callback]()
 
-	// log.Debugw("Making callback", "type", typ)
-
 	if typ.Kind() != reflect.Func {
 		return *new(Callback), reflect.Value{}, reflect.Value{}
 	}
@@ -18,7 +16,6 @@ func MakeCallback[Callback any]() (Callback, reflect.Value, reflect.Value) {
 	inT := typ.NumIn()
 	outT := typ.NumOut()
 
-	// log.Debugw("Making callback", "numInputs", inT)
 	argStructFields := make([]reflect.StructField, inT)
 	for i := 0; i < inT; i++ {
 		argStructFields[i] = reflect.StructField{
@@ -28,12 +25,10 @@ func MakeCallback[Callback any]() (Callback, reflect.Value, reflect.Value) {
 	}
 
 	argStructType := reflect.StructOf(argStructFields)
-	// log.Debugw("Created args struct type", "type", argStructType)
 
 	argChanType := reflect.ChanOf(reflect.BothDir, argStructType)
 	argChan := reflect.MakeChan(argChanType, 1)
 
-	// log.Debugw("Making callback", "numOutputs", outT)
 	retStuctFields := make([]reflect.StructField, outT)
 	for i := 0; i < outT; i++ {
 		retStuctFields[i] = reflect.StructField{

@@ -157,23 +157,6 @@ func (e *G711OpusDtmf) InstanceInit(instance *glib.Object) {
 		return
 	}
 
-	// e.RtpDtmlDepay, err = gst.NewElement("rtpdtmfdepay")
-	// if err != nil {
-	// 	self.Error("Failed to create rtpdtmfdepay element", err)
-	// 	self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create rtpdtmfdepay element: %v", err))
-	// 	return
-	// }
-
-	// e.FakeSink, err = gst.NewElementWithProperties("fakesink", map[string]interface{}{
-	// 	"sync":  false,
-	// 	"async": false,
-	// })
-	// if err != nil {
-	// 	self.Error("Failed to create fakesink element", err)
-	// 	self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create fakesink element: %v", err))
-	// 	return
-	// }
-
 	self.AddMany(
 		e.Identity,
 		e.AudioConvert,

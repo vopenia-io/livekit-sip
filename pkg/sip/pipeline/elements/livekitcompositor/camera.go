@@ -87,7 +87,6 @@ func (e *LivekitCompositor) initCamera(self *gst.Bin) error {
 	if src0 == nil {
 		return fmt.Errorf("failed to request new source pad from patchbay")
 	}
-	// sink1name := fmt.Sprintf("sink_%d", lo.Must(strconv.Atoi(strings.TrimPrefix(src1.GetName(), "src_"))))
 	sink0 := e.LivekitCompositorCamera.Compositor.GetRequestPad("sink_0")
 	if sink0 == nil {
 		return fmt.Errorf("failed to request new sink pad from compositor")
@@ -362,60 +361,6 @@ func (e *LivekitCompositor) findCameraPatchBayPadForParticipant(self *gst.Bin, p
 	return nil
 }
 
-// func (e *LivekitCompositor) findCameraPatchBayPadForParticipant(self *gst.Bin, participantSID string) *gst.Pad {
-// 	if _, ok := e.participants[participantSID]; !ok {
-// 		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Participant with SID %s not found when looking for camera patchbay pad", participantSID))
-// 		return nil
-// 	}
-
-// 	sinks, err := self.GetSinkPads()
-// 	if err != nil {
-// 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get sink pads from patchbay: %v", err))
-// 		return nil
-// 	}
-
-// 	sinks = lo.Filter(sinks, func(sink *gst.Pad, i int) bool {
-// 		return strings.HasPrefix(sink.GetName(), fmt.Sprintf("sink_%d_", livekit.TrackSource_CAMERA))
-// 	})
-
-// 	for _, sink := range sinks {
-// 		if sink.GetName() == "sink_0" {
-// 			continue // skip the fallback pad
-// 		}
-// 		info, err := livekittracks.PadGetTrackSourceInfo(sink)
-// 		if err != nil {
-// 			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to get track source info from pad %s: %v", sink.GetName(), err))
-// 			continue
-// 		}
-
-// 		if info.Source != livekit.TrackSource_CAMERA {
-// 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Pad %s is not a camera source, skipping", sink.GetName()))
-// 			continue
-// 		}
-
-// 		if info.ParticipantSID == participantSID {
-// 			continue
-// 		}
-
-// 		gpad := sink.AsGhostPad()
-// 		if gpad == nil {
-// 			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Pad %s is not a ghost pad, skipping", sink.GetName()))
-// 			continue
-// 		}
-
-// 		target := gpad.GetTarget()
-// 		if target == nil {
-// 			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Pad %s has no target, skipping", sink.GetName()))
-// 			continue
-// 		}
-
-// 		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Found camera patchbay pad %s for participant SID %s", target.GetName(), participantSID))
-// 		return target
-// 	}
-// 	self.Log(CAT, gst.LevelWarning, fmt.Sprintf("No camera patchbay pad found for participant SID %s", participantSID))
-// 	return nil
-// }
-
 func (e *LivekitCompositor) cleanupCamera(self *gst.Bin) {
 	if e.LivekitCompositorCamera == nil {
 		return
@@ -425,33 +370,4 @@ func (e *LivekitCompositor) cleanupCamera(self *gst.Bin) {
 	if sink0 != nil {
 		e.LivekitCompositorCamera.PatchBay.ReleaseRequestPad(sink0)
 	}
-
-	// sinks, err := e.LivekitCompositorCamera.PatchBay.GetSinkPads()
-	// if err != nil {
-	// 	self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to get sink pads from patchbay during camera cleanup: %v", err))
-	// 	return
-	// }
-
-	// for _, sink := range sinks {
-	// 	src := sink.GetPeer()
-	// 	e.LivekitCompositorCamera.PatchBay.ReleaseRequestPad(sink)
-	// 	if src != nil {
-	// 		e.LivekitCompositorCamera.Compositor.ReleaseRequestPad(src)
-	// 	}
-	// }
-
-	// sources, err := e.LivekitCompositorCamera.PatchBay.GetSrcPads()
-	// if err != nil {
-	// 	self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to get src pads from patchbay during camera cleanup: %v", err))
-	// 	return
-	// }
-
-	// for _, source := range sources {
-	// 	sink := source.GetPeer()
-	// 	e.LivekitCompositorCamera.Compositor.ReleaseRequestPad(source)
-	// 	if sink != nil {
-	// 		e.LivekitCompositorCamera.PatchBay.ReleaseRequestPad(sink)
-	// 	}
-	// }
-
 }

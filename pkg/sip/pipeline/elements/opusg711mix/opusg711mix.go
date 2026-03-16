@@ -76,10 +76,6 @@ func (e *OpusG711Mix) InstanceInit(instance *glib.Object) {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create audiomixer element: %v", err))
 		return
 	}
-	// e.AudioMixer.GetStaticPad("src").AddProbe(gst.PadProbeTypeBlockDownstream, func(p *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
-	// 	return e.G711Setup(self, p, info) // TODO: do that cause any leaks?
-	// })
-
 	e.Identity, err = gst.NewElement("identity")
 	if err != nil {
 		self.Error("Failed to create identity element", err)
