@@ -9,7 +9,6 @@ import (
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/iomanager"
 )
 
 func NewWebrtcIo(log logger.Logger, parent *Pipeline) *WebrtcIo {
@@ -63,7 +62,7 @@ func (wio *WebrtcIo) Create() error {
 	if _, err := wio.LivekitBin.Connect("active-speakers-changed", func(_ *gst.Element, structure *gst.Structure) {
 		ptr := wiow.Value()
 		if ptr != nil {
-			if _, err := ptr.pipeline.LkController.Emit("active-speakers-changed", structure); err != nil {
+			if _, err := ptr.pipeline.LivekitController.Emit("active-speakers-changed", structure); err != nil {
 				ptr.log.Errorw("Failed to emit active-speakers-changed signal from livekitbin to io manager", err)
 			}
 		}
@@ -99,15 +98,13 @@ func (wio *WebrtcIo) binPadAdded(_ *gst.Element, pad *gst.Pad) {
 
 	switch livekit.TrackSource(session) {
 	case livekit.TrackSource_CAMERA:
-		session = int(iomanager.SessionKindCamera)
 	case livekit.TrackSource_MICROPHONE:
-		session = int(iomanager.SessionKindMicrophone)
 	default:
 		wio.log.Warnw("Unknown track source in RTP pad name", nil, "session", session, "pad", padName)
 		return
 	}
 
-	sinkPad := wio.pipeline.IOManager.LkController.GetRequestPad(fmt.Sprintf("recv_rtp_sink_%d_%d_%d", session, ssrc, payloadType))
+	sinkPad := wio.pipeline.IOManager.LivekitController.GetRequestPad(fmt.Sprintf("recv_rtp_sink_%d_%d_%d", session, ssrc, payloadType))
 	if err := LinkPad(
 		pad,
 		sinkPad,
@@ -131,7 +128,7 @@ func (wio *WebrtcIo) binPadRemoved(_ *gst.Element, pad *gst.Pad) {
 		wio.log.Warnw("Failed to get peer pad from QData", nil, "pad", padName)
 		return
 	}
-	wio.pipeline.IOManager.LkController.ReleaseRequestPad(peer)
+	wio.pipeline.IOManager.LivekitController.ReleaseRequestPad(peer)
 
 	// var session, ssrc, payloadType int
 	// if _, err := fmt.Sscanf(padName, "recv_rtp_src_%d_%d_%d", &session, &ssrc, &payloadType); err != nil {

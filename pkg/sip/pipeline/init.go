@@ -55,6 +55,7 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/h264vp8"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/iomanager"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitcompositor"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/opusg711"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/opusg711mix"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sinkwriter"
@@ -160,6 +161,10 @@ func init() {
 
 	if !videoh264.Register() {
 		panic("Failed to register video-h264")
+	}
+
+	if !livekitcompositor.Register() {
+		panic("Failed to register livekitcompositor")
 	}
 
 	MainLoop = glib.NewMainLoop(glib.MainContextDefault(), false)

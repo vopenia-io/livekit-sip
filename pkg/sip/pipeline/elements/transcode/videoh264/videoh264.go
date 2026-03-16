@@ -15,13 +15,13 @@ var CAT = gst.NewDebugCategory(
 
 var properties = []*glib.ParamSpec{
 	glib.NewUintParam(
-		"h264-pt",
+		"pt",
 		"H264 Payload Type",
 		"The payload type of H264 RTP stream",
 		0,
 		127,
 		96,
-		glib.ParameterWritable,
+		glib.ParameterWritable|glib.ParameterReadable,
 	),
 }
 
@@ -126,7 +126,7 @@ func (e *VideoH264) SetProperty(instance *glib.Object, id uint, value *glib.Valu
 	self := gst.ToGstBin(instance)
 	param := properties[id]
 	switch param.Name() {
-	case "h264-pt":
+	case "pt":
 		gv, _ := value.GoValue()
 		val, _ := gv.(uint)
 		if val > 127 {
@@ -137,6 +137,28 @@ func (e *VideoH264) SetProperty(instance *glib.Object, id uint, value *glib.Valu
 		if err := e.RtpH264Pay.SetProperty("pt", val); err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set H264 PT: %v", err))
 		}
+	}
+}
+
+func (e *VideoH264) GetProperty(instance *glib.Object, id uint) *glib.Value {
+	self := gst.ToGstBin(instance)
+	param := properties[id]
+	switch param.Name() {
+	case "pt":
+		val, err := e.RtpH264Pay.GetProperty("pt")
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get H264 PT: %v", err))
+			return nil
+		}
+		gv, err := glib.GValue(val)
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to convert H264 PT to GValue: %v", err))
+			return nil
+		}
+		return gv
+	default:
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown property ID: %d", id))
+		return nil
 	}
 }
 

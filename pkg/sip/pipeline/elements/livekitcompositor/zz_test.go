@@ -15,15 +15,12 @@ import (
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin/livekittracks"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitcompositor"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitcompositor3/patchbay"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/testutils"
 )
 
 func TestMain(m *testing.M) {
 	glib.SetEnv("GST_DEBUG", glib.GetEnv("GST_DEBUG")+",livekit_compositor:5", true)
 	gst.Init(nil)
-	patchbay.CAT = gst.NewDebugCategory("livekit_patchbay", gst.DebugColorNone, "Patchbay")
-	gst.RegisterElement(nil, "patchbay", gst.RankNone, &patchbay.Patchbay{}, gst.ExtendsBin)
 	livekitcompositor.Register()
 	os.Exit(m.Run())
 }

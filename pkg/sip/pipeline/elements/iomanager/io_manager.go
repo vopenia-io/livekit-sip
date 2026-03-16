@@ -4,30 +4,6 @@ import (
 	"github.com/go-gst/go-gst/gst"
 )
 
-type SessionKind int
-
-const (
-	SessionKindMicrophone SessionKind = iota
-	SessionKindCamera
-	SessionKindScreenShare
-	SessionKindScreenShareAudio
-)
-
-func (s SessionKind) String() string {
-	switch s {
-	case SessionKindMicrophone:
-		return "microphone"
-	case SessionKindCamera:
-		return "camera"
-	case SessionKindScreenShare:
-		return "screenshare"
-	case SessionKindScreenShareAudio:
-		return "screenshare-audio"
-	default:
-		return "unknown"
-	}
-}
-
 var CAT = gst.NewDebugCategory(
 	"io_manager",
 	gst.DebugColorNone,

@@ -9,7 +9,7 @@ import (
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin/livekittracks"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitcompositor3/patchbay"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitcompositor/patchbay"
 )
 
 var CAT = gst.NewDebugCategory(
@@ -75,6 +75,8 @@ func (e *LivekitCompositor) ClassInit(klass *glib.ObjectClass) {
 		gst.PadPresenceSometimes,
 		gst.NewAnyCaps(),
 	))
+
+	class.InstallProperties(properties)
 }
 
 func (e *LivekitCompositor) InstanceInit(instance *glib.Object) {
@@ -185,7 +187,7 @@ func (e *LivekitCompositor) requestNewSinkPad(self *gst.Bin, templ *gst.PadTempl
 	wself := glib.WeakRefInit(self)
 	eweak := weak.Make(e)
 
-	livekittracks.PadOnTrackSourceInfo(pad, func(info livekittracks.TrackSourceInfo) {
+	livekittracks.PadOnTrackSourceInfo(pad, func(pad *gst.Pad, info livekittracks.TrackSourceInfo) {
 		e := eweak.Value()
 		if e == nil {
 			return

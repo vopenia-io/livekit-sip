@@ -7,7 +7,7 @@ import (
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/livekit"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin/tracks"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin/livekittracks"
 )
 
 func (e *LivekitBin) setupRtpBinSignals(self *gst.Bin) {
@@ -153,7 +153,7 @@ func (e *LivekitBin) OnElementRemoved(element *gst.Element) {
 	}
 
 	name := element.GetName()
-	if !strings.HasPrefix(name, tracks.SrcTrackNamePrefix) {
+	if !strings.HasPrefix(name, livekittracks.SrcTrackNamePrefix) {
 		return
 	}
 	e.CleanupSrcTrack(self, element, name)

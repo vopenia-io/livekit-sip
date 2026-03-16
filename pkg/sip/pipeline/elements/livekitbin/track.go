@@ -8,7 +8,7 @@ import (
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin/tracks"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin/livekittracks"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -35,7 +35,7 @@ func (e *LivekitBin) PublishTrack(self *gst.Bin, pad *gst.Pad, pname string) {
 		return
 	}
 
-	element, _, err := tracks.NewSinkTrack(e.room.LocalParticipant, livekit.TrackSource(session))
+	element, _, err := livekittracks.NewSinkTrack(e.room.LocalParticipant, livekit.TrackSource(session))
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating sink track for pad name %s: %v", pname, err))
 		return
@@ -56,7 +56,7 @@ func (e *LivekitBin) PublishTrack(self *gst.Bin, pad *gst.Pad, pname string) {
 		}
 	} else {
 		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("LivekitBin not joined room yet, deferring publish for pad name: %s", pname))
-		probe := sinkPad.AddProbe(gst.PadProbeTypeBuffer|gst.PadProbeTypeBufferList, tracks.PadProbeDrop)
+		probe := sinkPad.AddProbe(gst.PadProbeTypeBuffer|gst.PadProbeTypeBufferList, livekittracks.PadProbeDrop)
 		element.SetLockedState(true)
 		welement := glib.WeakRefInit(element)
 		e.wg.Add(1)
@@ -220,7 +220,7 @@ func (e *LivekitBin) SubscribeTrack(track *webrtc.TrackRemote, publication *lksd
 		}
 	}
 
-	if element, err := self.GetElementByName(tracks.SrcTrackName(publication.SID())); err == nil {
+	if element, err := self.GetElementByName(livekittracks.SrcTrackName(publication.SID())); err == nil {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Track with SID %s already exists", publication.SID()))
 		if err := element.SetProperty("subscribed", true); err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error setting subscribed property for track %s: %v", track.ID(), err))
@@ -229,12 +229,12 @@ func (e *LivekitBin) SubscribeTrack(track *webrtc.TrackRemote, publication *lksd
 		return
 	}
 
-	element, err := tracks.NewSrcTrack(track, publication, rp)
+	element, err := livekittracks.NewSrcTrack(track, publication, rp)
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating source track for track %s: %v", track.ID(), err))
 		return
 	}
-	element.GetStaticPad("src").AddProbe(gst.PadProbeTypeEventDownstream, tracks.PadProbeDropEOS)
+	element.GetStaticPad("src").AddProbe(gst.PadProbeTypeEventDownstream, livekittracks.PadProbeDropEOS)
 	if err := self.Add(element); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error adding source track for track %s: %v", track.ID(), err))
 		self.Error(fmt.Sprintf("Error adding source track for track %s", track.ID()), err)
@@ -305,7 +305,7 @@ func (e *LivekitBin) ForwardSubscribeTrack(self *gst.Bin, pad *gst.Pad, pname st
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to find track source element for pad name: %s", pname))
 		return
 	}
-	src, ok := gst.SubclassFromElement[*tracks.SrcTrack](srcElem)
+	src, ok := gst.SubclassFromElement[*livekittracks.SrcTrack](srcElem)
 	if !ok {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to cast track source element to SrcTrack for pad name: %s", pname))
 		return
@@ -320,14 +320,14 @@ func (e *LivekitBin) ForwardSubscribeTrack(self *gst.Bin, pad *gst.Pad, pname st
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating ghost pad for pad name %s", pname))
 		return
 	}
-	gpad.SetQData(tracks.QDataSrcTrackSource, sid)
+	gpad.SetQData(livekittracks.QDataSrcTrackSource, sid)
 
 	srcPad := srcElem.GetStaticPad("src")
 
 	wpad := glib.WeakRefInit(pad)
 	srcPad.AddProbe(gst.PadProbeTypeEventDownstream, PadProbeForwardTrackSourceInfo(wpad))
 	srcPad.StickyEventsForEach(func(_ *gst.Pad, event *gst.Event) bool {
-		if event.Type() == gst.EventTypeCustomDownstreamSticky && event.HasName(tracks.EventTrackSourceInfo) {
+		if event.Type() == gst.EventTypeCustomDownstreamSticky && event.HasName(livekittracks.EventTrackSourceInfo) {
 			dest := gst.ToPad(wpad.Get())
 			if dest != nil {
 				dest.PushEvent(event.Copy())

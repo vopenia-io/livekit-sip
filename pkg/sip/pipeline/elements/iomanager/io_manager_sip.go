@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
+	"github.com/livekit/protocol/livekit"
 )
 
 type IoManagerSip struct {
@@ -88,7 +89,7 @@ func (e *IoManagerSip) setupAudio(self *gst.Bin) error {
 		return fmt.Errorf("Failed to get src pad from g711-opus-dtmf element")
 	}
 
-	pname := fmt.Sprintf("send_rtp_src_%d", SessionKindMicrophone)
+	pname := fmt.Sprintf("send_rtp_src_%d", livekit.TrackSource_MICROPHONE)
 	class := gst.ToElementClass(self.Class())
 
 	gsrcp := gst.NewGhostPadFromTemplate(pname, gsrc, class.GetPadTemplate("send_rtp_src_%u"))
@@ -248,7 +249,7 @@ func (e *IoManagerSip) setupCamera(self *gst.Bin) error {
 		return fmt.Errorf("Failed to get src pad from h264-vp8 element")
 	}
 
-	pname := fmt.Sprintf("send_rtp_src_%d", SessionKindCamera)
+	pname := fmt.Sprintf("send_rtp_src_%d", livekit.TrackSource_CAMERA)
 	class := gst.ToElementClass(self.Class())
 
 	gsrcp := gst.NewGhostPadFromTemplate(pname, gsrc, class.GetPadTemplate("send_rtp_src_%u"))
@@ -325,8 +326,8 @@ func (e *IoManagerSip) ReleasePad(instance *gst.Element, pad *gst.Pad) {
 		return
 	}
 
-	switch SessionKind(session) {
-	case SessionKindMicrophone:
+	switch livekit.TrackSource(session) {
+	case livekit.TrackSource_MICROPHONE:
 		if e.Audio != nil {
 			e.Audio.ReleaseRequestPad(gpad.GetTarget())
 		}
@@ -357,18 +358,18 @@ func (e *IoManagerSip) RequestNewPad(instance *gst.Element, templ *gst.PadTempla
 		return nil
 	}
 
-	if session < 0 || session > int(SessionKindScreenShareAudio) {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid session kind in pad name %s: %d (%s)", name, session, SessionKind(session).String()))
+	if session < 0 || session > int(livekit.TrackSource_SCREEN_SHARE_AUDIO) {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid session kind in pad name %s: %d (%s)", name, session, livekit.TrackSource(session).String()))
 		return nil
 	}
 
-	switch SessionKind(session) {
-	case SessionKindMicrophone:
+	switch livekit.TrackSource(session) {
+	case livekit.TrackSource_MICROPHONE:
 		return e.requestNewPadAudio(self, session, ssrc, pt)
-	case SessionKindCamera:
+	case livekit.TrackSource_CAMERA:
 		return e.requestNewPadCamera(self, session, ssrc, pt)
 	default:
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unsupported session kind in pad name %s: %d (%s)", name, session, SessionKind(session).String()))
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unsupported session kind in pad name %s: %d (%s)", name, session, livekit.TrackSource(session).String()))
 		return nil
 	}
 }

@@ -1,4 +1,4 @@
-package tracks
+package livekittracks
 
 import (
 	"fmt"
@@ -151,6 +151,39 @@ func PadGetTrackSourceInfo(pad *gst.Pad) (TrackSourceInfo, error) {
 		return TrackSourceInfo{}, fmt.Errorf("no event found")
 	}
 	return TrackSourceInfoFromStructure(event.GetStructure())
+}
+
+func PadOnTrackSourceInfo(pad *gst.Pad, callback func(pad *gst.Pad, info TrackSourceInfo)) {
+	pad.AddProbe(gst.PadProbeTypeEventDownstream, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+		if info.GetEvent() != nil && info.GetEvent().HasName(EventTrackSourceInfo) {
+			sourceInfo, err := TrackSourceInfoFromStructure(info.GetEvent().GetStructure())
+			if err != nil {
+				parent := pad.GetParentElement()
+				if parent != nil {
+					parent.Log(CAT, gst.LevelError, fmt.Sprintf("failed to parse track source info event: %v", err))
+				} else {
+					CAT.Log(gst.LevelError, fmt.Sprintf("failed to parse track source info event: %v", err))
+				}
+				return gst.PadProbeOK
+			}
+			callback(pad, sourceInfo)
+		}
+		return gst.PadProbeOK
+	})
+	info, err := PadGetTrackSourceInfo(pad)
+	if err != nil {
+		if err.Error() == "no event found" {
+			return
+		}
+		parent := pad.GetParentElement()
+		if parent != nil {
+			parent.Log(CAT, gst.LevelError, fmt.Sprintf("failed to get initial track source info: %v", err))
+		} else {
+			CAT.Log(gst.LevelError, fmt.Sprintf("failed to get initial track source info: %v", err))
+		}
+		return
+	}
+	callback(pad, info)
 }
 
 type ActiveSpeakerChangeInfo struct {

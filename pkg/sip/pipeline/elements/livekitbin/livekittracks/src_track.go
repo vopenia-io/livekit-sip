@@ -1,4 +1,4 @@
-package tracks
+package livekittracks
 
 import (
 	"errors"

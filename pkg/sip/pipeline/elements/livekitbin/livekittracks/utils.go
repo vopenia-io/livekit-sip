@@ -1,4 +1,4 @@
-package tracks
+package livekittracks
 
 import "github.com/go-gst/go-gst/gst"
 
@@ -14,4 +14,3 @@ func PadProbeDropEOS(_ *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
 	}
 	return gst.PadProbeOK
 }
-

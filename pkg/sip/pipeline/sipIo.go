@@ -6,8 +6,8 @@ import (
 	"weak"
 
 	"github.com/go-gst/go-gst/gst"
+	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/iomanager"
 )
 
 func NewSipInput(log logger.Logger, parent *Pipeline, opts SipOpt) *SipIo {
@@ -115,10 +115,10 @@ func (sio *SipIo) binPadAddedSendRtpSrc(_ *gst.Element, pad *gst.Pad) {
 
 	go func() {
 		var media string
-		switch iomanager.SessionKind(session) {
-		case iomanager.SessionKindMicrophone:
+		switch livekit.TrackSource(session) {
+		case livekit.TrackSource_MICROPHONE:
 			media = "audio"
-		case iomanager.SessionKindCamera:
+		case livekit.TrackSource_CAMERA:
 			media = "video"
 		default:
 			sio.log.Warnw("Unsupported session kind", nil, "session", session)
@@ -180,9 +180,9 @@ func (sio *SipIo) sipPadAddedSrc(_ *gst.Element, pad *gst.Pad) {
 	var session int
 	switch strings.ToLower(kind) {
 	case "audio":
-		session = int(iomanager.SessionKindMicrophone)
+		session = int(livekit.TrackSource_MICROPHONE)
 	case "video":
-		session = int(iomanager.SessionKindCamera)
+		session = int(livekit.TrackSource_CAMERA)
 	default:
 		sio.log.Warnw("Unsupported SIP kind", nil, "kind", kind)
 		return
@@ -230,9 +230,9 @@ func (sio *SipIo) sipPadAddedSrcRtcp(_ *gst.Element, pad *gst.Pad) {
 	var session int
 	switch strings.ToLower(kind) {
 	case "audio":
-		session = int(iomanager.SessionKindMicrophone)
+		session = int(livekit.TrackSource_MICROPHONE)
 	case "video":
-		session = int(iomanager.SessionKindCamera)
+		session = int(livekit.TrackSource_CAMERA)
 	default:
 		sio.log.Warnw("Unsupported SIP kind", nil, "kind", kind)
 		return

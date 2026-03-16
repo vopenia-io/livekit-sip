@@ -7,7 +7,7 @@ import (
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin/tracks"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin/livekittracks"
 	"github.com/pion/webrtc/v4"
 	"github.com/samber/lo"
 )
@@ -73,7 +73,7 @@ func (e *LivekitBin) OnConnectSignal(instance *gst.Element) {
 }
 
 func (e *LivekitBin) setupRtcpSink() error {
-	rtcpSink, ok := gst.SubclassFromElement[*tracks.SinkRtcp](e.RtcpSink)
+	rtcpSink, ok := gst.SubclassFromElement[*livekittracks.SinkRtcp](e.RtcpSink)
 	if !ok {
 		return fmt.Errorf("failed to get SinkRtcp subclass from element")
 	}
@@ -116,9 +116,6 @@ func (e *LivekitBin) Close() {
 		return
 	}
 
-	e.livekitMu.Lock()
-	defer e.livekitMu.Unlock()
-
 	self.Log(CAT, gst.LevelInfo, "Closing LivekitBin and disconnecting from LiveKit room")
 
 	e.Set(RoomStateClosed)
@@ -145,6 +142,8 @@ func (e *LivekitBin) OnActiveSpeakersChanged(p []lksdk.Participant) {
 	if self == nil || self.Instance() == nil {
 		return
 	}
+
+	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Active speakers changed: %v", lo.Map(p, func(part lksdk.Participant, i int) string { return part.SID() })))
 
 	if !e.Is(RoomStateJoined) {
 		self.Log(CAT, gst.LevelWarning, "Received active speakers changed callback while not joined to a room")
@@ -175,61 +174,54 @@ func (e *LivekitBin) OnActiveSpeakersChanged(p []lksdk.Participant) {
 		}
 	}
 
-	e.activeSpeakers = lo.Map(p, func(part lksdk.Participant, i int) string { return part.SID() })
-
-	structure := tracks.NewActiveSpeakerChangeInfo(p).Structure()
-	runtime.SetFinalizer(structure, nil)
-
-	if _, err := self.Emit("active-speakers-changed", structure); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error emitting active-speakers-changed signal: %v", err))
-		self.Error("Error emitting active-speakers-changed signal", err)
-		return
-	}
+	e.updateActiveSpeakers(self, p)
 
 	if e.maxActiveParticipants == 0 {
 		return
 	}
 
-	for _, part := range p {
-		rp, ok := part.(*lksdk.RemoteParticipant)
-		if !ok {
-			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Participant %s is not a remote participant", part.Identity()))
-			continue
-		}
-		camera, ok := rp.GetTrackPublication(livekit.TrackSource_CAMERA).(*lksdk.RemoteTrackPublication)
-		if !ok || camera == nil {
-			continue
-		}
+	// for _, part := range p {
+	// 	rp, ok := part.(*lksdk.RemoteParticipant)
+	// 	if !ok {
+	// 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Participant %s is not a remote participant", part.Identity()))
+	// 		continue
+	// 	}
+	// 	camera, ok := rp.GetTrackPublication(livekit.TrackSource_CAMERA).(*lksdk.RemoteTrackPublication)
+	// 	if !ok || camera == nil {
+	// 		continue
+	// 	}
 
-		if !camera.IsSubscribed() {
-			if err := camera.SetSubscribed(true); err != nil {
-				self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to subscribe to camera track for participant %s: %v", rp.Identity(), err))
-			}
-		}
+	// 	if !camera.IsSubscribed() {
+	// 		if err := camera.SetSubscribed(true); err != nil {
+	// 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to subscribe to camera track for participant %s: %v", rp.Identity(), err))
+	// 		}
+	// 	}
 
-		if !camera.IsEnabled() {
-			camera.SetEnabled(true)
-		}
-	}
+	// 	if !camera.IsEnabled() {
+	// 		camera.SetEnabled(true)
+	// 	}
+	// }
 
-	remote := e.room.GetRemoteParticipants()
-	inactive := lo.Filter(remote, func(part *lksdk.RemoteParticipant, i int) bool {
-		return !lo.ContainsBy(p, func(active lksdk.Participant) bool {
-			return active.SID() == part.SID()
-		})
-	})
-	for _, part := range inactive {
-		camera, ok := part.GetTrackPublication(livekit.TrackSource_CAMERA).(*lksdk.RemoteTrackPublication)
-		if !ok || camera == nil {
-			continue
-		}
-		if camera.IsEnabled() {
-			camera.SetEnabled(false)
-		}
-	}
+	// remote := e.room.GetRemoteParticipants()
+	// inactive := lo.Filter(remote, func(part *lksdk.RemoteParticipant, i int) bool {
+	// 	return !lo.ContainsBy(p, func(active lksdk.Participant) bool {
+	// 		return active.SID() == part.SID()
+	// 	})
+	// })
+	// for _, part := range inactive {
+	// 	camera, ok := part.GetTrackPublication(livekit.TrackSource_CAMERA).(*lksdk.RemoteTrackPublication)
+	// 	if !ok || camera == nil {
+	// 		continue
+	// 	}
+	// 	if camera.IsEnabled() {
+	// 		camera.SetEnabled(false)
+	// 	}
+	// }
 }
 
 func (e *LivekitBin) OnTrackPublished(publication *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
+	done := debugLock(fmt.Sprintf("OnTrackPublished %s", rp.SID()))
+	defer close(done)
 	self := gst.ToGstBin(e.self.Get())
 	if self == nil || self.Instance() == nil {
 		return
@@ -237,13 +229,12 @@ func (e *LivekitBin) OnTrackPublished(publication *lksdk.RemoteTrackPublication,
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Track published by participant %s: %s (source: %s)", rp.Identity(), publication.Name(), publication.Source().String()))
 
-	if e.maxActiveParticipants != 0 {
-		e.livekitMu.Lock()
-		if !lo.Contains(e.activeSpeakers, rp.SID()) && len(e.activeSpeakers) < int(e.maxActiveParticipants) {
-			e.activeSpeakers = append(e.activeSpeakers, rp.SID())
-		}
-		e.livekitMu.Unlock()
-	}
+	// if e.maxActiveParticipants != 0 {
+	// 	if !lo.Contains(e.activeSpeakers, rp.SID()) && len(e.activeSpeakers) < int(e.maxActiveParticipants) {
+	// 		p := append(e.getCurrentActiveSpeakers(), rp)
+	// 		e.updateActiveSpeakers(self, p)
+	// 	}
+	// }
 
 	switch publication.Source() {
 	case livekit.TrackSource_MICROPHONE:
@@ -262,6 +253,48 @@ func (e *LivekitBin) OnTrackPublished(publication *lksdk.RemoteTrackPublication,
 		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Subscribed to microphone track publication for participant %s", rp.Identity()))
 	default:
 		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Not subscribing to track publication for participant %s of kind %s", rp.Identity(), publication.Source().String()))
+		return
+	}
+
+	go func() {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		e.updateActiveSpeakers(self, append(e.getCurrentActiveSpeakers(), rp))
+	}()
+}
+
+func (e *LivekitBin) OnParticipantConnected(rp *lksdk.RemoteParticipant) {
+	self := gst.ToGstBin(e.self.Get())
+	if self == nil || self.Instance() == nil {
+		return
+	}
+
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Participant connected: %s", rp.SID()))
+	if _, err := self.Emit("participant-join", rp.SID()); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error emitting participant-join signal: %v", err))
+		self.Error("Error emitting participant-join signal", err)
+		return
+	}
+}
+
+func (e *LivekitBin) OnParticipantDisconnected(rp *lksdk.RemoteParticipant) {
+	self := gst.ToGstBin(e.self.Get())
+	if self == nil || self.Instance() == nil {
+		return
+	}
+
+	// if lo.Contains(e.activeSpeakers, rp.SID()) {
+	// 	p := e.getCurrentActiveSpeakers()
+	// 	p = lo.Filter(p, func(part lksdk.Participant, idx int) bool {
+	// 		return part.SID() != rp.SID()
+	// 	})
+	// 	e.updateActiveSpeakers(self, p)
+	// }
+
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Participant disconnected: %s", rp.SID()))
+	if _, err := self.Emit("participant-left", rp.SID()); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error emitting participant-left signal: %v", err))
+		self.Error("Error emitting participant-left signal", err)
 		return
 	}
 }

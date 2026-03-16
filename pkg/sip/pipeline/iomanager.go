@@ -8,7 +8,6 @@ import (
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/iomanager"
 )
 
 func NewIOChain(log logger.Logger, parent *Pipeline) *IOManager {
@@ -22,8 +21,8 @@ type IOManager struct {
 	pipeline *Pipeline
 	log      logger.Logger
 
-	SipController *gst.Element
-	LkController  *gst.Element
+	SipController     *gst.Element
+	LivekitController *gst.Element
 }
 
 var _ GstChain = (*IOManager)(nil)
@@ -37,7 +36,7 @@ func (c *IOManager) Create() error {
 		return fmt.Errorf("failed to create IO Manager SIP element: %w", err)
 	}
 
-	c.LkController, err = gst.NewElement("io_manager_livekit")
+	c.LivekitController, err = gst.NewElement("io_manager_livekit")
 	if err != nil {
 		return fmt.Errorf("failed to create IO Manager LiveKit element: %w", err)
 	}
@@ -48,7 +47,7 @@ func (c *IOManager) Create() error {
 func (c *IOManager) Add() error {
 	if err := c.pipeline.Pipeline().AddMany(
 		c.SipController,
-		c.LkController,
+		c.LivekitController,
 	); err != nil {
 		return fmt.Errorf("failed to add IO Manager elements to pipeline: %w", err)
 	}
@@ -69,11 +68,9 @@ func (c *IOManager) handleSipControllerPadAdded(_ *gst.Element, pad *gst.Pad) {
 		return
 	}
 
-	switch iomanager.SessionKind(session) {
-	case iomanager.SessionKindCamera:
-		session = int(livekit.TrackSource_CAMERA)
-	case iomanager.SessionKindMicrophone:
-		session = int(livekit.TrackSource_MICROPHONE)
+	switch livekit.TrackSource(session) {
+	case livekit.TrackSource_CAMERA:
+	case livekit.TrackSource_MICROPHONE:
 	default:
 		c.log.Warnw("Unknown session kind in SIP controller pad name", nil, "session", session, "pad", pname)
 		return
@@ -91,7 +88,7 @@ func (c *IOManager) handleSipControllerPadAdded(_ *gst.Element, pad *gst.Pad) {
 	}
 }
 
-func (c *IOManager) handleLkControllerPadAdded(_ *gst.Element, pad *gst.Pad) {
+func (c *IOManager) handleLivekitCompositorPadAdded(_ *gst.Element, pad *gst.Pad) {
 	pname := pad.GetName()
 	c.log.Debugw("Livekit IO Manager pad added", "pad", pname)
 
@@ -128,12 +125,12 @@ func (c *IOManager) Link() error {
 		ptr.handleSipControllerPadAdded(e, pad)
 	})
 
-	c.LkController.Connect("pad-added", func(e *gst.Element, pad *gst.Pad) {
+	c.LivekitController.Connect("pad-added", func(e *gst.Element, pad *gst.Pad) {
 		ptr := cweak.Value()
 		if ptr == nil {
 			return
 		}
-		ptr.handleLkControllerPadAdded(e, pad)
+		ptr.handleLivekitCompositorPadAdded(e, pad)
 	})
 
 	return nil
@@ -142,7 +139,7 @@ func (c *IOManager) Link() error {
 func (c *IOManager) Close() error {
 	if err := c.pipeline.Pipeline().RemoveMany(
 		c.SipController,
-		c.LkController,
+		c.LivekitController,
 	); err != nil {
 		return fmt.Errorf("failed to remove IO Manager elements from pipeline: %w", err)
 	}

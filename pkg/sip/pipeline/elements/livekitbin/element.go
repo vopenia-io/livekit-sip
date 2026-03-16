@@ -9,7 +9,7 @@ import (
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin/tracks"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin/livekittracks"
 )
 
 var CAT = gst.NewDebugCategory(
@@ -19,7 +19,7 @@ var CAT = gst.NewDebugCategory(
 )
 
 func init() {
-	tracks.CAT = CAT
+	livekittracks.CAT = CAT
 }
 
 const MAX_ACTIVE_PARTICIPANTS = 100
@@ -85,6 +85,22 @@ func (e *LivekitBin) ClassInit(klass *glib.ObjectClass) {
 		"connected",
 		gst.SignalRunLast,
 		glib.TYPE_NONE,
+	)
+
+	gst.SignalNew(
+		class.Type(),
+		"participant-join",
+		gst.SignalRunLast,
+		glib.TYPE_NONE,
+		glib.TYPE_STRING,
+	)
+
+	gst.SignalNew(
+		class.Type(),
+		"participant-left",
+		gst.SignalRunLast,
+		glib.TYPE_NONE,
+		glib.TYPE_STRING,
 	)
 
 	gst.SignalNew(

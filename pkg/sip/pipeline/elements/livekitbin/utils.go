@@ -2,12 +2,15 @@ package livekitbin
 
 import (
 	"fmt"
+	"runtime"
+	"slices"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin/tracks"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin/livekittracks"
+	"github.com/samber/lo"
 )
 
 func PadProbeForwardTrackSourceInfo(wpad *glib.WeakRef) func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
@@ -16,7 +19,7 @@ func PadProbeForwardTrackSourceInfo(wpad *glib.WeakRef) func(pad *gst.Pad, info 
 		if event == nil {
 			return gst.PadProbePass
 		}
-		if event.Type() == gst.EventTypeCustomDownstreamSticky && event.HasName(tracks.EventTrackSourceInfo) {
+		if event.Type() == gst.EventTypeCustomDownstreamSticky && event.HasName(livekittracks.EventTrackSourceInfo) {
 			dest := gst.ToPad(wpad.Get())
 			if dest != nil {
 				CAT.Log(gst.LevelInfo, fmt.Sprintf("Forwarding track source info event for pad %s", pad.GetName()))
@@ -34,7 +37,7 @@ func PadProbeDropTrackSourceInfo(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadPr
 	if event == nil {
 		return gst.PadProbePass
 	}
-	if event.Type() == gst.EventTypeCustomDownstreamSticky && event.HasName(tracks.EventTrackSourceInfo) {
+	if event.Type() == gst.EventTypeCustomDownstreamSticky && event.HasName(livekittracks.EventTrackSourceInfo) {
 		return gst.PadProbeDrop
 	}
 
@@ -106,10 +109,50 @@ func (e *LivekitBin) TrackSourceFromSessionSSRC(session, ssrc uint) *gst.Element
 		return nil
 	}
 
-	element, err := self.GetElementByName(tracks.SrcTrackName(rp.SID()))
+	element, err := self.GetElementByName(livekittracks.SrcTrackName(rp.SID()))
 	if err != nil {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("No element found for track with SID %s: %v", rp.SID(), err))
 		return nil
 	}
 	return element
+}
+
+func (e *LivekitBin) getCurrentActiveSpeakers() []lksdk.Participant {
+	return lo.Filter(lo.Map(e.room.GetRemoteParticipants(), func(participant *lksdk.RemoteParticipant, i int) lksdk.Participant {
+		return participant
+	}), func(participant lksdk.Participant, i int) bool {
+		return lo.Contains(e.activeSpeakers, participant.SID())
+	})
+
+}
+
+func (e *LivekitBin) updateActiveSpeakers(self *gst.Bin, p []lksdk.Participant) {
+	activeSpeakers := lo.Map(p, func(part lksdk.Participant, i int) string { return part.SID() })
+	activeSpeakers = lo.Uniq(activeSpeakers)
+
+	maxActive := int(e.maxActiveParticipants)
+	if maxActive == 0 {
+		maxActive = MAX_ACTIVE_PARTICIPANTS
+	}
+
+	if len(activeSpeakers) > maxActive {
+		activeSpeakers = activeSpeakers[:maxActive]
+	}
+
+	if slices.Equal(e.activeSpeakers, activeSpeakers) {
+		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Active speakers unchanged: %v", activeSpeakers))
+		return
+	}
+	e.activeSpeakers = activeSpeakers
+
+	structure := livekittracks.NewActiveSpeakerChangeInfo(p).Structure()
+	runtime.SetFinalizer(structure, nil)
+
+	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Active speakers changed: %v", activeSpeakers))
+	if _, err := self.Emit("active-speakers-changed", structure); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error emitting active-speakers-changed signal: %v", err))
+		self.Error("Error emitting active-speakers-changed signal", err)
+		return
+	}
+
 }

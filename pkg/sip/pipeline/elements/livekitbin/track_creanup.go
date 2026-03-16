@@ -6,7 +6,7 @@ import (
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin/tracks"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin/livekittracks"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -20,7 +20,7 @@ func (e *LivekitBin) CleanupSrcTrack(self *gst.Bin, element *gst.Element, name s
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Element removed: %s with session ID: %d", name, session))
 
-	src, ok := gst.SubclassFromElement[*tracks.SrcTrack](element)
+	src, ok := gst.SubclassFromElement[*livekittracks.SrcTrack](element)
 	if !ok {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Element %s is not a SrcTrack", name))
 		return
@@ -109,7 +109,7 @@ func (e *LivekitBin) UnsubscribeTrack(track *webrtc.TrackRemote, pub *lksdk.Remo
 		return
 	}
 
-	src, err := self.GetElementByName(tracks.SrcTrackName(pub.SID()))
+	src, err := self.GetElementByName(livekittracks.SrcTrackName(pub.SID()))
 	if err != nil {
 		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("No source element found for track %s of participant %s", pub.SID(), rp.SID()))
 		return
@@ -148,7 +148,7 @@ func (e *LivekitBin) CleanupRtpSink(self *gst.Bin, pad *gst.Pad, pname string) {
 		return
 	}
 
-	sink, err := self.GetElementByName(tracks.SinkTrackName(session))
+	sink, err := self.GetElementByName(livekittracks.SinkTrackName(session))
 	if err != nil {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("No sink element found for RTP pad %s with session ID %d", pname, session))
 		return

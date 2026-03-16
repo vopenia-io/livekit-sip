@@ -2,6 +2,7 @@ package livekitcompositor
 
 import (
 	"github.com/go-gst/go-gst/gst"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitcompositor/patchbay"
 )
 
 func Register() bool {
@@ -16,6 +17,6 @@ func Register() bool {
 		"livekit_compositor_patchbay",
 		gst.RankNone,
 		&patchbay.Patchbay{},
-		gst.ExtendsBaseSink,
+		gst.ExtendsBin,
 	)
 }

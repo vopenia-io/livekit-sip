@@ -3,7 +3,7 @@ package livekitbin
 import (
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/base"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin/tracks"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin/livekittracks"
 )
 
 func Register() bool {
@@ -17,25 +17,25 @@ func Register() bool {
 		nil,
 		"livekitbin_sinktrack",
 		gst.RankNone,
-		&tracks.SinkTrack{},
+		&livekittracks.SinkTrack{},
 		base.ExtendsBaseSink,
 	) && gst.RegisterElement(
 		nil,
 		"livekitbin_sinkrtcp",
 		gst.RankNone,
-		&tracks.SinkRtcp{},
+		&livekittracks.SinkRtcp{},
 		base.ExtendsBaseSink,
 	) && gst.RegisterElement(
 		nil,
 		"livekitbin_srctrack",
 		gst.RankNone,
-		&tracks.SrcTrack{},
+		&livekittracks.SrcTrack{},
 		gst.ExtendsBin,
 	) && gst.RegisterElement(
 		nil,
 		"livekitbin_srctrack_rtp",
 		gst.RankNone,
-		&tracks.SrcTrackRtp{},
+		&livekittracks.SrcTrackRtp{},
 		base.ExtendsBaseSrc,
 	)
 }
