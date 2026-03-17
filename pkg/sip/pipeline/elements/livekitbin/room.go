@@ -175,11 +175,6 @@ func (e *LivekitBin) OnActiveSpeakersChanged(p []lksdk.Participant) {
 	}
 
 	e.updateActiveSpeakers(self, p)
-
-	if e.maxActiveParticipants == 0 {
-		return
-	}
-
 }
 
 func (e *LivekitBin) OnTrackPublished(publication *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
@@ -192,25 +187,32 @@ func (e *LivekitBin) OnTrackPublished(publication *lksdk.RemoteTrackPublication,
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Track published by participant %s: %s (source: %s)", rp.Identity(), publication.Name(), publication.Source().String()))
 
+	var enabled bool
 	switch publication.Source() {
-	case livekit.TrackSource_MICROPHONE:
-		if err := publication.SetSubscribed(true); err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to subscribe to microphone track publication for participant %s: %v", rp.Identity(), err))
-			self.Error(fmt.Sprintf("Failed to subscribe to microphone track publication for participant %s", rp.Identity()), err)
-			return
-		}
-		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Subscribed to microphone track publication for participant %s", rp.Identity()))
 	case livekit.TrackSource_CAMERA:
-		if err := publication.SetSubscribed(true); err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to subscribe to microphone track publication for participant %s: %v", rp.Identity(), err))
-			self.Error(fmt.Sprintf("Failed to subscribe to microphone track publication for participant %s", rp.Identity()), err)
-			return
-		}
-		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Subscribed to microphone track publication for participant %s", rp.Identity()))
+		enabled = e.config.camera
+	case livekit.TrackSource_MICROPHONE:
+		enabled = e.config.microphone
+	case livekit.TrackSource_SCREEN_SHARE:
+		enabled = e.config.screenshare
+	case livekit.TrackSource_SCREEN_SHARE_AUDIO:
+		enabled = e.config.screenshareAudio
 	default:
 		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Not subscribing to track publication for participant %s of kind %s", rp.Identity(), publication.Source().String()))
 		return
 	}
+
+	if !enabled {
+		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Not subscribing to track publication for participant %s of kind %s due to configuration", rp.Identity(), publication.Source().String()))
+		return
+	}
+
+	if err := publication.SetSubscribed(true); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to subscribe to %s track publication for participant %s: %v", publication.Source(), rp.Identity(), err))
+		self.Error(fmt.Sprintf("Failed to subscribe to %s track publication for participant %s", publication.Source(), rp.Identity()), err)
+		return
+	}
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Subscribed to %s track publication for participant %s", publication.Source(), rp.Identity()))
 
 	go func() {
 		e.mu.Lock()

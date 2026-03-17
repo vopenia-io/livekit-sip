@@ -67,6 +67,34 @@ var properties = []*glib.ParamSpec{
 		0,
 		glib.ParameterReadable|glib.ParameterWritable,
 	),
+	glib.NewBoolParam(
+		"microphone",
+		"Microphone",
+		"Whether to subscribe to microphone tracks",
+		false,
+		glib.ParameterReadable|glib.ParameterWritable,
+	),
+	glib.NewBoolParam(
+		"camera",
+		"Camera",
+		"Whether to subscribe to camera tracks",
+		false,
+		glib.ParameterReadable|glib.ParameterWritable,
+	),
+	glib.NewBoolParam(
+		"screenshare",
+		"Screen Share",
+		"Whether to subscribe to screenshare tracks",
+		false,
+		glib.ParameterReadable|glib.ParameterWritable,
+	),
+	glib.NewBoolParam(
+		"screenshare-audio",
+		"Screen Share Audio",
+		"Whether to subscribe to screenshare audio tracks",
+		false,
+		glib.ParameterReadable|glib.ParameterWritable,
+	),
 }
 
 func stringPropSetter(dst *string) func(self *gst.Bin, param *glib.ParamSpec, value *glib.Value) {
@@ -86,6 +114,33 @@ func stringPropSetter(dst *string) func(self *gst.Bin, param *glib.ParamSpec, va
 }
 
 func stringPropGetter(src *string) func(self *gst.Bin, param *glib.ParamSpec) *glib.Value {
+	return func(self *gst.Bin, param *glib.ParamSpec) *glib.Value {
+		value, err := glib.GValue(*src)
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting %s property value: %v", param.Name(), err))
+			return nil
+		}
+		return value
+	}
+}
+
+func boolPropSetter(dst *bool) func(self *gst.Bin, param *glib.ParamSpec, value *glib.Value) {
+	return func(self *gst.Bin, param *glib.ParamSpec, value *glib.Value) {
+		gv, err := value.GoValue()
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting %s property value: %v", param.Name(), err))
+			return
+		}
+		val, ok := gv.(bool)
+		if !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid type for %s property", param.Name()))
+			return
+		}
+		*dst = val
+	}
+}
+
+func boolPropGetter(src *bool) func(self *gst.Bin, param *glib.ParamSpec) *glib.Value {
 	return func(self *gst.Bin, param *glib.ParamSpec) *glib.Value {
 		value, err := glib.GValue(*src)
 		if err != nil {
@@ -157,6 +212,30 @@ func (e *LivekitBin) SetProperty(instance *glib.Object, id uint, value *glib.Val
 			return
 		}
 		e.maxActiveParticipants = val
+	case "microphone":
+		old := e.microphone
+		boolPropSetter(&e.microphone)(self, param, value)
+		if old != e.microphone {
+			e.updateSubscriptions(self)
+		}
+	case "camera":
+		old := e.camera
+		boolPropSetter(&e.camera)(self, param, value)
+		if old != e.camera {
+			e.updateSubscriptions(self)
+		}
+	case "screenshare":
+		old := e.screenshare
+		boolPropSetter(&e.screenshare)(self, param, value)
+		if old != e.screenshare {
+			e.updateSubscriptions(self)
+		}
+	case "screenshare-audio":
+		old := e.screenshareAudio
+		boolPropSetter(&e.screenshareAudio)(self, param, value)
+		if old != e.screenshareAudio {
+			e.updateSubscriptions(self)
+		}
 	default:
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown property %s", param.Name()))
 	}
@@ -212,6 +291,14 @@ func (e *LivekitBin) GetProperty(instance *glib.Object, id uint) *glib.Value {
 			return nil
 		}
 		return value
+	case "microphone":
+		return boolPropGetter(&e.microphone)(self, param)
+	case "camera":
+		return boolPropGetter(&e.camera)(self, param)
+	case "screenshare":
+		return boolPropGetter(&e.screenshare)(self, param)
+	case "screenshare-audio":
+		return boolPropGetter(&e.screenshareAudio)(self, param)
 	default:
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown property %s", param.Name()))
 		return nil

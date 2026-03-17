@@ -31,18 +31,25 @@ type config struct {
 	defaultParticipantName       string
 	defaultParticipantAttributes map[string]string
 	maxActiveParticipants        uint
+	camera                       bool
+	microphone                   bool
+	screenshare                  bool
+	screenshareAudio             bool
 }
 
 type LivekitBin struct {
-	self                 *glib.WeakRef
-	RtpBin               *gst.Element
-	RtcpFunnel           *gst.Element
-	RtcpSink             *gst.Element
-	MicrophoneRtpFunnel  *gst.Element
-	MicrophoneRtcpFunnel *gst.Element
-	CameraRtpFunnel      *gst.Element
-	CameraRtcpFunnel     *gst.Element
-	// TODO: support screenshare
+	self                       *glib.WeakRef
+	RtpBin                     *gst.Element
+	RtcpFunnel                 *gst.Element
+	RtcpSink                   *gst.Element
+	CameraRtpFunnel            *gst.Element
+	CameraRtcpFunnel           *gst.Element
+	MicrophoneRtpFunnel        *gst.Element
+	MicrophoneRtcpFunnel       *gst.Element
+	ScreenshareRtpFunnel       *gst.Element
+	ScreenshareRtcpFunnel      *gst.Element
+	ScreenshareAudioRtpFunnel  *gst.Element
+	ScreenshareAudioRtcpFunnel *gst.Element
 
 	state
 	config
@@ -175,19 +182,6 @@ func (e *LivekitBin) InstanceInit(instance *glib.Object) {
 		return
 	}
 
-	e.MicrophoneRtpFunnel, err = gst.NewElementWithName("rtpfunnel", "livekitbin_microphone_rtpfunnel")
-	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create microphone rtpfunnel: %v", err))
-		self.Error("Failed to create microphone rtpfunnel", err)
-		return
-	}
-	e.MicrophoneRtpFunnel.GetStaticPad("src").AddProbe(gst.PadProbeTypeEventDownstream, PadProbeDropTrackSourceInfo)
-	e.MicrophoneRtcpFunnel, err = gst.NewElementWithName("funnel", "livekitbin_microphone_rtcp_funnel")
-	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create microphone rtcp funnel: %v", err))
-		self.Error("Failed to create microphone rtcp funnel", err)
-		return
-	}
 	e.CameraRtpFunnel, err = gst.NewElementWithName("rtpfunnel", "livekitbin_camera_rtpfunnel")
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create camera rtpfunnel: %v", err))
@@ -202,7 +196,54 @@ func (e *LivekitBin) InstanceInit(instance *glib.Object) {
 		return
 	}
 
-	if err := self.AddMany(e.RtpBin, e.RtcpFunnel, e.RtcpSink, e.MicrophoneRtpFunnel, e.MicrophoneRtcpFunnel, e.CameraRtpFunnel, e.CameraRtcpFunnel); err != nil {
+	e.MicrophoneRtpFunnel, err = gst.NewElementWithName("rtpfunnel", "livekitbin_microphone_rtpfunnel")
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create microphone rtpfunnel: %v", err))
+		self.Error("Failed to create microphone rtpfunnel", err)
+		return
+	}
+	e.MicrophoneRtpFunnel.GetStaticPad("src").AddProbe(gst.PadProbeTypeEventDownstream, PadProbeDropTrackSourceInfo)
+	e.MicrophoneRtcpFunnel, err = gst.NewElementWithName("funnel", "livekitbin_microphone_rtcp_funnel")
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create microphone rtcp funnel: %v", err))
+		self.Error("Failed to create microphone rtcp funnel", err)
+		return
+	}
+
+	e.ScreenshareRtpFunnel, err = gst.NewElementWithName("rtpfunnel", "livekitbin_screenshare_rtpfunnel")
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create screenshare rtpfunnel: %v", err))
+		self.Error("Failed to create screenshare rtpfunnel", err)
+		return
+	}
+	e.ScreenshareRtpFunnel.GetStaticPad("src").AddProbe(gst.PadProbeTypeEventDownstream, PadProbeDropTrackSourceInfo)
+	e.ScreenshareRtcpFunnel, err = gst.NewElementWithName("funnel", "livekitbin_screenshare_rtcp_funnel")
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create screenshare rtcp funnel: %v", err))
+		self.Error("Failed to create screenshare rtcp funnel", err)
+		return
+	}
+
+	e.ScreenshareAudioRtpFunnel, err = gst.NewElementWithName("rtpfunnel", "livekitbin_screenshareaudio_rtpfunnel")
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create screenshare audio rtpfunnel: %v", err))
+		self.Error("Failed to create screenshare audio rtpfunnel", err)
+		return
+	}
+	e.ScreenshareAudioRtpFunnel.GetStaticPad("src").AddProbe(gst.PadProbeTypeEventDownstream, PadProbeDropTrackSourceInfo)
+	e.ScreenshareAudioRtcpFunnel, err = gst.NewElementWithName("funnel", "livekitbin_screenshareaudio_rtcp_funnel")
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create screenshare audio rtcp funnel: %v", err))
+		self.Error("Failed to create screenshare audio rtcp funnel", err)
+		return
+	}
+
+	if err := self.AddMany(e.RtpBin,
+		e.RtcpFunnel, e.RtcpSink,
+		e.CameraRtpFunnel, e.CameraRtcpFunnel,
+		e.MicrophoneRtpFunnel, e.MicrophoneRtcpFunnel,
+		e.ScreenshareRtpFunnel, e.ScreenshareRtcpFunnel,
+		e.ScreenshareAudioRtpFunnel, e.ScreenshareAudioRtcpFunnel); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add children to livekitbin: %v", err))
 		self.Error("Failed to add children to livekitbin", err)
 		return
@@ -211,18 +252,33 @@ func (e *LivekitBin) InstanceInit(instance *glib.Object) {
 	e.room = lksdk.NewRoom(e.callabcks())
 
 	// action signals
-	self.Connect("connect", func(instance *gst.Element) {
+	if _, err := self.Connect("connect", func(instance *gst.Element) {
 		ptr := eweak.Value()
 		if ptr == nil {
 			CAT.Log(gst.LevelError, "LivekitBin instance is nil in connect signal callback")
 			return
 		}
 		go ptr.OnConnectSignal(instance)
-	})
+	}); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to connect to connect signal: %v", err))
+		self.Error("Failed to connect to connect signal", err)
+		return
+	}
 
 	if err := e.RtcpFunnel.Link(e.RtcpSink); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link rtcp funnel to rtcp sink: %v", err))
 		self.Error("Failed to link rtcp funnel to rtcp sink", err)
+		return
+	}
+
+	if ret := e.CameraRtpFunnel.GetStaticPad("src").Link(e.RtpBin.GetRequestPad(fmt.Sprintf("recv_rtp_sink_%d", livekit.TrackSource_CAMERA))); ret != gst.PadLinkOK {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link camera rtpfunnel to rtpbin: %v", ret))
+		self.Error("Failed to link camera rtpfunnel to rtpbin", fmt.Errorf("link error: %v", ret))
+		return
+	}
+	if ret := e.CameraRtcpFunnel.GetStaticPad("src").Link(e.RtpBin.GetRequestPad(fmt.Sprintf("recv_rtcp_sink_%d", livekit.TrackSource_CAMERA))); ret != gst.PadLinkOK {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link camera rtcpfunnel to rtpbin: %v", ret))
+		self.Error("Failed to link camera rtcpfunnel to rtpbin", fmt.Errorf("link error: %v", ret))
 		return
 	}
 
@@ -237,14 +293,25 @@ func (e *LivekitBin) InstanceInit(instance *glib.Object) {
 		return
 	}
 
-	if ret := e.CameraRtpFunnel.GetStaticPad("src").Link(e.RtpBin.GetRequestPad(fmt.Sprintf("recv_rtp_sink_%d", livekit.TrackSource_CAMERA))); ret != gst.PadLinkOK {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link camera rtpfunnel to rtpbin: %v", ret))
-		self.Error("Failed to link camera rtpfunnel to rtpbin", fmt.Errorf("link error: %v", ret))
+	if ret := e.ScreenshareRtpFunnel.GetStaticPad("src").Link(e.RtpBin.GetRequestPad(fmt.Sprintf("recv_rtp_sink_%d", livekit.TrackSource_SCREEN_SHARE))); ret != gst.PadLinkOK {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link screenshare rtpfunnel to rtpbin: %v", ret))
+		self.Error("Failed to link screenshare rtpfunnel to rtpbin", fmt.Errorf("link error: %v", ret))
 		return
 	}
-	if ret := e.CameraRtcpFunnel.GetStaticPad("src").Link(e.RtpBin.GetRequestPad(fmt.Sprintf("recv_rtcp_sink_%d", livekit.TrackSource_CAMERA))); ret != gst.PadLinkOK {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link camera rtcpfunnel to rtpbin: %v", ret))
-		self.Error("Failed to link camera rtcpfunnel to rtpbin", fmt.Errorf("link error: %v", ret))
+	if ret := e.ScreenshareRtcpFunnel.GetStaticPad("src").Link(e.RtpBin.GetRequestPad(fmt.Sprintf("recv_rtcp_sink_%d", livekit.TrackSource_SCREEN_SHARE))); ret != gst.PadLinkOK {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link screenshare rtcpfunnel to rtpbin: %v", ret))
+		self.Error("Failed to link screenshare rtcpfunnel to rtpbin", fmt.Errorf("link error: %v", ret))
+		return
+	}
+
+	if ret := e.ScreenshareAudioRtpFunnel.GetStaticPad("src").Link(e.RtpBin.GetRequestPad(fmt.Sprintf("recv_rtp_sink_%d", livekit.TrackSource_SCREEN_SHARE_AUDIO))); ret != gst.PadLinkOK {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link screenshare audio rtpfunnel to rtpbin: %v", ret))
+		self.Error("Failed to link screenshare audio rtpfunnel to rtpbin", fmt.Errorf("link error: %v", ret))
+		return
+	}
+	if ret := e.ScreenshareAudioRtcpFunnel.GetStaticPad("src").Link(e.RtpBin.GetRequestPad(fmt.Sprintf("recv_rtcp_sink_%d", livekit.TrackSource_SCREEN_SHARE_AUDIO))); ret != gst.PadLinkOK {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link screenshare audio rtcpfunnel to rtpbin: %v", ret))
+		self.Error("Failed to link screenshare audio rtcpfunnel to rtpbin", fmt.Errorf("link error: %v", ret))
 		return
 	}
 }

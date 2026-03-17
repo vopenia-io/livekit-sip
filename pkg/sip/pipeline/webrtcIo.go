@@ -34,7 +34,11 @@ var _ GstChain = (*WebrtcIo)(nil)
 func (wio *WebrtcIo) Create() error {
 	var err error
 	wio.LivekitBin, err = gst.NewElementWithProperties("livekitbin", map[string]interface{}{
-		"max-active-participants": uint(20),
+		"max-active-participants": uint(2),
+		"camera":                  true,
+		"microphone":              true,
+		"screenshare":             false,
+		"screenshare-audio":       false,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create livekitbin: %w", err)
@@ -156,7 +160,6 @@ func (wio *WebrtcIo) Link() error {
 	return nil
 }
 
-// Close implements [GstChain].
 func (wio *WebrtcIo) Close() error {
 	if err := wio.pipeline.Pipeline().RemoveMany(
 		wio.LivekitBin,

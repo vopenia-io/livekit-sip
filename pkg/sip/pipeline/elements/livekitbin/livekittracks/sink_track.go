@@ -20,6 +20,10 @@ func (t TrackCfg) CapsString() string {
 		return "application/x-rtp, media=(string)video, encoding-name=(string)VP8, payload=(int)96"
 	case livekit.TrackSource_MICROPHONE:
 		return "application/x-rtp, media=(string)audio, encoding-name=(string)OPUS, payload=(int)111"
+	case livekit.TrackSource_SCREEN_SHARE:
+		return "application/x-rtp, media=(string)video, encoding-name=(string)VP8, payload=(int)96"
+	case livekit.TrackSource_SCREEN_SHARE_AUDIO:
+		return "application/x-rtp, media=(string)audio, encoding-name=(string)OPUS, payload=(int)111"
 	default:
 		return "application/x-rtp"
 	}
@@ -30,6 +34,10 @@ func (t TrackCfg) MimeType() string {
 	case livekit.TrackSource_CAMERA:
 		return webrtc.MimeTypeVP8
 	case livekit.TrackSource_MICROPHONE:
+		return webrtc.MimeTypeOpus
+	case livekit.TrackSource_SCREEN_SHARE:
+		return webrtc.MimeTypeVP8
+	case livekit.TrackSource_SCREEN_SHARE_AUDIO:
 		return webrtc.MimeTypeOpus
 	default:
 		return ""

@@ -155,4 +155,35 @@ func (e *LivekitBin) updateActiveSpeakers(self *gst.Bin, p []lksdk.Participant) 
 		return
 	}
 
+	e.cameraSleep(self, p)
+}
+
+func (e *LivekitBin) updateSubscriptions(self *gst.Bin) {
+	trackConfig := []struct {
+		kind    livekit.TrackSource
+		enabled bool
+	}{
+		{livekit.TrackSource_CAMERA, e.camera},
+		{livekit.TrackSource_MICROPHONE, e.microphone},
+		{livekit.TrackSource_SCREEN_SHARE, e.screenshare},
+		{livekit.TrackSource_SCREEN_SHARE_AUDIO, e.screenshareAudio},
+	}
+
+	for _, participant := range e.room.GetRemoteParticipants() {
+		for _, config := range trackConfig {
+			if !config.enabled {
+				continue
+			}
+			pub, ok := participant.GetTrackPublication(config.kind).(*lksdk.RemoteTrackPublication)
+			if !ok || pub == nil {
+				continue
+			}
+			if pub.IsSubscribed() {
+				continue
+			}
+			if err := pub.SetSubscribed(true); err != nil {
+				self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to subscribe to track %s of participant %s: %v", config.kind, participant.Identity(), err))
+			}
+		}
+	}
 }

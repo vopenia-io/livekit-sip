@@ -26,10 +26,10 @@ func (e *LivekitBin) PublishTrack(self *gst.Bin, pad *gst.Pad, pname string) {
 	}
 
 	switch livekit.TrackSource(session) {
-	case livekit.TrackSource_MICROPHONE:
-	case livekit.TrackSource_CAMERA:
-	case livekit.TrackSource_SCREEN_SHARE:
-	case livekit.TrackSource_SCREEN_SHARE_AUDIO:
+	case livekit.TrackSource_MICROPHONE,
+		livekit.TrackSource_CAMERA,
+		livekit.TrackSource_SCREEN_SHARE,
+		livekit.TrackSource_SCREEN_SHARE_AUDIO:
 	default:
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unknown track source in pad name: %s", pname))
 		return
@@ -144,10 +144,10 @@ func (e *LivekitBin) ForwardPublishTrack(instance *gst.Element, templ *gst.PadTe
 	}
 
 	switch livekit.TrackSource(session) {
-	case livekit.TrackSource_MICROPHONE:
-	case livekit.TrackSource_CAMERA:
-	case livekit.TrackSource_SCREEN_SHARE:
-	case livekit.TrackSource_SCREEN_SHARE_AUDIO:
+	case livekit.TrackSource_MICROPHONE,
+		livekit.TrackSource_CAMERA,
+		livekit.TrackSource_SCREEN_SHARE,
+		livekit.TrackSource_SCREEN_SHARE_AUDIO:
 	default:
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unknown track source in pad name: %s", name))
 		return nil
@@ -246,12 +246,18 @@ func (e *LivekitBin) SubscribeTrack(track *webrtc.TrackRemote, publication *lksd
 	var rtpFunnel *gst.Element
 	var rtcpFunnel *gst.Element
 	switch publication.Source() {
-	case livekit.TrackSource_MICROPHONE:
-		rtpFunnel = e.MicrophoneRtpFunnel
-		rtcpFunnel = e.MicrophoneRtcpFunnel
 	case livekit.TrackSource_CAMERA:
 		rtpFunnel = e.CameraRtpFunnel
 		rtcpFunnel = e.CameraRtcpFunnel
+	case livekit.TrackSource_MICROPHONE:
+		rtpFunnel = e.MicrophoneRtpFunnel
+		rtcpFunnel = e.MicrophoneRtcpFunnel
+	case livekit.TrackSource_SCREEN_SHARE:
+		rtpFunnel = e.ScreenshareRtpFunnel
+		rtcpFunnel = e.ScreenshareRtcpFunnel
+	case livekit.TrackSource_SCREEN_SHARE_AUDIO:
+		rtpFunnel = e.ScreenshareAudioRtpFunnel
+		rtcpFunnel = e.ScreenshareAudioRtcpFunnel
 	default:
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unknown track source for track %s: %d", track.ID(), publication.Source()))
 		return
@@ -291,10 +297,10 @@ func (e *LivekitBin) ForwardSubscribeTrack(self *gst.Bin, pad *gst.Pad, pname st
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Forwarding track with session: %d, ssrc: %d, pt: %d", session, ssrc, pt))
 	switch livekit.TrackSource(session) {
-	case livekit.TrackSource_MICROPHONE:
-	case livekit.TrackSource_CAMERA:
-	case livekit.TrackSource_SCREEN_SHARE:
-	case livekit.TrackSource_SCREEN_SHARE_AUDIO:
+	case livekit.TrackSource_MICROPHONE,
+		livekit.TrackSource_CAMERA,
+		livekit.TrackSource_SCREEN_SHARE,
+		livekit.TrackSource_SCREEN_SHARE_AUDIO:
 	default:
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unknown track source in pad name: %s", pname))
 		return
