@@ -74,15 +74,15 @@ func (e *VideoH264) InstanceInit(instance *glib.Object) {
 		"vbv-buf-capacity": uint(2000),
 	})
 	if err != nil {
-		self.Error("Failed to create x264enc element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create x264enc element: %v", err))
+		self.Error("Failed to create x264enc element", err)
 		return
 	}
 
 	e.H264Parse, err = gst.NewElementWithProperties("h264parse", map[string]interface{}{})
 	if err != nil {
-		self.Error("Failed to create h264parse element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create h264parse element: %v", err))
+		self.Error("Failed to create h264parse element", err)
 		return
 	}
 
@@ -92,8 +92,8 @@ func (e *VideoH264) InstanceInit(instance *glib.Object) {
 		"aggregate-mode":  int(1),
 	})
 	if err != nil {
-		self.Error("Failed to create rtph264pay element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create rtph264pay element: %v", err))
+		self.Error("Failed to create rtph264pay element", err)
 		return
 	}
 
@@ -108,8 +108,8 @@ func (e *VideoH264) InstanceInit(instance *glib.Object) {
 		e.H264Parse,
 		e.RtpH264Pay,
 	); err != nil {
-		self.Error("Failed to link elements", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link elements: %v", err))
+		self.Error("Failed to link elements", err)
 		return
 	}
 

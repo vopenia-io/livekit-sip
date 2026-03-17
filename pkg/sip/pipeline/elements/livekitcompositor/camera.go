@@ -21,7 +21,6 @@ type LivekitCompositorCamera struct {
 	Compositor *gst.Element
 	Filter     *gst.Element
 
-	// composition map[string]string
 }
 
 func (e *LivekitCompositor) initCamera(self *gst.Bin) error {

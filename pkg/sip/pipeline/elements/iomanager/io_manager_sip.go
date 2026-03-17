@@ -66,20 +66,20 @@ func (e *IoManagerSip) setupAudio(self *gst.Bin) error {
 	var err error
 	e.Audio, err = gst.NewElement("g711-opus-dtmf")
 	if err != nil {
-		self.Error("Failed to create g711-opus-dtmf element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create g711-opus-dtmf element: %v", err))
+		self.Error("Failed to create g711-opus-dtmf element", err)
 		return err
 	}
 
 	if err := self.Add(e.Audio); err != nil {
-		self.Error("Failed to add g711-opus-dtmf element to SIP IO bin", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add g711-opus-dtmf element to SIP IO bin: %v", err))
+		self.Error("Failed to add g711-opus-dtmf element to SIP IO bin", err)
 		return err
 	}
 
 	if !e.Audio.SyncStateWithParent() {
-		self.Error("Failed to sync state of g711-opus-dtmf element with parent", nil)
 		self.Log(CAT, gst.LevelError, "Failed to sync state of g711-opus-dtmf element with parent")
+		self.Error("Failed to sync state of g711-opus-dtmf element with parent", nil)
 		return fmt.Errorf("Failed to sync state of g711-opus-dtmf element with parent")
 	}
 
@@ -136,8 +136,8 @@ func (e *IoManagerSip) linkNewPadAudio(pad *gst.Pad, info *gst.PadProbeInfo) gst
 		if err == nil {
 			return
 		}
-		self.Error("Failed to link new audio pad in SIP IO element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link new audio pad in SIP IO element: %v", err))
+		self.Error("Failed to link new audio pad in SIP IO element", err)
 
 		if !self.RemovePad(gpad.Pad) {
 			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove ghost pad %s from SIP IO element", gpad.GetName()))
@@ -226,20 +226,20 @@ func (e *IoManagerSip) setupCamera(self *gst.Bin) error {
 	var err error
 	e.Camera, err = gst.NewElement("h264-vp8")
 	if err != nil {
-		self.Error("Failed to create h264-vp8 element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create h264-vp8 element: %v", err))
+		self.Error("Failed to create h264-vp8 element", err)
 		return err
 	}
 
 	if err := self.Add(e.Camera); err != nil {
-		self.Error("Failed to add h264-vp8 element to SIP IO bin", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add h264-vp8 element to SIP IO bin: %v", err))
+		self.Error("Failed to add h264-vp8 element to SIP IO bin", err)
 		return err
 	}
 
 	if !e.Camera.SyncStateWithParent() {
-		self.Error("Failed to sync state of h264-vp8 element with parent", nil)
 		self.Log(CAT, gst.LevelError, "Failed to sync state of h264-vp8 element with parent")
+		self.Error("Failed to sync state of h264-vp8 element with parent", nil)
 		return fmt.Errorf("Failed to sync state of h264-vp8 element with parent")
 	}
 

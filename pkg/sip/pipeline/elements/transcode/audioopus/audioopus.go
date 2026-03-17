@@ -54,8 +54,8 @@ func (e *AudioOpus) InstanceInit(instance *glib.Object) {
 		"frame-size": int(2), // 2.5ms
 	})
 	if err != nil {
-		self.Error("Failed to create opusenc element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create opusenc element: %v", err))
+		self.Error("Failed to create opusenc element", err)
 		return
 	}
 
@@ -63,8 +63,8 @@ func (e *AudioOpus) InstanceInit(instance *glib.Object) {
 		"pt": 111,
 	})
 	if err != nil {
-		self.Error("Failed to create rtpopuspay element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create rtpopuspay element: %v", err))
+		self.Error("Failed to create rtpopuspay element", err)
 		return
 	}
 
@@ -77,8 +77,8 @@ func (e *AudioOpus) InstanceInit(instance *glib.Object) {
 		e.OpusEnc,
 		e.RtpOpusPay,
 	); err != nil {
-		self.Error("Failed to link elements", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link elements: %v", err))
+		self.Error("Failed to link elements", err)
 		return
 	}
 

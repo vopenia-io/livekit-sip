@@ -504,9 +504,7 @@ func (e *IoManagerLivekit) padAddedCameraOut(self *gst.Bin, pad *gst.Pad, name s
 
 	var err error
 	cameraOut.VideoH264, err = gst.NewElementWithProperties("video-h264", map[string]interface{}{
-		// "pt": 97, // linphone android
-		"pt": 97, // cisco
-		// "pt": 109, // poly
+		"pt": 97,
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create video-h264 element for camera output pad: %v", err))

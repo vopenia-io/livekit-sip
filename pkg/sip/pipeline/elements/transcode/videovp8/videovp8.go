@@ -67,8 +67,8 @@ func (e *VideoVp8) InstanceInit(instance *glib.Object) {
 		"end-usage":           int(1),
 	})
 	if err != nil {
-		self.Error("Failed to create vp8enc element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create vp8enc element: %v", err))
+		self.Error("Failed to create vp8enc element", err)
 		return
 	}
 
@@ -78,8 +78,8 @@ func (e *VideoVp8) InstanceInit(instance *glib.Object) {
 		"picture-id-mode": int(2),
 	})
 	if err != nil {
-		self.Error("Failed to create rtpvp8pay element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create rtpvp8pay element: %v", err))
+		self.Error("Failed to create rtpvp8pay element", err)
 		return
 	}
 
@@ -92,8 +92,8 @@ func (e *VideoVp8) InstanceInit(instance *glib.Object) {
 		e.Vp8Enc,
 		e.Vp8Pay,
 	); err != nil {
-		self.Error("Failed to link elements", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link elements: %v", err))
+		self.Error("Failed to link elements", err)
 		return
 	}
 

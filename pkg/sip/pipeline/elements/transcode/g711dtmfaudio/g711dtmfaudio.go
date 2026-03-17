@@ -86,8 +86,8 @@ func (e *G711DtmfAudio) InstanceInit(instance *glib.Object) {
 
 	e.Identity, err = gst.NewElement("identity")
 	if err != nil {
-		self.Error("Failed to create identity element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create identity element: %v", err))
+		self.Error("Failed to create identity element", err)
 		return
 	}
 	eweak := weak.Make(e)
@@ -106,29 +106,29 @@ func (e *G711DtmfAudio) InstanceInit(instance *glib.Object) {
 
 	e.AudioConvert, err = gst.NewElement("audioconvert")
 	if err != nil {
-		self.Error("Failed to create audioconvert element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create audioconvert element: %v", err))
+		self.Error("Failed to create audioconvert element", err)
 		return
 	}
 
 	e.AudioResample, err = gst.NewElement("audioresample")
 	if err != nil {
-		self.Error("Failed to create audioresample element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create audioresample element: %v", err))
+		self.Error("Failed to create audioresample element", err)
 		return
 	}
 
 	e.AudioRate, err = gst.NewElement("audiorate")
 	if err != nil {
-		self.Error("Failed to create audiorate element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create audiorate element: %v", err))
+		self.Error("Failed to create audiorate element", err)
 		return
 	}
 
 	e.DtmfDetect, err = gst.NewElement("dtmfdetect")
 	if err != nil {
-		self.Error("Failed to create dtmfdetect element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create dtmfdetect element: %v", err))
+		self.Error("Failed to create dtmfdetect element", err)
 		return
 	}
 
@@ -153,8 +153,8 @@ func (e *G711DtmfAudio) InstanceInit(instance *glib.Object) {
 		e.DtmfDetect,
 		e.Valve,
 	); err != nil {
-		self.Error("Failed to link elements", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link elements: %v", err))
+		self.Error("Failed to link elements", err)
 		return
 	}
 
@@ -256,11 +256,13 @@ func (e *G711DtmfAudio) G711Setup(self *gst.Bin, p *gst.Pad, info *gst.PadProbeI
 		switch strings.ToUpper(encodingName) {
 		case "PCMU":
 			if err := e.setupPCMU(); err != nil {
+				self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to setup PCMU elements: %v", err))
 				self.Error("Failed to setup PCMU elements", err)
 				return gst.PadProbeRemove
 			}
 		case "PCMA":
 			if err := e.setupPCMA(); err != nil {
+				self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to setup PCMA elements: %v", err))
 				self.Error("Failed to setup PCMA elements", err)
 				return gst.PadProbeRemove
 			}

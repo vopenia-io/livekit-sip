@@ -55,15 +55,15 @@ func (e *Vp8Video) InstanceInit(instance *glib.Object) {
 
 	e.Vp8Depay, err = gst.NewElementWithProperties("rtpvp8depay", map[string]interface{}{})
 	if err != nil {
-		self.Error("Failed to create rtpvp8depay element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create rtpvp8depay element: %v", err))
+		self.Error("Failed to create rtpvp8depay element", err)
 		return
 	}
 
 	e.Vp8Dec, err = gst.NewElementWithProperties("vp8dec", map[string]interface{}{})
 	if err != nil {
-		self.Error("Failed to create vp8dec element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create vp8dec element: %v", err))
+		self.Error("Failed to create vp8dec element", err)
 		return
 	}
 
@@ -71,8 +71,8 @@ func (e *Vp8Video) InstanceInit(instance *glib.Object) {
 		"add-borders": true,
 	})
 	if err != nil {
-		self.Error("Failed to create videoscale element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create videoscale element: %v", err))
+		self.Error("Failed to create videoscale element", err)
 		return
 	}
 
@@ -80,8 +80,8 @@ func (e *Vp8Video) InstanceInit(instance *glib.Object) {
 		"drop-only": true,
 	})
 	if err != nil {
-		self.Error("Failed to create videorate element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create videorate element: %v", err))
+		self.Error("Failed to create videorate element", err)
 		return
 	}
 
@@ -89,8 +89,8 @@ func (e *Vp8Video) InstanceInit(instance *glib.Object) {
 		"caps": gst.NewCapsFromString("video/x-raw,width=1280,height=720,pixel-aspect-ratio=1/1,framerate=24/1"),
 	})
 	if err != nil {
-		self.Error("Failed to create capsfilter element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create capsfilter element: %v", err))
+		self.Error("Failed to create capsfilter element", err)
 		return
 	}
 
@@ -109,8 +109,8 @@ func (e *Vp8Video) InstanceInit(instance *glib.Object) {
 		e.VideoRate,
 		e.Filter,
 	); err != nil {
-		self.Error("Failed to link elements", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link elements: %v", err))
+		self.Error("Failed to link elements", err)
 		return
 	}
 

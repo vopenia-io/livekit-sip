@@ -198,21 +198,6 @@ func (e *LivekitBin) OnSSRCCollision(session, ssrc uint) {
 	self.Log(CAT, gst.LevelWarning, fmt.Sprintf("SSRC collision detected in session %d for SSRC %d", session, ssrc))
 }
 
-// func (e *LivekitBin) OnByeSSRC(session, ssrc uint) {
-// 	self := gst.ToGstBin(e.self.Get())
-// 	if self == nil || self.Instance() == nil {
-// 		return
-// 	}
-
-// 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Received BYE for SSRC %d in session %d", ssrc, session))
-
-// 	if _, err := e.RtpBin.Emit("clear-ssrc", session, ssrc); err != nil {
-// 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error emitting clear-ssrc signal: %v", err))
-// 		self.Error("Error emitting clear-ssrc signal", err)
-// 		return
-// 	}
-// }
-
 func (e *LivekitBin) OnTimeout(session, ssrc uint) {
 	self := gst.ToGstBin(e.self.Get())
 	if self == nil || self.Instance() == nil {

@@ -180,43 +180,6 @@ func (e *LivekitBin) OnActiveSpeakersChanged(p []lksdk.Participant) {
 		return
 	}
 
-	// for _, part := range p {
-	// 	rp, ok := part.(*lksdk.RemoteParticipant)
-	// 	if !ok {
-	// 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Participant %s is not a remote participant", part.Identity()))
-	// 		continue
-	// 	}
-	// 	camera, ok := rp.GetTrackPublication(livekit.TrackSource_CAMERA).(*lksdk.RemoteTrackPublication)
-	// 	if !ok || camera == nil {
-	// 		continue
-	// 	}
-
-	// 	if !camera.IsSubscribed() {
-	// 		if err := camera.SetSubscribed(true); err != nil {
-	// 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to subscribe to camera track for participant %s: %v", rp.Identity(), err))
-	// 		}
-	// 	}
-
-	// 	if !camera.IsEnabled() {
-	// 		camera.SetEnabled(true)
-	// 	}
-	// }
-
-	// remote := e.room.GetRemoteParticipants()
-	// inactive := lo.Filter(remote, func(part *lksdk.RemoteParticipant, i int) bool {
-	// 	return !lo.ContainsBy(p, func(active lksdk.Participant) bool {
-	// 		return active.SID() == part.SID()
-	// 	})
-	// })
-	// for _, part := range inactive {
-	// 	camera, ok := part.GetTrackPublication(livekit.TrackSource_CAMERA).(*lksdk.RemoteTrackPublication)
-	// 	if !ok || camera == nil {
-	// 		continue
-	// 	}
-	// 	if camera.IsEnabled() {
-	// 		camera.SetEnabled(false)
-	// 	}
-	// }
 }
 
 func (e *LivekitBin) OnTrackPublished(publication *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
@@ -228,13 +191,6 @@ func (e *LivekitBin) OnTrackPublished(publication *lksdk.RemoteTrackPublication,
 	}
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Track published by participant %s: %s (source: %s)", rp.Identity(), publication.Name(), publication.Source().String()))
-
-	// if e.maxActiveParticipants != 0 {
-	// 	if !lo.Contains(e.activeSpeakers, rp.SID()) && len(e.activeSpeakers) < int(e.maxActiveParticipants) {
-	// 		p := append(e.getCurrentActiveSpeakers(), rp)
-	// 		e.updateActiveSpeakers(self, p)
-	// 	}
-	// }
 
 	switch publication.Source() {
 	case livekit.TrackSource_MICROPHONE:
@@ -282,14 +238,6 @@ func (e *LivekitBin) OnParticipantDisconnected(rp *lksdk.RemoteParticipant) {
 	if self == nil || self.Instance() == nil {
 		return
 	}
-
-	// if lo.Contains(e.activeSpeakers, rp.SID()) {
-	// 	p := e.getCurrentActiveSpeakers()
-	// 	p = lo.Filter(p, func(part lksdk.Participant, idx int) bool {
-	// 		return part.SID() != rp.SID()
-	// 	})
-	// 	e.updateActiveSpeakers(self, p)
-	// }
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Participant disconnected: %s", rp.SID()))
 	if _, err := self.Emit("participant-left", rp.SID()); err != nil {

@@ -55,16 +55,16 @@ func (e *AudioG711) InstanceInit(instance *glib.Object) {
 
 	e.Identity, err = gst.NewElement("identity")
 	if err != nil {
-		self.Error("Failed to create identity element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create identity element: %v", err))
+		self.Error("Failed to create identity element", err)
 		return
 	}
 
 	if err := self.AddMany(
 		e.Identity,
 	); err != nil {
-		self.Error("Failed to add identity element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add identity element: %v", err))
+		self.Error("Failed to add identity element", err)
 		return
 	}
 
@@ -72,8 +72,8 @@ func (e *AudioG711) InstanceInit(instance *glib.Object) {
 
 	ghostSink := gst.NewGhostPadFromTemplate("sink", e.Identity.GetStaticPad("sink"), elemClass.GetPadTemplate("sink"))
 	if !self.AddPad(ghostSink.Pad) {
-		self.Error("Failed to add ghost sink pad", fmt.Errorf("failed to add ghost sink pad"))
 		self.Log(CAT, gst.LevelError, "Failed to add ghost sink pad")
+		self.Error("Failed to add ghost sink pad", fmt.Errorf("failed to add ghost sink pad"))
 		return
 	}
 
@@ -89,8 +89,8 @@ func (e *AudioG711) InstanceInit(instance *glib.Object) {
 	})
 
 	if !self.AddPad(ghostSrc.Pad) {
-		self.Error("Failed to add ghost src pad", fmt.Errorf("failed to add ghost src pad"))
 		self.Log(CAT, gst.LevelError, "Failed to add ghost src pad")
+		self.Error("Failed to add ghost src pad", fmt.Errorf("failed to add ghost src pad"))
 		return
 	}
 
@@ -108,12 +108,14 @@ func (e *AudioG711) SrcLinkFunction(pad *gst.Pad, parent *gst.Object, peer *gst.
 	if peer.QueryAcceptCaps(pcmuCaps) {
 		self.Log(CAT, gst.LevelInfo, "Peer accepts PCMU caps, setting up PCMU elements")
 		if err := e.setupPCMU(); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to setup PCMU elements: %v", err))
 			self.Error("Failed to setup PCMU elements", err)
 			return gst.PadLinkRefused
 		}
 	} else if peer.QueryAcceptCaps(pcmaCaps) {
 		self.Log(CAT, gst.LevelInfo, "Peer accepts PCMA caps, setting up PCMA elements")
 		if err := e.setupPCMA(); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to setup PCMA elements: %v", err))
 			self.Error("Failed to setup PCMA elements", err)
 			return gst.PadLinkRefused
 		}

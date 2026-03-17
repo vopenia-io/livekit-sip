@@ -61,8 +61,8 @@ func (h *H264Vp8) InstanceInit(instance *glib.Object) {
 
 	h.H264Depay, err = gst.NewElementWithProperties("rtph264depay", map[string]interface{}{})
 	if err != nil {
-		self.Error("Failed to create rtph264depay element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create rtph264depay element: %v", err))
+		self.Error("Failed to create rtph264depay element", err)
 		return
 	}
 
@@ -70,8 +70,8 @@ func (h *H264Vp8) InstanceInit(instance *glib.Object) {
 		"config-interval": int(1),
 	})
 	if err != nil {
-		self.Error("Failed to create h264parse element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create h264parse element: %v", err))
+		self.Error("Failed to create h264parse element", err)
 		return
 	}
 
@@ -79,15 +79,15 @@ func (h *H264Vp8) InstanceInit(instance *glib.Object) {
 		"max-threads": int(4),
 	})
 	if err != nil {
-		self.Error("Failed to create avdec_h264 element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create avdec_h264 element: %v", err))
+		self.Error("Failed to create avdec_h264 element", err)
 		return
 	}
 
 	h.VideoConvert, err = gst.NewElementWithProperties("videoconvert", map[string]interface{}{})
 	if err != nil {
-		self.Error("Failed to create videoconvert element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create videoconvert element: %v", err))
+		self.Error("Failed to create videoconvert element", err)
 		return
 	}
 
@@ -95,8 +95,8 @@ func (h *H264Vp8) InstanceInit(instance *glib.Object) {
 		"add-borders": true, // Add black bars for aspect ratio preservation
 	})
 	if err != nil {
-		self.Error("Failed to create videoscale element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create videoscale element: %v", err))
+		self.Error("Failed to create videoscale element", err)
 		return
 	}
 
@@ -105,8 +105,8 @@ func (h *H264Vp8) InstanceInit(instance *glib.Object) {
 		"skip-to-first": true,
 	})
 	if err != nil {
-		self.Error("Failed to create videorate element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create videorate element: %v", err))
+		self.Error("Failed to create videorate element", err)
 		return
 	}
 
@@ -114,8 +114,8 @@ func (h *H264Vp8) InstanceInit(instance *glib.Object) {
 		"caps": gst.NewCapsFromString("video/x-raw,width=1280,height=720,pixel-aspect-ratio=1/1,framerate=24/1"),
 	})
 	if err != nil {
-		self.Error("Failed to create capsfilter element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create capsfilter element: %v", err))
+		self.Error("Failed to create capsfilter element", err)
 		return
 	}
 
@@ -136,8 +136,8 @@ func (h *H264Vp8) InstanceInit(instance *glib.Object) {
 		"end-usage":           int(1),
 	})
 	if err != nil {
-		self.Error("Failed to create vp8enc element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create vp8enc element: %v", err))
+		self.Error("Failed to create vp8enc element", err)
 		return
 	}
 
@@ -147,8 +147,8 @@ func (h *H264Vp8) InstanceInit(instance *glib.Object) {
 		"picture-id-mode": int(2),
 	})
 	if err != nil {
-		self.Error("Failed to create rtpvp8pay element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create rtpvp8pay element: %v", err))
+		self.Error("Failed to create rtpvp8pay element", err)
 		return
 	}
 
@@ -164,8 +164,8 @@ func (h *H264Vp8) InstanceInit(instance *glib.Object) {
 		h.Vp8Enc,
 		h.Vp8Pay,
 	); err != nil {
-		self.Error("Failed to add elements to bin", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add elements to bin: %v", err))
+		self.Error("Failed to add elements to bin", err)
 		return
 	}
 
@@ -181,8 +181,8 @@ func (h *H264Vp8) InstanceInit(instance *glib.Object) {
 		h.Vp8Enc,
 		h.Vp8Pay,
 	); err != nil {
-		self.Error("Failed to link elements", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link elements: %v", err))
+		self.Error("Failed to link elements", err)
 		return
 	}
 
