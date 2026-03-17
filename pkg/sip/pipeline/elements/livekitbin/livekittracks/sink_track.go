@@ -153,8 +153,6 @@ func (s *SinkTrack) Stop(self *base.GstBaseSink) bool {
 }
 
 func (s *SinkTrack) Render(self *base.GstBaseSink, buffer *gst.Buffer) gst.FlowReturn {
-	self.Log(CAT, gst.LevelTrace, fmt.Sprintf("Rendering RTCP buffer of size %d", buffer.GetSize()))
-
 	if s.track == nil {
 		self.Log(CAT, gst.LevelError, "Track is not set, dropping RTCP packet")
 		self.Error("Track is not set", errors.New("track is nil"))

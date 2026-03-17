@@ -5,8 +5,11 @@ package livekitbin
 import (
 	_ "embed"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strings"
 
+	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/livekit/sip/pkg/sip/pipeline/debug"
@@ -21,7 +24,7 @@ func init() {
 		if !ok {
 			return nil
 		}
-		return newDebugHandler(lkbin)
+		return newDebugHandler(element, lkbin)
 	})
 }
 
@@ -48,7 +51,14 @@ type subscribeRequest struct {
 	Enable         bool   `json:"enable"`
 }
 
-func newDebugHandler(lkbin *LivekitBin) http.Handler {
+type trackKindsState struct {
+	Microphone      bool `json:"microphone"`
+	Camera          bool `json:"camera"`
+	Screenshare     bool `json:"screenshare"`
+	ScreenshareAudio bool `json:"screenshare-audio"`
+}
+
+func newDebugHandler(element *gst.Element, lkbin *LivekitBin) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
@@ -122,6 +132,54 @@ func newDebugHandler(lkbin *LivekitBin) http.Handler {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(map[string]any{"errors": errors})
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	})
+
+	mux.HandleFunc("GET /api/track-kinds", func(w http.ResponseWriter, r *http.Request) {
+		state := trackKindsState{
+			Microphone:       lkbin.microphone,
+			Camera:           lkbin.camera,
+			Screenshare:      lkbin.screenshare,
+			ScreenshareAudio: lkbin.screenshareAudio,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(state)
+	})
+
+	mux.HandleFunc("POST /api/track-kinds", func(w http.ResponseWriter, r *http.Request) {
+		var req trackKindsState
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		done := make(chan error, 1)
+		glib.IdleAdd(func() {
+			var errs []string
+			props := map[string]bool{
+				"microphone":       req.Microphone,
+				"camera":           req.Camera,
+				"screenshare":      req.Screenshare,
+				"screenshare-audio": req.ScreenshareAudio,
+			}
+			for name, val := range props {
+				if err := element.SetProperty(name, val); err != nil {
+					errs = append(errs, name+": "+err.Error())
+				}
+			}
+			if len(errs) > 0 {
+				done <- fmt.Errorf("%s", strings.Join(errs, "; "))
+			} else {
+				done <- nil
+			}
+		})
+
+		if err := <-done; err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 

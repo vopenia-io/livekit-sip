@@ -18,16 +18,68 @@
   button:hover { background: #3b7; }
   .status { margin-top: 8px; font-size: 12px; color: #888; }
   .status.error { color: #f44; }
+  .track-kinds { margin-bottom: 16px; }
+  .track-kinds h2 { font-size: 14px; margin-bottom: 8px; }
+  .toggle-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .toggle-btn { padding: 6px 14px; cursor: pointer; border: 1px solid #444; font-family: monospace; font-size: 13px; }
+  .toggle-btn.off { background: #333; color: #888; }
+  .toggle-btn.on { background: #2a6; color: #fff; border-color: #2a6; }
 </style>
 </head>
 <body>
 <h1>Track Subscriptions</h1>
+<div class="track-kinds">
+  <h2>Track Kinds</h2>
+  <div class="toggle-row">
+    <button class="toggle-btn off" data-kind="microphone" onclick="toggleKind(this)">Microphone</button>
+    <button class="toggle-btn off" data-kind="camera" onclick="toggleKind(this)">Camera</button>
+    <button class="toggle-btn off" data-kind="screenshare" onclick="toggleKind(this)">Screenshare</button>
+    <button class="toggle-btn off" data-kind="screenshare-audio" onclick="toggleKind(this)">Screenshare Audio</button>
+  </div>
+</div>
 <div id="participants"></div>
 <button onclick="apply()">Apply</button>
 <div id="status" class="status"></div>
 
 <script>
 let data = [];
+let kinds = {};
+
+async function refreshKinds() {
+  try {
+    const resp = await fetch('api/track-kinds');
+    kinds = await resp.json();
+    for (const btn of document.querySelectorAll('.toggle-btn[data-kind]')) {
+      const on = kinds[btn.dataset.kind] || false;
+      btn.className = 'toggle-btn ' + (on ? 'on' : 'off');
+    }
+  } catch (e) {
+    setStatus('Fetch track kinds error: ' + e.message, true);
+  }
+}
+
+async function toggleKind(btn) {
+  const kind = btn.dataset.kind;
+  const newVal = !kinds[kind];
+  kinds[kind] = newVal;
+  btn.className = 'toggle-btn ' + (newVal ? 'on' : 'off');
+  try {
+    const resp = await fetch('api/track-kinds', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(kinds),
+    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      setStatus('Error: ' + text, true);
+      return;
+    }
+    setStatus('Toggled ' + kind + ' ' + (newVal ? 'on' : 'off'), false);
+    setTimeout(refresh, 500);
+  } catch (e) {
+    setStatus('Error: ' + e.message, true);
+  }
+}
 
 async function refresh() {
   try {
@@ -108,6 +160,7 @@ function esc(s) {
   return d.innerHTML;
 }
 
+refreshKinds();
 refresh();
 </script>
 </body>

@@ -128,8 +128,6 @@ func (s *SrcTrackRtp) Stop(self *base.GstBaseSrc) bool {
 }
 
 func (s *SrcTrackRtp) Fill(self *base.GstBaseSrc, offset uint64, length uint, buffer *gst.Buffer) gst.FlowReturn {
-	self.Log(CAT, gst.LevelTrace, fmt.Sprintf("Fill called: offset=%d, length=%d", offset, length))
-
 	if s.unblock.Load() {
 		self.Log(CAT, gst.LevelInfo, "Fill called but unblock is set, returning EOS")
 		return gst.FlowFlushing
@@ -160,8 +158,6 @@ func (s *SrcTrackRtp) Fill(self *base.GstBaseSrc, offset uint64, length uint, bu
 	if uint(n) < length {
 		buffer.SetSize(int64(n))
 	}
-	self.Log(CAT, gst.LevelTrace, fmt.Sprintf("filled buffer with %d bytes", n))
-
 	return gst.FlowOK
 }
 

@@ -92,8 +92,6 @@ func (s *SinkRtcp) Stop(self *base.GstBaseSink) bool {
 }
 
 func (s *SinkRtcp) Render(self *base.GstBaseSink, buffer *gst.Buffer) gst.FlowReturn {
-	self.Log(CAT, gst.LevelTrace, fmt.Sprintf("Rendering RTCP buffer of size %d", buffer.GetSize()))
-
 	if s.pc == nil {
 		self.Log(CAT, gst.LevelError, "PeerConnection is not set in sink_rtcp")
 		self.Error("PeerConnection is not set", errors.New("peerconnection is nil"))
@@ -112,7 +110,7 @@ func (s *SinkRtcp) Render(self *base.GstBaseSink, buffer *gst.Buffer) gst.FlowRe
 		return gst.FlowError
 	}
 
-	// self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Sending %d RTCP packets to PeerConnection: %+v", len(pkts), pkts))
+	self.Log(CAT, gst.LevelTrace, fmt.Sprintf("Sending %d RTCP packets to PeerConnection: %+v", len(pkts), pkts))
 
 	if err := s.pc.WriteRTCP(pkts); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to write RTCP packets to PeerConnection: %v", err))
