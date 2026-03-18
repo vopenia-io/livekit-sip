@@ -35,8 +35,8 @@ func (wio *WebrtcIo) Create() error {
 	var err error
 	wio.LivekitBin, err = gst.NewElementWithProperties("livekitbin", map[string]interface{}{
 		"max-active-participants": uint(2),
-		"camera":                  true,
-		"microphone":              true,
+		"camera":                  false,
+		"microphone":              false,
 		"screenshare":             false,
 		"screenshare-audio":       false,
 	})

@@ -82,6 +82,29 @@ func (sio *SipIo) binPadAddedRecvRtpSrc(_ *gst.Element, pad *gst.Pad) {
 		return
 	}
 
+	switch livekit.TrackSource(session) {
+	case livekit.TrackSource_MICROPHONE:
+		sio.log.Infow("Linked RTP pad for microphone track", "pad", padName, "ssrc", ssrc, "payloadType", payloadType)
+
+		if err := sio.pipeline.WebrtcIo.LivekitBin.SetProperty("microphone", true); err != nil {
+			sio.log.Errorw("Failed to enable microphone in IO Manager", err)
+		}
+	case livekit.TrackSource_CAMERA:
+		sio.log.Infow("Linked RTP pad for camera track", "pad", padName, "ssrc", ssrc, "payloadType", payloadType)
+		//update h264 pt if needed
+		if err := sio.pipeline.IOManager.LivekitController.SetProperty("h264-pt", uint(payloadType)); err != nil {
+			sio.log.Errorw("Failed to update H264 payload type in IO Manager", err, "payloadType", payloadType)
+		} else {
+			sio.log.Infow("Updated H264 payload type in IO Manager", "payloadType", payloadType)
+		}
+		if err := sio.pipeline.WebrtcIo.LivekitBin.SetProperty("camera", true); err != nil {
+			sio.log.Errorw("Failed to enable camera in IO Manager", err)
+		}
+	default:
+		sio.log.Warnw("Unsupported session kind", nil, "session", session)
+		return
+	}
+
 	destPad := sio.pipeline.IOManager.SipController.GetRequestPad(fmt.Sprintf("recv_rtp_sink_%d_%d_%d", session, ssrc, payloadType))
 	if destPad == nil {
 		sio.log.Warnw("Track rejected by remote, no matching pad available in SIP IO bin", nil, "pad", fmt.Sprintf("recv_rtp_sink_%d_%d_%d", session, ssrc, payloadType))
@@ -160,6 +183,30 @@ func (sio *SipIo) binPadAddedSendRtpSrc(_ *gst.Element, pad *gst.Pad) {
 			sio.log.Infow("Linked SIP RTCP pad", "pad", rtcpPad.GetName())
 		}()
 	}()
+}
+
+func (sio *SipIo) padExtractH264Pt(pad *gst.Pad) (uint, error) {
+	caps := pad.GetCurrentCaps()
+	if caps == nil {
+		return 0, fmt.Errorf("failed to get caps from pad")
+	}
+
+	structure := caps.GetStructureAt(0)
+	if structure == nil {
+		return 0, fmt.Errorf("failed to get structure from caps")
+	}
+
+	ptVal, err := structure.GetValue("payload")
+	if err != nil {
+		return 0, fmt.Errorf("failed to get payload field from caps structure: %w", err)
+	}
+
+	pt, ok := ptVal.(uint)
+	if !ok {
+		return 0, fmt.Errorf("payload field in caps structure is not a uint32")
+	}
+
+	return pt, nil
 }
 
 func (sio *SipIo) sipPadAddedSrc(_ *gst.Element, pad *gst.Pad) {

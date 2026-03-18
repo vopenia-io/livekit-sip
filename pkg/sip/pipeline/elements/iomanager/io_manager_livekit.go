@@ -11,9 +11,22 @@ import (
 	"github.com/livekit/protocol/livekit"
 )
 
+var properties = []*glib.ParamSpec{
+	glib.NewUintParam(
+		"h264-pt",
+		"H264 Payload Type",
+		"The payload type for the H264 RTP stream",
+		0,
+		127,
+		96,
+		glib.ParameterWritable|glib.ParameterReadable,
+	),
+}
+
 type IoManagerLivekit struct {
 	inMu       sync.Mutex
 	outMu      sync.Mutex
+	h264Pt     uint
 	Compositor *gst.Element
 
 	AudioIn  map[string]*AudioInTranscode
@@ -48,7 +61,9 @@ type CameraOutTranscode struct {
 }
 
 func (e *IoManagerLivekit) New() glib.GoObjectSubclass {
-	return &IoManagerLivekit{}
+	return &IoManagerLivekit{
+		h264Pt: 96,
+	}
 }
 
 func (e *IoManagerLivekit) ClassInit(klass *glib.ObjectClass) {
@@ -81,6 +96,8 @@ func (e *IoManagerLivekit) ClassInit(klass *glib.ObjectClass) {
 		gst.PadPresenceSometimes,
 		gst.NewCapsFromString("application/x-rtp"),
 	))
+
+	class.InstallProperties(properties)
 }
 
 func (e *IoManagerLivekit) InstanceInit(instance *glib.Object) {
@@ -166,6 +183,51 @@ func (e *IoManagerLivekit) ChangeState(instance *gst.Element, transition gst.Sta
 		e.CameraOut = nil
 	}
 	return ret
+}
+
+func (e *IoManagerLivekit) SetProperty(instance *glib.Object, id uint, value *glib.Value) {
+	self := gst.ToGstBin(instance)
+	param := properties[id]
+	switch param.Name() {
+	case "h264-pt":
+		gv, _ := value.GoValue()
+		val, _ := gv.(uint)
+		if val > 127 {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid h264-pt value: %d", val))
+			return
+		}
+		e.outMu.Lock()
+		e.h264Pt = val
+		if e.CameraOut != nil {
+			if err := e.CameraOut.VideoH264.SetProperty("pt", val); err != nil {
+				self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set pt on video-h264: %v", err))
+			}
+		}
+		e.outMu.Unlock()
+		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Setting h264-pt to %d", val))
+	default:
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown property %s", param.Name()))
+	}
+}
+
+func (e *IoManagerLivekit) GetProperty(instance *glib.Object, id uint) *glib.Value {
+	self := gst.ToGstBin(instance)
+	param := properties[id]
+	switch param.Name() {
+	case "h264-pt":
+		e.outMu.Lock()
+		val := e.h264Pt
+		e.outMu.Unlock()
+		gv, err := glib.GValue(val)
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to convert h264-pt to GValue: %v", err))
+			return nil
+		}
+		return gv
+	default:
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown property %s", param.Name()))
+		return nil
+	}
 }
 
 func (e *IoManagerLivekit) RequestNewPad(instance *gst.Element, templ *gst.PadTemplate, name string, caps *gst.Caps) *gst.Pad {
@@ -504,7 +566,7 @@ func (e *IoManagerLivekit) padAddedCameraOut(self *gst.Bin, pad *gst.Pad, name s
 
 	var err error
 	cameraOut.VideoH264, err = gst.NewElementWithProperties("video-h264", map[string]interface{}{
-		"pt": 97,
+		"pt": e.h264Pt,
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create video-h264 element for camera output pad: %v", err))
