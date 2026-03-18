@@ -149,6 +149,6 @@ require (
 
 replace github.com/livekit/media-sdk => github.com/vopenia-io/media-sdk v0.0.0-20251229153245-6b76cc17de47
 
-replace github.com/go-gst/go-gst => github.com/vopenia-io/go-gst v0.0.0-20260303094654-c6a82556f95a
+replace github.com/go-gst/go-gst => github.com/vopenia-io/go-gst v0.0.0-20260318160934-40616a256037
 
-replace github.com/go-gst/go-glib => github.com/vopenia-io/go-glib v0.0.0-20260303094619-193e3ee2f34d
+replace github.com/go-gst/go-glib => github.com/vopenia-io/go-glib v0.0.0-20260318160842-4e576d17a83d
