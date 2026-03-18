@@ -169,6 +169,7 @@ func (e *LivekitBin) updateSubscriptions(self *gst.Bin) {
 		{livekit.TrackSource_SCREEN_SHARE_AUDIO, e.screenshareAudio},
 	}
 
+	cahnged := false
 	for _, participant := range e.room.GetRemoteParticipants() {
 		for _, config := range trackConfig {
 			if !config.enabled {
@@ -183,7 +184,13 @@ func (e *LivekitBin) updateSubscriptions(self *gst.Bin) {
 			}
 			if err := pub.SetSubscribed(true); err != nil {
 				self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to subscribe to track %s of participant %s: %v", config.kind, participant.Identity(), err))
+			} else {
+				cahnged = true
 			}
 		}
+	}
+	if cahnged {
+		self.Log(CAT, gst.LevelInfo, "Track subscription states updated")
+		e.updateActiveSpeakers(self, e.getCurrentActiveSpeakers())
 	}
 }

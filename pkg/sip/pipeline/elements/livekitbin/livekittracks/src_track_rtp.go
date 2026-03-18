@@ -30,7 +30,6 @@ func NewSrcTrackRtp(parent *SrcTrack) (*gst.Element, error) {
 type SrcTrackRtp struct {
 	parent  *SrcTrack
 	unblock atomic.Bool
-	// blocked atomic.Bool
 }
 
 func (*SrcTrackRtp) New() glib.GoObjectSubclass {
@@ -139,11 +138,9 @@ func (s *SrcTrackRtp) Fill(self *base.GstBaseSrc, offset uint64, length uint, bu
 	ptr := mapInfo.Data()
 	data := unsafe.Slice((*byte)(ptr), length)
 
-	// self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Track %s reading RTP packet into buffer", s.parent.Pub.SID()))
-	// defer self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Track %s finished reading RTP packet into buffer", s.parent.Pub.SID()))
 	n, _, err := s.parent.Track.Read(data)
 	if s.unblock.Load() {
-		self.Log(CAT, gst.LevelInfo, "Fill unblocked, returning EOS")
+		self.Log(CAT, gst.LevelInfo, "Fill unblocked, returning Flushing")
 		return gst.FlowFlushing
 	}
 	if err != nil {

@@ -39,12 +39,18 @@ func (e *LivekitBin) CleanupSrcTrack(self *gst.Bin, element *gst.Element, name s
 		rtcpFunnel *gst.Element
 	)
 	switch livekit.TrackSource(session) {
-	case livekit.TrackSource_MICROPHONE:
-		rtpFunnel = e.MicrophoneRtpFunnel
-		rtcpFunnel = e.MicrophoneRtcpFunnel
 	case livekit.TrackSource_CAMERA:
 		rtpFunnel = e.CameraRtpFunnel
 		rtcpFunnel = e.CameraRtcpFunnel
+	case livekit.TrackSource_MICROPHONE:
+		rtpFunnel = e.MicrophoneRtpFunnel
+		rtcpFunnel = e.MicrophoneRtcpFunnel
+	case livekit.TrackSource_SCREEN_SHARE:
+		rtpFunnel = e.ScreenshareRtpFunnel
+		rtcpFunnel = e.ScreenshareRtcpFunnel
+	case livekit.TrackSource_SCREEN_SHARE_AUDIO:
+		rtpFunnel = e.ScreenshareAudioRtpFunnel
+		rtcpFunnel = e.ScreenshareAudioRtcpFunnel
 	default:
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unknown track source in element name: %s", name))
 		return

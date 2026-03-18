@@ -285,6 +285,12 @@ func (e *LivekitBin) SubscribeTrack(track *webrtc.TrackRemote, publication *lksd
 	}
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Linked RTCP source pad to sink funnel for track ID: %s", track.ID()))
+
+	go func() {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		e.updateActiveSpeakers(self, append(e.getCurrentActiveSpeakers(), rp))
+	}()
 }
 
 func (e *LivekitBin) ForwardSubscribeTrack(self *gst.Bin, pad *gst.Pad, pname string) {

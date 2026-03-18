@@ -27,6 +27,13 @@ var srcTrackProperties = []*glib.ParamSpec{
 		false,
 		glib.ParameterReadable|glib.ParameterWritable,
 	),
+	glib.NewBoolParam(
+		"mute",
+		"Mute",
+		"Whether the track is muted (i.e. not forwarded to the pipeline)",
+		false,
+		glib.ParameterReadable|glib.ParameterWritable,
+	),
 }
 
 func SrcTrackName(sid string) string {
@@ -56,7 +63,8 @@ type SrcTrack struct {
 	Pub   *lksdk.RemoteTrackPublication
 	Rp    *lksdk.RemoteParticipant
 
-	SSRC uint32
+	SSRC        uint32
+	muteProbeID uint64
 
 	src   *gst.Element
 	Queue *gst.Element
@@ -109,7 +117,11 @@ func (s *SrcTrack) InstanceInit(instance *glib.Object) {
 		return
 	}
 
-	s.Queue, err = gst.NewElement("queue")
+	s.Queue, err = gst.NewElementWithProperties("queue", map[string]interface{}{
+		"max-size-buffers": uint(0),
+		"max-size-bytes":   uint(0),
+		"max-size-time":    uint(50 * time.Millisecond),
+	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create queue element: %v", err))
 		self.Error("Failed to create queue element", err)
@@ -394,6 +406,14 @@ func (s *SrcTrack) GetProperty(instance *glib.Object, id uint) *glib.Value {
 			return nil
 		}
 		return val
+	case "mute":
+		muted := s.muteProbeID != 0
+		val, err := glib.GValue(muted)
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get mute property value: %v", err))
+			return nil
+		}
+		return val
 	default:
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown property %s", param.Name()))
 		return nil
@@ -417,7 +437,50 @@ func (s *SrcTrack) SetProperty(instance *glib.Object, id uint, value *glib.Value
 		}
 		s.Pub.SetEnabled(enabled)
 
+	case "mute":
+		muteVal, err := value.GoValue()
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get bool value for mute property: %v", err))
+			return
+		}
+		mute, ok := muteVal.(bool)
+		if !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to convert mute property value to bool: %v", muteVal))
+			return
+		}
+		if mute {
+			s.mute(self)
+		} else {
+			s.unmute(self)
+		}
 	default:
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown property %s", param.Name()))
 	}
+}
+
+func (s *SrcTrack) mute(self *gst.Bin) {
+	if s.muteProbeID != 0 {
+		self.Log(CAT, gst.LevelDebug, "SrcTrack is already muted")
+		return
+	}
+
+	if err := s.Queue.SetProperty("leaky", int(2) /* downstream */); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set queue to leaky downstream for muting: %v", err))
+	}
+	s.muteProbeID = s.Queue.GetStaticPad("src").AddProbe(gst.PadProbeTypeBlock|gst.PadProbeTypeBuffer|gst.PadProbeTypeBufferList, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+		return gst.PadProbeOK
+	})
+}
+
+func (s *SrcTrack) unmute(self *gst.Bin) {
+	if s.muteProbeID == 0 {
+		self.Log(CAT, gst.LevelDebug, "SrcTrack is not muted")
+		return
+	}
+
+	if err := s.Queue.SetProperty("leaky", int(0) /* no */); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set queue to non-leaky after unmuting: %v", err))
+	}
+	s.Queue.GetStaticPad("src").RemoveProbe(s.muteProbeID)
+	s.muteProbeID = 0
 }

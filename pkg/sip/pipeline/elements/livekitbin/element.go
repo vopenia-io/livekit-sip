@@ -319,8 +319,8 @@ func (e *LivekitBin) InstanceInit(instance *glib.Object) {
 func (e *LivekitBin) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
 	self := gst.ToGstBin(instance)
 
-	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("LivekitBin state change: %s", transition.String()))
-	defer self.Log(CAT, gst.LevelInfo, fmt.Sprintf("LivekitBin state change completed: %s", transition.String()))
+	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("LivekitBin state change: %s", transition.String()))
+	defer self.Log(CAT, gst.LevelDebug, fmt.Sprintf("LivekitBin state change completed: %s", transition.String()))
 
 	if transition == gst.StateChangeReadyToNull {
 		e.Close()
@@ -346,7 +346,7 @@ func (e *LivekitBin) ChangeState(instance *gst.Element, transition gst.StateChan
 		e.CameraRtpFunnel = nil
 		e.CameraRtcpFunnel = nil
 
-		self.Log(CAT, gst.LevelInfo, "LivekitBin state changed to NULL, disconnected from LiveKit room and cleaned up resources")
+		self.Log(CAT, gst.LevelDebug, "LivekitBin state changed to NULL, disconnected from LiveKit room and cleaned up resources")
 	}
 
 	return ret

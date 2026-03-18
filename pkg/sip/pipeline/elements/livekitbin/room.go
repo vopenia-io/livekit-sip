@@ -178,8 +178,6 @@ func (e *LivekitBin) OnActiveSpeakersChanged(p []lksdk.Participant) {
 }
 
 func (e *LivekitBin) OnTrackPublished(publication *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
-	done := debugLock(fmt.Sprintf("OnTrackPublished %s", rp.SID()))
-	defer close(done)
 	self := gst.ToGstBin(e.self.Get())
 	if self == nil || self.Instance() == nil {
 		return
@@ -213,12 +211,6 @@ func (e *LivekitBin) OnTrackPublished(publication *lksdk.RemoteTrackPublication,
 		return
 	}
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Subscribed to %s track publication for participant %s", publication.Source(), rp.Identity()))
-
-	go func() {
-		e.mu.Lock()
-		defer e.mu.Unlock()
-		e.updateActiveSpeakers(self, append(e.getCurrentActiveSpeakers(), rp))
-	}()
 }
 
 func (e *LivekitBin) OnParticipantConnected(rp *lksdk.RemoteParticipant) {
@@ -247,4 +239,66 @@ func (e *LivekitBin) OnParticipantDisconnected(rp *lksdk.RemoteParticipant) {
 		self.Error("Error emitting participant-left signal", err)
 		return
 	}
+}
+
+func (e *LivekitBin) OnTrackMuted(publication lksdk.TrackPublication, participant lksdk.Participant) {
+	self := gst.ToGstBin(e.self.Get())
+	if self == nil || self.Instance() == nil {
+		return
+	}
+
+	pub, ok := publication.(*lksdk.RemoteTrackPublication)
+	if !ok {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Track publication is not a remote track publication for participant %s: %v", participant.Identity(), publication))
+		return
+	}
+
+	ssrc := pub.TrackRemote().SSRC()
+
+	srcTrack, err := self.GetElementByName(livekittracks.SrcTrackName(pub.SID()))
+	if err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("No source element found for track %s of participant %s: %v", pub.SID(), participant.SID(), err))
+		return
+	}
+
+	if err := srcTrack.SetProperty("mute", true); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set mute property for track %s of participant %s: %v", pub.SID(), participant.SID(), err))
+		self.Error(fmt.Sprintf("Failed to set mute property for track %s of participant %s", pub.SID(), participant.SID()), err)
+		return
+	}
+
+	if _, err := e.RtpBin.Emit("clear-ssrc", uint32(pub.Source()), uint(ssrc)); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error emitting clear-ssrc signal for track %s of participant %s: %v", pub.SID(), participant.SID(), err))
+		self.Error(fmt.Sprintf("Error emitting clear-ssrc signal for track %s of participant %s", pub.SID(), participant.SID()), err)
+		return
+	}
+
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Muted track %s(%s) of participant %s", pub.Source(), pub.SID(), participant.SID()))
+}
+
+func (e *LivekitBin) OnTrackUnmuted(publication lksdk.TrackPublication, participant lksdk.Participant) {
+	self := gst.ToGstBin(e.self.Get())
+	if self == nil || self.Instance() == nil {
+		return
+	}
+
+	pub, ok := publication.(*lksdk.RemoteTrackPublication)
+	if !ok {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Track publication is not a remote track publication for participant %s: %v", participant.Identity(), publication))
+		return
+	}
+
+	srcTrack, err := self.GetElementByName(livekittracks.SrcTrackName(pub.SID()))
+	if err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("No source element found for track %s of participant %s: %v", pub.SID(), participant.SID(), err))
+		return
+	}
+
+	if err := srcTrack.SetProperty("mute", false); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set mute property for track %s of participant %s: %v", pub.SID(), participant.SID(), err))
+		self.Error(fmt.Sprintf("Failed to set mute property for track %s of participant %s", pub.SID(), participant.SID()), err)
+		return
+	}
+
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Unmuted track %s(%s) of participant %s", pub.Source(), pub.SID(), participant.SID()))
 }
