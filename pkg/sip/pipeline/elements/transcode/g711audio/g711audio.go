@@ -16,7 +16,6 @@ var CAT = gst.NewDebugCategory(
 )
 
 type G711Audio struct {
-	Identity      *gst.Element
 	RtpG711Depay  *gst.Element
 	G711Dec       *gst.Element
 	AudioConvert  *gst.Element
@@ -56,21 +55,6 @@ func (e *G711Audio) InstanceInit(instance *glib.Object) {
 	self := gst.ToGstBin(instance)
 	var err error
 
-	e.Identity, err = gst.NewElement("identity")
-	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create identity element: %v", err))
-		self.Error("Failed to create identity element", err)
-		return
-	}
-	eWeak := weak.Make(e)
-	e.Identity.GetStaticPad("sink").AddProbe(gst.PadProbeTypeEventDownstream, func(p *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
-		e := eWeak.Value()
-		if e == nil {
-			return gst.PadProbeRemove
-		}
-		return e.G711Setup(self, p, info)
-	})
-
 	e.AudioConvert, err = gst.NewElement("audioconvert")
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create audioconvert element: %v", err))
@@ -93,7 +77,6 @@ func (e *G711Audio) InstanceInit(instance *glib.Object) {
 	}
 
 	self.AddMany(
-		e.Identity,
 		e.AudioConvert,
 		e.AudioResample,
 		e.AudioRate,
@@ -111,7 +94,21 @@ func (e *G711Audio) InstanceInit(instance *glib.Object) {
 
 	elemClass := gst.ToElementClass(self.Class())
 
-	ghostSink := gst.NewGhostPadFromTemplate("sink", e.Identity.GetStaticPad("sink"), elemClass.GetPadTemplate("sink"))
+	eWeak := weak.Make(e)
+	ghostSink := gst.NewGhostPadNoTargetFromTemplate("sink", elemClass.GetPadTemplate("sink"))
+	ghostSink.AddProbe(gst.PadProbeTypeEventDownstream, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+		e := eWeak.Value()
+		if e == nil {
+			return gst.PadProbeRemove
+		}
+
+		self := gst.ToGstBin(pad.GetParent())
+		if self == nil || self.Instance() == nil {
+			return gst.PadProbeRemove
+		}
+
+		return e.G711Setup(self, pad, info)
+	})
 	self.AddPad(ghostSink.Pad)
 
 	ghostSrc := gst.NewGhostPadFromTemplate("src", e.AudioRate.GetStaticPad("src"), elemClass.GetPadTemplate("src"))
@@ -146,7 +143,7 @@ func (e *G711Audio) setupPCMA() (err error) {
 	return nil
 }
 
-func (e *G711Audio) setupCodec(self *gst.Bin) (err error) {
+func (e *G711Audio) setupCodec(self *gst.Bin, gpad *gst.GhostPad) (err error) {
 	if err := self.AddMany(
 		e.RtpG711Depay,
 		e.G711Dec,
@@ -154,8 +151,11 @@ func (e *G711Audio) setupCodec(self *gst.Bin) (err error) {
 		return fmt.Errorf("failed to add G711 elements: %w", err)
 	}
 
+	if !gpad.SetTarget(e.RtpG711Depay.GetStaticPad("sink")) {
+		return fmt.Errorf("failed to set ghost pad target")
+	}
+
 	if err := gst.ElementLinkMany(
-		e.Identity,
 		e.RtpG711Depay,
 		e.G711Dec,
 		e.AudioConvert,
@@ -172,10 +172,17 @@ func (e *G711Audio) setupCodec(self *gst.Bin) (err error) {
 	return nil
 }
 
-func (e *G711Audio) G711Setup(self *gst.Bin, p *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+func (e *G711Audio) G711Setup(self *gst.Bin, pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
 	event := info.GetEvent()
 	if event == nil || event.Type() != gst.EventTypeCaps {
 		return gst.PadProbePass
+	}
+
+	gpad := pad.AsGhostPad()
+	if gpad == nil {
+		self.Log(CAT, gst.LevelError, "Failed to cast pad to ghost pad")
+		self.Error("Failed to cast pad to ghost pad", fmt.Errorf("pad is not a ghost pad"))
+		return gst.PadProbeRemove
 	}
 
 	caps := event.ParseCaps()
@@ -207,7 +214,7 @@ func (e *G711Audio) G711Setup(self *gst.Bin, p *gst.Pad, info *gst.PadProbeInfo)
 			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unsupported encoding: %s", encodingName))
 			continue
 		}
-		if err := e.setupCodec(self); err != nil {
+		if err := e.setupCodec(self, gpad); err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to setup codec elements: %v", err))
 			self.Error("Failed to setup codec elements", err)
 			return gst.PadProbeRemove
@@ -228,7 +235,6 @@ func (e *G711Audio) ChangeState(instance *gst.Element, transition gst.StateChang
 	}
 
 	if transition == gst.StateChangeReadyToNull {
-		e.Identity = nil
 		e.RtpG711Depay = nil
 		e.G711Dec = nil
 		e.AudioConvert = nil

@@ -1,4 +1,4 @@
-package g711dtmfaudio
+package dtmfaudio
 
 import (
 	"github.com/go-gst/go-gst/gst"
@@ -7,9 +7,9 @@ import (
 func Register() bool {
 	return gst.RegisterElement(
 		nil,
-		"g711-dtmf-audio",
+		"dtmf-audio",
 		gst.RankNone,
-		&G711DtmfAudio{},
+		&DtmfAudio{},
 		gst.ExtendsBin,
 	)
 }
