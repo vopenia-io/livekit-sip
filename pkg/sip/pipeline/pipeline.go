@@ -185,6 +185,8 @@ func (p *Pipeline) Close() error {
 	time.Sleep(100 * time.Millisecond) // give some time to settle
 	p.Log.Infow("Pipeline closed")
 
+	p.pipeline = nil
+
 	return nil
 }
 
@@ -297,14 +299,6 @@ func (p *Pipeline) cleanupChains() error {
 		}
 		p.IOManager = nil
 	}
-
-	// p.Log.Debugw("Closing WebRTC to SIP chain")
-	// if p.WebrtcToSip != nil {
-	// 	if err := p.WebrtcToSip.Close(); err != nil {
-	// 		return fmt.Errorf("failed to close WebRTC to SIP chain: %w", err)
-	// 	}
-	// 	p.WebrtcToSip = nil
-	// }
 
 	p.Log.Debugw("Pipeline chains closed")
 	return nil

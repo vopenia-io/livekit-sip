@@ -54,11 +54,12 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/iomanager"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitcompositor"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipcompositor"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipmanager"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audiog711"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audioopus"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/dtmfaudio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/g711audio"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/g711dtmfaudio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/h264video"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/opusaudio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videoh264"
@@ -109,10 +110,6 @@ func init() {
 		panic("Failed to register audio-g711")
 	}
 
-	if !g711dtmfaudio.Register() {
-		panic("Failed to register g711-dtmf-audio")
-	}
-
 	if !h264video.Register() {
 		panic("Failed to register h264-video")
 	}
@@ -131,6 +128,14 @@ func init() {
 
 	if !livekitcompositor.Register() {
 		panic("Failed to register livekitcompositor")
+	}
+
+	if !sipcompositor.Register() {
+		panic("Failed to register sipcompositor")
+	}
+
+	if !dtmfaudio.Register() {
+		panic("Failed to register dtmf-audio")
 	}
 
 	MainLoop = glib.NewMainLoop(glib.MainContextDefault(), false)
