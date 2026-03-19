@@ -129,8 +129,10 @@ func (e *LivekitCompositor) ChangeState(instance *gst.Element, transition gst.St
 	ret := self.ParentChangeState(transition)
 
 	if transition == gst.StateChangeReadyToNull {
-		e.mu.Lock()
-		defer e.mu.Unlock()
+		e.participants = make(map[string]ParticipantInfo)
+		e.currentLayout = nil
+		e.LivekitCompositorCamera = nil
+		e.LivekitCompositorMicrophone = nil
 	}
 
 	return ret

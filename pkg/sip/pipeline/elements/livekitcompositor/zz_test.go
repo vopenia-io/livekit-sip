@@ -363,6 +363,7 @@ func TestCompositor_StateChanges(t *testing.T) {
 	defer testutils.AssertNoLeaks(t)
 
 	pipeline, _ := newTestPipeline(t, "test-state-changes")
+	pipeline.GetBus().SetFlushing(true)
 
 	dumpDot(t, pipeline, "01_ready")
 
@@ -379,6 +380,8 @@ func TestCompositor_StateChanges(t *testing.T) {
 	if err := pipeline.SetState(gst.StateNull); err != nil {
 		t.Fatal("failed to set pipeline to NULL:", err)
 	}
+
+	pipeline = nil
 }
 
 func TestCompositor_SinkPadRequest(t *testing.T) {
