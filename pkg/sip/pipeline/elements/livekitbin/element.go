@@ -345,6 +345,10 @@ func (e *LivekitBin) ChangeState(instance *gst.Element, transition gst.StateChan
 		e.MicrophoneRtcpFunnel = nil
 		e.CameraRtpFunnel = nil
 		e.CameraRtcpFunnel = nil
+		e.ScreenshareRtpFunnel = nil
+		e.ScreenshareRtcpFunnel = nil
+		e.ScreenshareAudioRtpFunnel = nil
+		e.ScreenshareAudioRtcpFunnel = nil
 
 		self.Log(CAT, gst.LevelDebug, "LivekitBin state changed to NULL, disconnected from LiveKit room and cleaned up resources")
 	}
