@@ -28,7 +28,7 @@ require (
 	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.11.1
 	github.com/vopenia-io/bfcp v0.0.0-20251208070418-52ef30fdbcd4
-	github.com/vopenia-io/go-pjmedia v0.0.0-20260128093919-6047c50263ed
+	github.com/vopenia-io/go-pjmedia v0.0.0-20260323125845-88720f6c0971
 	golang.org/x/exp v0.0.0-20251009144603-d2f985daa21b
 	google.golang.org/protobuf v1.36.10
 	gopkg.in/hraban/opus.v2 v2.0.0-20230925203106-0188a62cb302
