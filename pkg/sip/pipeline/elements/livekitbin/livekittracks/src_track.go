@@ -170,11 +170,6 @@ func (s *SrcTrack) open(self *gst.Bin) gst.StateChangeReturn {
 	self.Log(CAT, gst.LevelDebug, "Opening SrcTrack element")
 
 	rtcpPad := self.GetStaticPad("src_rtcp")
-	if rtcpPad == nil {
-		self.Log(CAT, gst.LevelError, "Failed to get src_rtcp pad from srcTrack element")
-		self.Error("Failed to get src_rtcp pad from srcTrack element", errors.New("pad is nil"))
-		return gst.StateChangeFailure
-	}
 
 	if !rtcpPad.SetActive(true) {
 		self.Log(CAT, gst.LevelError, "Failed to activate src_rtcp pad for srcTrack element")
@@ -193,7 +188,7 @@ func (s *SrcTrack) open(self *gst.Bin) gst.StateChangeReturn {
 	}
 
 	caps := gst.NewCapsFromString("application/x-rtcp")
-	if !rtcpPad.PushEvent(gst.NewCapsEvent(caps)) {
+	if !rtcpPad.PushEvent(gst.NewCapsEvent(caps.Copy().Ref())) {
 		self.Log(CAT, gst.LevelWarning, "Failed to push caps event on rtcp pad")
 		if rtcpPad.IsLinked() {
 			self.Log(CAT, gst.LevelWarning, "Failed to push Caps event on RTCP pad")
@@ -214,12 +209,6 @@ func (s *SrcTrack) start(self *gst.Bin) gst.StateChangeReturn {
 	self.Log(CAT, gst.LevelDebug, "Starting SrcTrack element")
 
 	rtcpPad := self.GetStaticPad("src_rtcp")
-	if rtcpPad == nil {
-		self.Log(CAT, gst.LevelError, "Failed to get src_rtcp pad")
-		self.Error("Failed to get src_rtcp pad", errors.New("src_rtcp pad is nil"))
-		return gst.StateChangeFailure
-	}
-
 	s.Pub.OnRTCP(s.onRtcp(self, rtcpPad))
 
 	return gst.StateChangeSuccess

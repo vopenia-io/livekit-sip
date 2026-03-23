@@ -68,7 +68,7 @@ func (s *SrcTrackRtp) SetCaps(self *base.GstBaseSrc, caps *gst.Caps) bool {
 
 func (s *SrcTrackRtp) GetCaps(self *base.GstBaseSrc, filter *gst.Caps) *gst.Caps {
 	if s.parent == nil || s.parent.Track == nil {
-		return gst.NewCapsFromString("application/x-rtp")
+		return gst.NewCapsFromString("application/x-rtp").Ref()
 	}
 	codec := s.parent.Track.Codec()
 
