@@ -51,7 +51,8 @@ import (
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/g711opusdtmf"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/h264vp8"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/iomanager"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/iolivekit"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/iosip"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitcompositor"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipcompositor"
@@ -90,8 +91,12 @@ func init() {
 		panic("Failed to register livekitbin")
 	}
 
-	if !iomanager.Register() {
-		panic("Failed to register io_manager")
+	if !iolivekit.Register() {
+		panic("Failed to register io_manager_livekit")
+	}
+
+	if !iosip.Register() {
+		panic("Failed to register io_manager_sip")
 	}
 
 	if !g711audio.Register() {

@@ -1,4 +1,4 @@
-package iomanager
+package iolivekit
 
 import (
 	"github.com/go-gst/go-gst/gst"
@@ -6,12 +6,6 @@ import (
 
 func Register() bool {
 	return gst.RegisterElement(
-		nil,
-		"io_manager_sip",
-		gst.RankNone,
-		&IoManagerSip{},
-		gst.ExtendsBin,
-	) && gst.RegisterElement(
 		nil,
 		"io_manager_livekit",
 		gst.RankNone,
