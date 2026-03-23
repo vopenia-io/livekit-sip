@@ -34,7 +34,7 @@ var _ GstChain = (*WebrtcIo)(nil)
 func (wio *WebrtcIo) Create() error {
 	var err error
 	wio.LivekitBin, err = gst.NewElementWithProperties("livekitbin", map[string]interface{}{
-		"max-active-participants": uint(2),
+		"max-active-participants": uint(6),
 		"camera":                  false,
 		"microphone":              false,
 		"screenshare":             false,
