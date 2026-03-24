@@ -33,6 +33,7 @@ import (
 
 	msdk "github.com/livekit/media-sdk"
 	"github.com/livekit/media-sdk/dtmf"
+	"github.com/livekit/media-sdk/rtp"
 	"github.com/livekit/media-sdk/sdp"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
@@ -46,6 +47,7 @@ import (
 
 	"github.com/livekit/sip/pkg/config"
 	"github.com/livekit/sip/pkg/stats"
+	"github.com/livekit/sip/res"
 )
 
 const (
@@ -1436,7 +1438,9 @@ func (c *inboundCall) joinRoom(ctx context.Context, rconf RoomConfig, status Cal
 }
 
 func (c *inboundCall) playAudio(ctx context.Context, frames []msdk.PCM16Sample) {
-	return
+	if err := c.medias.PlayAudio(ctx, rtp.DefFrameDur, res.SampleRate, frames); err != nil {
+		c.log().Errorw("Cannot play audio", err)
+	}
 	// t := c.lkRoom.NewTrack()
 	// if t == nil {
 	// 	return // closed

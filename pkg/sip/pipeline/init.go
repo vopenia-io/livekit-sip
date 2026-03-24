@@ -55,6 +55,7 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/iosip"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitcompositor"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/samplewriter"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipcompositor"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipmanager"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audiog711"
@@ -63,6 +64,7 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/g711audio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/h264video"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/opusaudio"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/pcm16audio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videoh264"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videovp8"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/vp8video"
@@ -141,6 +143,14 @@ func init() {
 
 	if !dtmfaudio.Register() {
 		panic("Failed to register dtmf-audio")
+	}
+
+	if !samplewriter.Register() {
+		panic("Failed to register samplewriter")
+	}
+
+	if !pcm16audio.Register() {
+		panic("Failed to register pcm16audio")
 	}
 
 	MainLoop = glib.NewMainLoop(glib.MainContextDefault(), false)
