@@ -85,7 +85,10 @@ func (p *Pipeline) onMessage(msg *gst.Message) bool {
 			p.dtmfCh <- nb
 		}
 	case gst.MessageStateChanged:
-		p.dumpCH <- false
+		select {
+		case p.dumpCH <- false:
+		default:
+		}
 	default:
 		p.Log.Debugw("Unhandled bus message", "type", msg.Type())
 	}
