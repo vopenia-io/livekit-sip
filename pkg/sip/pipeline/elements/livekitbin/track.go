@@ -58,6 +58,7 @@ func (e *LivekitBin) PublishTrack(self *gst.Bin, pad *gst.Pad, pname string) {
 		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("LivekitBin not joined room yet, deferring publish for pad name: %s", pname))
 		probe := sinkPad.AddProbe(gst.PadProbeTypeBuffer|gst.PadProbeTypeBufferList, livekittracks.PadProbeDrop)
 		element.SetLockedState(true)
+		sinkPad.SetActive(true)
 		welement := glib.WeakRefInit(element)
 		e.wg.Add(1)
 		go e.handleTrackJoin(welement, pname, probe)
@@ -188,17 +189,6 @@ func (e *LivekitBin) SubscribeTrack(track *webrtc.TrackRemote, publication *lksd
 	if self == nil || self.Instance() == nil {
 		return
 	}
-	if err := e.Wait(RoomStateJoined); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error waiting for room to be joined: %v", err))
-		self.Error(fmt.Sprintf("Error waiting for room to be joined: %v", err), err)
-		return
-	}
-
-	// if err := e.Wait(RoomStatePlaying); err != nil {
-	// 	self.Log(CAT, gst.LevelError, fmt.Sprintf("Error waiting for room to be playing: %v", err))
-	// 	self.Error(fmt.Sprintf("Error waiting for room to be playing: %v", err), err)
-	// 	return
-	// }
 
 	_, enc, ok := strings.Cut(track.Codec().MimeType, "/")
 	if !ok {

@@ -49,6 +49,21 @@ func (e *LivekitBin) callabcks() *lksdk.RoomCallback {
 		},
 		ParticipantCallback: lksdk.ParticipantCallback{
 			OnTrackSubscribed: func(track *webrtc.TrackRemote, publication *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
+				self := gst.ToGstBin(e.self.Get())
+				if self == nil || self.Instance() == nil {
+					return
+				}
+				if err := e.Wait(RoomStateJoined); err != nil {
+					self.Log(CAT, gst.LevelError, fmt.Sprintf("Error waiting for room to be joined: %v", err))
+					self.Error(fmt.Sprintf("Error waiting for room to be joined: %v", err), err)
+					return
+				}
+				// if err := e.Wait(RoomStatePlaying); err != nil {
+				// 	self.Log(CAT, gst.LevelError, fmt.Sprintf("Error waiting for room to be playing: %v", err))
+				// 	self.Error(fmt.Sprintf("Error waiting for room to be playing: %v", err), err)
+				// 	return
+				// }
+
 				e.livekitMu.Lock()
 				if _, err := glib.IdleAdd(func() {
 					defer e.livekitMu.Unlock()

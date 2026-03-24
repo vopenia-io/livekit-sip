@@ -246,10 +246,16 @@ func (e *LivekitBin) GetProperty(instance *glib.Object, id uint) *glib.Value {
 	param := properties[id]
 	switch param.Name() {
 	case "sid":
-		sid := e.room.SID()
+		var sid string
+		if e.Is(RoomStateJoined) {
+			sid = e.room.SID()
+		}
 		return stringPropGetter(&sid)(self, param)
 	case "room-name":
-		roomName := e.room.Name()
+		var roomName string
+		if e.Is(RoomStateJoined) {
+			roomName = e.room.Name()
+		}
 		return stringPropGetter(&roomName)(self, param)
 	case "ws-url":
 		return stringPropGetter(&e.wsURL)(self, param)
