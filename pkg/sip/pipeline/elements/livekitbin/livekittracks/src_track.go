@@ -188,7 +188,7 @@ func (s *SrcTrack) open(self *gst.Bin) gst.StateChangeReturn {
 	}
 
 	caps := gst.NewCapsFromString("application/x-rtcp")
-	if !rtcpPad.PushEvent(gst.NewCapsEvent(caps.Copy().Ref())) {
+	if !rtcpPad.PushEvent(gst.NewCapsEvent(caps.Copy())) {
 		self.Log(CAT, gst.LevelWarning, "Failed to push caps event on rtcp pad")
 		if rtcpPad.IsLinked() {
 			self.Log(CAT, gst.LevelWarning, "Failed to push Caps event on RTCP pad")
