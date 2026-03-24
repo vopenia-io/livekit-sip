@@ -1,6 +1,7 @@
 package iolivekit_test
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,15 +13,19 @@ import (
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
+	"github.com/livekit/media-sdk/rtp"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/iolivekit"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin/livekittracks"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitcompositor"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/samplewriter"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/testutils"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audiog711"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/opusaudio"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/pcm16audio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videoh264"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/vp8video"
+	"github.com/livekit/sip/res"
 )
 
 func TestMain(m *testing.M) {
@@ -31,6 +36,8 @@ func TestMain(m *testing.M) {
 	audiog711.Register()
 	vp8video.Register()
 	videoh264.Register()
+	pcm16audio.Register()
+	samplewriter.Register()
 	iolivekit.Register()
 	os.Exit(m.Run())
 }
@@ -844,5 +851,214 @@ func TestIoManagerLivekit_VideoFlow_BackgroundAlwaysProduces(t *testing.T) {
 	t.Logf("received %d video buffers from background (no active speakers)", count)
 	if count <= 0 {
 		t.Fatal("no video buffers received — internal videotestsrc(black) should always produce frames")
+	}
+}
+
+// ===== Raw Audio Injection Tests =====
+
+func TestIoManagerLivekit_RawSinkPadRequest(t *testing.T) {
+	defer testutils.AssertNoLeaks(t)
+
+	pipeline, ioManager := newTestPipeline(t, "test-raw-sink-pad-request")
+
+	// Requesting raw_sink triggers compositor audiomixer and output pad creation.
+	// Connect a sink to the output pad that will appear.
+	audioCount, _ := waitForSrcPadsAndLink(t, pipeline, ioManager)
+	_ = audioCount
+
+	pad0 := ioManager.GetRequestPad("raw_sink_%u")
+	if pad0 == nil {
+		t.Fatal("GetRequestPad returned nil for first raw_sink pad")
+	}
+	t.Logf("first raw pad name: %s", pad0.GetName())
+	if pad0.GetName() != "raw_sink_0" {
+		t.Fatalf("expected raw_sink_0, got %s", pad0.GetName())
+	}
+
+	pad1 := ioManager.GetRequestPad("raw_sink_%u")
+	if pad1 == nil {
+		t.Fatal("GetRequestPad returned nil for second raw_sink pad")
+	}
+	t.Logf("second raw pad name: %s", pad1.GetName())
+	if pad1.GetName() != "raw_sink_1" {
+		t.Fatalf("expected raw_sink_1, got %s", pad1.GetName())
+	}
+
+	dumpDot(t, pipeline, "after_raw_request")
+
+	if err := pipeline.SetState(gst.StateNull); err != nil {
+		t.Fatal("failed to set pipeline to NULL:", err)
+	}
+}
+
+func TestIoManagerLivekit_RawAudioInjection(t *testing.T) {
+	defer testutils.AssertNoLeaks(t)
+
+	frames := res.ReadOggAudioFile(res.RoomJoinOgg)
+	t.Logf("decoded %d PCM16 frames from room_join.ogg", len(frames))
+
+	pipeline, ioManager := newTestPipeline(t, "test-raw-audio-injection")
+
+	src, err := samplewriter.NewSampleWriter(context.Background(), rtp.DefFrameDur, res.SampleRate, frames)
+	if err != nil {
+		t.Fatal("failed to create samplewriter:", err)
+	}
+	if err := pipeline.Add(src); err != nil {
+		t.Fatal("failed to add samplewriter to pipeline:", err)
+	}
+
+	// Request raw injection pad and link samplewriter to it
+	rawPad := ioManager.GetRequestPad("raw_sink_%u")
+	if rawPad == nil {
+		t.Fatal("GetRequestPad returned nil for raw_sink")
+	}
+
+	srcPad := src.GetStaticPad("src")
+	if srcPad == nil {
+		t.Fatal("failed to get src pad from samplewriter")
+	}
+	if ret := srcPad.Link(rawPad); ret != gst.PadLinkOK {
+		t.Fatal("failed to link samplewriter to raw_sink:", ret)
+	}
+
+	// Link output to fakesink manually
+	sink, err := gst.NewElementWithProperties("fakesink", map[string]any{"sync": false})
+	if err != nil {
+		t.Fatal("failed to create fakesink:", err)
+	}
+	if err := pipeline.Add(sink); err != nil {
+		t.Fatal("failed to add fakesink:", err)
+	}
+
+	var audioCount atomic.Int32
+	fSinkPad := sink.GetStaticPad("sink")
+	if fSinkPad == nil {
+		t.Fatal("failed to get fakesink sink pad")
+	}
+	fSinkPad.AddProbe(gst.PadProbeTypeBuffer|gst.PadProbeTypeBufferList, func(_ *gst.Pad, _ *gst.PadProbeInfo) gst.PadProbeReturn {
+		audioCount.Add(1)
+		return gst.PadProbeOK
+	})
+
+	audioSrcName := fmt.Sprintf("send_rtp_src_%d", livekit.TrackSource_MICROPHONE)
+	ioManager.Connect("pad-added", func(_ *gst.Element, pad *gst.Pad) {
+		if pad.GetName() == audioSrcName {
+			sink.SyncStateWithParent()
+			pad.Link(fSinkPad)
+		}
+	})
+	if pad := ioManager.GetStaticPad(audioSrcName); pad != nil {
+		sink.SyncStateWithParent()
+		pad.Link(fSinkPad)
+	}
+
+	if err := pipeline.SetState(gst.StatePlaying); err != nil {
+		t.Fatal("failed to set pipeline to PLAYING:", err)
+	}
+
+	bus := pipeline.GetPipelineBus()
+	pollTimeout := gst.ClockTime(time.Second)
+	deadline := time.Now().Add(30 * time.Second)
+
+	for time.Now().Before(deadline) {
+		msg := bus.TimedPop(pollTimeout)
+		if msg == nil {
+			continue
+		}
+		switch msg.Type() {
+		case gst.MessageEOS:
+			t.Log("received EOS")
+			goto done
+		case gst.MessageError:
+			gerr := msg.ParseError()
+			t.Fatal("pipeline error:", gerr.Error())
+		}
+	}
+	t.Fatal("timed out waiting for EOS")
+
+done:
+	dumpDot(t, pipeline, "raw_audio_injection")
+
+	if err := pipeline.SetState(gst.StateNull); err != nil {
+		t.Fatal("failed to set pipeline to NULL:", err)
+	}
+
+	count := audioCount.Load()
+	t.Logf("received %d audio buffers via raw injection", count)
+	if count <= 0 {
+		t.Fatal("no audio buffers received through raw injection path")
+	}
+}
+
+func TestIoManagerLivekit_RawAudioInjection_WithRTPAudio(t *testing.T) {
+	defer testutils.AssertNoLeaks(t)
+
+	frames := res.ReadOggAudioFile(res.EnterPinOgg)
+	t.Logf("decoded %d PCM16 frames from enter_pin.ogg", len(frames))
+
+	pipeline, ioManager := newTestPipeline(t, "test-raw-with-rtp")
+
+	// Raw injection source (samplewriter with enter_pin audio)
+	rawSrc, err := samplewriter.NewSampleWriter(context.Background(), rtp.DefFrameDur, res.SampleRate, frames)
+	if err != nil {
+		t.Fatal("failed to create samplewriter:", err)
+	}
+	if err := pipeline.Add(rawSrc); err != nil {
+		t.Fatal("failed to add samplewriter to pipeline:", err)
+	}
+
+	// RTP Opus source (live, won't EOS)
+	_, opusSrcPad := newOpusRTPSource(t, pipeline)
+
+	// Request raw injection pad and link
+	rawPad := ioManager.GetRequestPad("raw_sink_%u")
+	if rawPad == nil {
+		t.Fatal("GetRequestPad returned nil for raw_sink")
+	}
+	rawSrcPad := rawSrc.GetStaticPad("src")
+	if ret := rawSrcPad.Link(rawPad); ret != gst.PadLinkOK {
+		t.Fatal("failed to link samplewriter to raw_sink:", ret)
+	}
+
+	// Request RTP audio pad and link
+	rtpPad := ioManager.GetRequestPad("recv_rtp_sink_2_1234_111")
+	if rtpPad == nil {
+		t.Fatal("GetRequestPad returned nil for recv_rtp_sink_2_1234_111")
+	}
+	if ret := opusSrcPad.Link(rtpPad); ret != gst.PadLinkOK {
+		t.Fatal("failed to link opus RTP to io_manager_livekit:", ret)
+	}
+
+	injectTrackSourceInfo(opusSrcPad, livekittracks.TrackSourceInfo{
+		ParticipantSID:  "participant1",
+		ParticipantName: "Test User",
+		TrackSID:        "track1",
+		Source:          livekit.TrackSource_MICROPHONE,
+		Kind:            "audio",
+		MimeType:        "audio/opus",
+		SSRC:            1234,
+		PT:              111,
+	})
+
+	// Use shared helper to link output pads to fakesinks
+	audioCount, _ := waitForSrcPadsAndLink(t, pipeline, ioManager)
+
+	if err := pipeline.SetState(gst.StatePlaying); err != nil {
+		t.Fatal("failed to set pipeline to PLAYING:", err)
+	}
+
+	// Let both sources produce audio for a few seconds
+	time.Sleep(3 * time.Second)
+
+	dumpDot(t, pipeline, "raw_with_rtp")
+
+	if err := pipeline.SetState(gst.StateNull); err != nil {
+		t.Fatal("failed to set pipeline to NULL:", err)
+	}
+
+	count := audioCount.Load()
+	t.Logf("received %d audio buffers (raw injection + RTP mixed)", count)
+	if count <= 0 {
+		t.Fatal("no audio buffers received — raw + RTP mix should produce output")
 	}
 }

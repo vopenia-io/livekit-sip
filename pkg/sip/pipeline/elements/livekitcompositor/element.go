@@ -70,6 +70,13 @@ func (e *LivekitCompositor) ClassInit(klass *glib.ObjectClass) {
 	))
 
 	class.AddPadTemplate(gst.NewPadTemplate(
+		"raw_sink_%u",
+		gst.PadDirectionSink,
+		gst.PadPresenceRequest,
+		gst.NewAnyCaps(),
+	))
+
+	class.AddPadTemplate(gst.NewPadTemplate(
 		"src_%u",
 		gst.PadDirectionSource,
 		gst.PadPresenceSometimes,
@@ -146,12 +153,15 @@ func (e *LivekitCompositor) RequestNewPad(instance *gst.Element, templ *gst.PadT
 		return nil
 	}
 
-	if templ.Name() != "sink_%u_%u_%u" {
+	switch templ.Name() {
+	case "sink_%u_%u_%u":
+		return e.requestNewSinkPad(self, templ, name)
+	case "raw_sink_%u":
+		return e.requestNewRawSinkPad(self, templ, name)
+	default:
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("No handler for requested pad template: %s", templ.Name()))
 		return nil
 	}
-
-	return e.requestNewSinkPad(self, templ, name)
 }
 
 func (e *LivekitCompositor) requestNewSinkPad(self *gst.Bin, templ *gst.PadTemplate, name string) *gst.Pad {
@@ -218,6 +228,24 @@ func (e *LivekitCompositor) ReleasePad(instance *gst.Element, pad *gst.Pad) {
 		return
 	}
 
+	templ := gpad.Template()
+	if templ == nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Released pad has no template: %s", pad.GetName()))
+		return
+	}
+
+	switch templ.Name() {
+	case "sink_%u_%u_%u":
+		e.releaseSinkPad(self, gpad)
+	case "raw_sink_%u":
+		e.releaseRawSinkPad(self, gpad)
+	default:
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("No handler for released pad template: %s", templ.Name()))
+		return
+	}
+}
+
+func (e *LivekitCompositor) releaseSinkPad(self *gst.Bin, gpad *gst.GhostPad) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
