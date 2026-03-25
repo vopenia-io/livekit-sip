@@ -258,12 +258,10 @@ github.com/vopenia-io/go-glib v0.0.0-20260323091857-632313c792eb h1:N4Y9ZgflDWx6
 github.com/vopenia-io/go-glib v0.0.0-20260323091857-632313c792eb/go.mod h1:dqdh3eCmMS9ofMtyPGoO5jeTzaoGLS+nGMdnoL33is8=
 github.com/vopenia-io/go-gst v0.0.0-20260323092656-0cbf1d49f756 h1:BB98x6mkYOGfMz42b4jFAfJPUkPjw7Mfjo3h5ORdKQQ=
 github.com/vopenia-io/go-gst v0.0.0-20260323092656-0cbf1d49f756/go.mod h1:moCQ17SmRsOxBF1fq5liQZ6lNo8ZVjyVAxJDwc/pJeg=
-github.com/vopenia-io/go-pjmedia v0.0.0-20260128093919-6047c50263ed h1:7ZJ3TcOmfPQiDRQQr0k6HpzlPmv4flSIMCDX5CoQ/E8=
-github.com/vopenia-io/go-pjmedia v0.0.0-20260128093919-6047c50263ed/go.mod h1:tA/SCX90/sWfxKBksRSJqLivQaHJ38fI33yDKGFfqLc=
-github.com/vopenia-io/go-pjmedia v0.0.0-20260323125845-88720f6c0971 h1:DqDVfGPVxo7qe0QvfJzW1PksUfO1FlXfjB82fX5HEyY=
-github.com/vopenia-io/go-pjmedia v0.0.0-20260323125845-88720f6c0971/go.mod h1:mo5FrDHH1vgFbiaPOaHi7g3AvAEfj5jVcAP5xZuYaF8=
 github.com/vopenia-io/go-pjmedia v0.0.0-20260324170120-3368b5487d7e h1:PNEjn0NkyPagFa3yzmb8tMfu2IA31PsNfBaIGHzBs6s=
 github.com/vopenia-io/go-pjmedia v0.0.0-20260324170120-3368b5487d7e/go.mod h1:mo5FrDHH1vgFbiaPOaHi7g3AvAEfj5jVcAP5xZuYaF8=
+github.com/vopenia-io/go-pjmedia v0.0.0-20260325101121-6ecf5953054a h1:PmahMvT+zHEN3Hkma9m4xHnEM0och2v6LYsbtpBaNSM=
+github.com/vopenia-io/go-pjmedia v0.0.0-20260325101121-6ecf5953054a/go.mod h1:mo5FrDHH1vgFbiaPOaHi7g3AvAEfj5jVcAP5xZuYaF8=
 github.com/vopenia-io/media-sdk v0.0.0-20251229153245-6b76cc17de47 h1:C7C20LfJw+i6IC4PVxsby0mJhX5UkWjsI3+FgYUb3Q8=
 github.com/vopenia-io/media-sdk v0.0.0-20251229153245-6b76cc17de47/go.mod h1:7ssWiG+U4xnbvLih9WiZbhQP6zIKMjgXdUtIE1bm/E8=
 github.com/wlynxg/anet v0.0.5 h1:J3VJGi1gvo0JwZ/P1/Yc/8p63SoW98B5dHkYDmpgvvU=
