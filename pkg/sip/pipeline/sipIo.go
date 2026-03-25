@@ -136,52 +136,50 @@ func (sio *SipIo) binPadAddedSendRtpSrc(_ *gst.Element, pad *gst.Pad) {
 		return
 	}
 
+	var media string
+	switch livekit.TrackSource(session) {
+	case livekit.TrackSource_MICROPHONE:
+		media = "audio"
+	case livekit.TrackSource_CAMERA:
+		media = "video"
+	default:
+		sio.log.Warnw("Unsupported session kind", nil, "session", session)
+		return
+	}
+
+	rtpSinkPad := sio.SipManager.GetRequestPad(fmt.Sprintf("sink_%s_%%u", media))
+	if rtpSinkPad == nil {
+		sio.log.Warnw("Track rejected by remote", nil, "pad", fmt.Sprintf("sink_%s_%%u", media))
+		return
+	}
+
+	if err := LinkPad(
+		pad,
+		rtpSinkPad,
+	); err != nil {
+		sio.log.Errorw("Failed to link sip rtpbin pad to sip manager sink pad", err, "rtpPad", padName)
+		return
+	}
+	sio.log.Infow("Linked SIP RTP pad", "pad", padName)
+
+	var trackID uint32
+	if _, err := fmt.Sscanf(rtpSinkPad.GetName(), fmt.Sprintf("sink_%s_%%d", media), &trackID); err != nil {
+		sio.log.Warnw("Invalid SIP manager sink pad format", err, "pad", rtpSinkPad.GetName())
+		return
+	}
 	go func() {
-		var media string
-		switch livekit.TrackSource(session) {
-		case livekit.TrackSource_MICROPHONE:
-			media = "audio"
-		case livekit.TrackSource_CAMERA:
-			media = "video"
-		default:
-			sio.log.Warnw("Unsupported session kind", nil, "session", session)
-			return
-		}
-
-		rtpSinkPad := sio.SipManager.GetRequestPad(fmt.Sprintf("sink_%s_%%u", media))
-		if rtpSinkPad == nil {
-			sio.log.Warnw("Track rejected by remote", nil, "pad", fmt.Sprintf("sink_%s_%%u", media))
-			return
-		}
-
+		rtcpPadName := fmt.Sprintf("send_rtcp_src_%d", session)
+		rtcpPad := sio.SipRtpBin.GetRequestPad(rtcpPadName)
+		sio.log.Infow("Requested RTCP pad from rtpbin", "name", fmt.Sprintf("send_rtcp_src_%d", session), "pad", rtcpPad.GetName())
+		rtcpSinkPad := sio.SipManager.GetRequestPad(fmt.Sprintf("sink_rtcp_%s_%d", media, trackID))
 		if err := LinkPad(
-			pad,
-			rtpSinkPad,
+			rtcpPad,
+			rtcpSinkPad,
 		); err != nil {
-			sio.log.Errorw("Failed to link sip rtpbin pad to sip manager sink pad", err, "rtpPad", padName)
+			sio.log.Errorw("Failed to link sip rtpbin RTCP pad to SIP manager RTCP sink pad", err)
 			return
 		}
-		sio.log.Infow("Linked SIP RTP pad", "pad", padName)
-
-		var trackID uint32
-		if _, err := fmt.Sscanf(rtpSinkPad.GetName(), fmt.Sprintf("sink_%s_%%d", media), &trackID); err != nil {
-			sio.log.Warnw("Invalid SIP manager sink pad format", err, "pad", rtpSinkPad.GetName())
-			return
-		}
-		go func() {
-			rtcpPadName := fmt.Sprintf("send_rtcp_src_%d", session)
-			rtcpPad := sio.SipRtpBin.GetRequestPad(rtcpPadName)
-			sio.log.Infow("Requested RTCP pad from rtpbin", "name", fmt.Sprintf("send_rtcp_src_%d", session), "pad", rtcpPad.GetName())
-			rtcpSinkPad := sio.SipManager.GetRequestPad(fmt.Sprintf("sink_rtcp_%s_%d", media, trackID))
-			if err := LinkPad(
-				rtcpPad,
-				rtcpSinkPad,
-			); err != nil {
-				sio.log.Errorw("Failed to link sip rtpbin RTCP pad to SIP manager RTCP sink pad", err)
-				return
-			}
-			sio.log.Infow("Linked SIP RTCP pad", "pad", rtcpPad.GetName())
-		}()
+		sio.log.Infow("Linked SIP RTCP pad", "pad", rtcpPad.GetName())
 	}()
 }
 
