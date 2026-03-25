@@ -1,19 +1,22 @@
 package sipmanager
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"math/rand"
 	"net"
+	"strconv"
 	"syscall"
 	"unsafe"
 
 	"github.com/go-gst/go-glib/glib"
+	"golang.org/x/sys/unix"
 )
 
 /*
 #cgo pkg-config: gio-2.0
 #include <gio/gio.h>
-
 // Helper to get the GType for GSocket
 static GType get_socket_type() {
     return g_socket_get_type();
@@ -34,6 +37,36 @@ static GSocket* create_gsocket_from_fd(int fd) {
 import "C"
 
 var ErrListenFailed = errors.New("failed to listen on udp port")
+
+func listenUDPWithReusePort(ip net.IP, port int) (*net.UDPConn, error) {
+	lc := net.ListenConfig{
+		Control: func(network, address string, c syscall.RawConn) error {
+			var sockErr error
+			err := c.Control(func(fd uintptr) {
+				sockErr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEPORT, 1)
+			})
+			if err != nil {
+				return err
+			}
+			return sockErr
+		},
+	}
+
+	addr := net.JoinHostPort(ip.String(), strconv.Itoa(port))
+
+	conn, err := lc.ListenPacket(context.Background(), "udp4", addr)
+	if err != nil {
+		return nil, err
+	}
+
+	udpConn, ok := conn.(*net.UDPConn)
+	if !ok {
+		conn.Close()
+		return nil, fmt.Errorf("failed to cast to *net.UDPConn")
+	}
+
+	return udpConn, nil
+}
 
 func NewUDPConnPair(portMin, portMax uint16, ip net.IP) (*net.UDPConn, *net.UDPConn, error) {
 	if portMin == 0 && portMax == 0 {
@@ -70,9 +103,9 @@ func NewUDPConnPair(portMin, portMax uint16, ip net.IP) (*net.UDPConn, *net.UDPC
 	portCurrent := portStart
 
 	for {
-		rtpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: ip, Port: int(portCurrent)})
+		rtpConn, err := listenUDPWithReusePort(ip, int(portCurrent))
 		if err == nil {
-			rtcpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: ip, Port: int(portCurrent + 1)})
+			rtcpConn, err := listenUDPWithReusePort(ip, int(portCurrent+1))
 			if err == nil {
 				return rtpConn, rtcpConn, nil
 			}
@@ -117,6 +150,11 @@ func GSocketFromUDPConn(conn *net.UDPConn) (*GSocketWrapper, error) {
 	fd, err := syscall.Dup(int(file.Fd()))
 	if err != nil {
 		return nil, err
+	}
+
+	if err := syscall.SetNonblock(fd, true); err != nil {
+		syscall.Close(fd)
+		return nil, errors.New("failed to set socket to non-blocking mode")
 	}
 
 	cSocket := C.create_gsocket_from_fd(C.int(fd))

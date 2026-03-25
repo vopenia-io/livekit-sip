@@ -75,6 +75,7 @@ func (s *SipMedia) InstanceInit(instance *glib.Object) {
 	s.SrcRtp, err = gst.NewElementWithProperties("udpsrc", map[string]interface{}{
 		"name":         "sip-src-rtp",
 		"do-timestamp": true,
+		"close-socket": false,
 		// "format":       int(gst.FormatTime),
 		// "is_live":      true,
 	})
@@ -88,6 +89,7 @@ func (s *SipMedia) InstanceInit(instance *glib.Object) {
 	s.SrcRtcp, err = gst.NewElementWithProperties("udpsrc", map[string]interface{}{
 		"name":         "sip-src-rtcp",
 		"do-timestamp": true,
+		"close-socket": false,
 		// "format":       int(gst.FormatTime),
 		// "is_live":      true,
 	})
@@ -109,9 +111,11 @@ func (s *SipMedia) InstanceInit(instance *glib.Object) {
 	}
 
 	s.SinkRtp, err = gst.NewElementWithProperties("udpsink", map[string]interface{}{
-		"name":  "sip-sink-rtp",
-		"sync":  false,
-		"async": false,
+		"name":         "sip-sink-rtp",
+		"host":         "127.0.0.1",
+		"sync":         false,
+		"async":        false,
+		"close-socket": false,
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to create udpsink for RTP: %v", s.err))
@@ -131,9 +135,11 @@ func (s *SipMedia) InstanceInit(instance *glib.Object) {
 	}
 
 	s.SinkRtcp, err = gst.NewElementWithProperties("udpsink", map[string]interface{}{
-		"name":  "sip-sink-rtcp",
-		"sync":  false,
-		"async": false,
+		"name":         "sip-sink-rtcp",
+		"host":         "127.0.0.1",
+		"sync":         false,
+		"async":        false,
+		"close-socket": false,
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to create udpsink for RTCP: %v", s.err))
@@ -262,6 +268,22 @@ func (s *SipMedia) open(self *gst.Bin) gst.StateChangeReturn {
 		return gst.StateChangeFailure
 	}
 
+	if err := utils.ElementSetPropertyMany(s.SinkRtp, map[string]interface{}{
+		"socket": gRtpSock,
+	}); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to set RTP sink properties: %v", err))
+		self.Error("failed to set RTP sink properties", err)
+		return gst.StateChangeFailure
+	}
+
+	if err := utils.ElementSetPropertyMany(s.SinkRtcp, map[string]interface{}{
+		"socket": gRtcpSock,
+	}); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to set RTCP sink properties: %v", err))
+		self.Error("failed to set RTCP sink properties", err)
+		return gst.StateChangeFailure
+	}
+
 	return gst.StateChangeSuccess
 }
 
@@ -332,7 +354,7 @@ func (s *SipMedia) Configure(stream pj.StreamInfoCommon, ptmap map[uint8]*gst.Ca
 
 	rtpDest := stream.RemoteAddr().GoAddrPort()
 	if err := utils.ElementSetPropertyMany(s.SinkRtp, map[string]interface{}{
-		"host": rtpDest.Addr().String(),
+		"host": rtpDest.Addr().Unmap().String(),
 		"port": int(rtpDest.Port()),
 	}); err != nil {
 		return fmt.Errorf("failed to set RTP sink properties: %w", err)
@@ -340,7 +362,7 @@ func (s *SipMedia) Configure(stream pj.StreamInfoCommon, ptmap map[uint8]*gst.Ca
 
 	rtcpDest := stream.RemoteRtcpAddr().GoAddrPort()
 	if err := utils.ElementSetPropertyMany(s.SinkRtcp, map[string]interface{}{
-		"host": rtcpDest.Addr().String(),
+		"host": rtcpDest.Addr().Unmap().String(),
 		"port": int(rtcpDest.Port()),
 	}); err != nil {
 		return fmt.Errorf("failed to set RTCP sink properties: %w", err)
