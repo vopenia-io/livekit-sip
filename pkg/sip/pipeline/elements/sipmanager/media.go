@@ -3,6 +3,7 @@ package sipmanager
 import (
 	"fmt"
 	"net"
+	"net/netip"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
@@ -210,9 +211,14 @@ func (s *SipMedia) ChangeState(instance *gst.Element, transition gst.StateChange
 func (s *SipMedia) open(self *gst.Bin) gst.StateChangeReturn {
 	rtpconn, rtcpconn, err := NewUDPConnPair(s.settings.PortStart, s.settings.PortEnd, s.settings.IP)
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to create UDP connections: %v", err))
-		self.Error("failed to create UDP connections", err)
-		return gst.StateChangeFailure
+		var fallbackErr error
+		rtpconn, rtcpconn, fallbackErr = NewUDPConnPair(s.settings.PortStart, s.settings.PortEnd, netip.AddrFrom4([4]byte{0, 0, 0, 0}).AsSlice())
+		if fallbackErr != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to create UDP connections: %v", err))
+			self.Error("failed to create UDP connections", err)
+			return gst.StateChangeFailure
+		}
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("failed to bind UDP connections to IP %s, falling back to 0.0.0.0", s.settings.IP))
 	}
 	s.rtpConn = rtpconn
 	s.rtcpConn = rtcpconn
