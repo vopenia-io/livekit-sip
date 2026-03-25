@@ -23,6 +23,12 @@ type SipAudioOutTranscode struct {
 	pad       *gst.Pad
 }
 
+type SipDtmfInTranscode struct {
+	gpad         *gst.GhostPad
+	RtpDtmfDepay *gst.Element
+	FakeSink     *gst.Element
+}
+
 type SipCameraInTranscode struct {
 	gpad      *gst.GhostPad
 	H264Video *gst.Element
@@ -42,6 +48,8 @@ type IoManagerSip struct {
 
 	AudioIn  map[string]*SipAudioInTranscode
 	AudioOut *SipAudioOutTranscode
+
+	DtmfIn map[string]*SipDtmfInTranscode
 
 	CameraIn  map[string]*SipCameraInTranscode
 	CameraOut *SipCameraOutTranscode
@@ -81,6 +89,7 @@ func (e *IoManagerSip) InstanceInit(instance *glib.Object) {
 	wself := glib.WeakRefInit(self)
 
 	e.AudioIn = make(map[string]*SipAudioInTranscode)
+	e.DtmfIn = make(map[string]*SipDtmfInTranscode)
 	e.CameraIn = make(map[string]*SipCameraInTranscode)
 
 	var err error
@@ -165,6 +174,7 @@ func (e *IoManagerSip) ChangeState(instance *gst.Element, transition gst.StateCh
 		e.Compositor = nil
 		e.AudioIn = make(map[string]*SipAudioInTranscode)
 		e.AudioOut = nil
+		e.DtmfIn = make(map[string]*SipDtmfInTranscode)
 		e.CameraIn = make(map[string]*SipCameraInTranscode)
 		e.CameraOut = nil
 	}
@@ -210,26 +220,22 @@ func (e *IoManagerSip) requestNewPadAudioIn(self *gst.Bin, templ *gst.PadTemplat
 		return nil
 	}
 
-	audioIn := &SipAudioInTranscode{}
-
 	class := gst.ToElementClass(self.Class())
-	audioIn.gpad = gst.NewGhostPadNoTargetFromTemplate(name, class.GetPadTemplate("recv_rtp_sink_%u_%u_%u"))
-	if audioIn.gpad == nil {
+	gpad := gst.NewGhostPadNoTargetFromTemplate(name, class.GetPadTemplate("recv_rtp_sink_%u_%u_%u"))
+	if gpad == nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create ghost pad for pad %s", name))
 		return nil
 	}
-	if !audioIn.gpad.SetActive(true) {
+	if !gpad.SetActive(true) {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to activate ghost pad for pad %s", name))
 	}
-	if !self.AddPad(audioIn.gpad.Pad) {
+	if !self.AddPad(gpad.Pad) {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add ghost pad to SIP IO element for pad %s", name))
 		return nil
 	}
 
-	e.AudioIn[name] = audioIn
-
 	weakE := weak.Make(e)
-	audioIn.gpad.AddProbe(gst.PadProbeTypeEventDownstream, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+	gpad.AddProbe(gst.PadProbeTypeEventDownstream, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
 		ptr := weakE.Value()
 		if ptr == nil {
 			return gst.PadProbeRemove
@@ -238,7 +244,7 @@ func (e *IoManagerSip) requestNewPadAudioIn(self *gst.Bin, templ *gst.PadTemplat
 	})
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Successfully created new audio input pad %s for session %d", name, session))
-	return audioIn.gpad.Pad
+	return gpad.Pad
 }
 
 func (e *IoManagerSip) linkNewPadAudio(pad *gst.Pad, info *gst.PadProbeInfo, name string, session int, ssrc int, pt int) gst.PadProbeReturn {
@@ -283,64 +289,119 @@ func (e *IoManagerSip) linkNewPadAudio(pad *gst.Pad, info *gst.PadProbeInfo, nam
 		return gst.PadProbeRemove
 	}
 
-	var elementName string
 	switch strings.ToLower(enc) {
 	case "pcmu", "pcma":
-		elementName = "g711dtmf-audio"
+		if err := e.linkNewPadAudioMicrophone(self, pad, name, caps, session, ssrc, pt); err != nil {
+			err = fmt.Errorf("Failed to link new audio pad for microphone input: %w", err)
+			return gst.PadProbeRemove
+		}
 	case "telephone-event":
-		elementName = "dtmf-audio"
+		if err := e.linkNewPadAudioDtmf(self, pad, name, caps, session, ssrc, pt); err != nil {
+			err = fmt.Errorf("Failed to link new audio pad for DTMF input: %w", err)
+			return gst.PadProbeRemove
+		}
 	default:
 		err = fmt.Errorf("Unsupported encoding: %s", enc)
 		return gst.PadProbeRemove
 	}
+	return gst.PadProbeRemove
+}
 
+func (e *IoManagerSip) linkNewPadAudioMicrophone(self *gst.Bin, pad *gst.Pad, name string, caps *gst.Caps, session int, ssrc int, pt int) error {
 	e.inMu.Lock()
 	defer e.inMu.Unlock()
 
-	audioIn, exists := e.AudioIn[name]
-	if !exists {
-		err = fmt.Errorf("Audio input pad %s not found in map", name)
-		return gst.PadProbeRemove
+	gpad := pad.AsGhostPad()
+
+	_, exists := e.AudioIn[name]
+	if exists {
+		return fmt.Errorf("Audio input pad %s already exists in map", name)
 	}
 
-	if audioIn.Decoder != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Audio decoder already set for pad %s, ignoring caps event", name))
-		return gst.PadProbeRemove
-	}
+	audioIn := &SipAudioInTranscode{}
+	audioIn.gpad = gpad
 
-	audioIn.Decoder, err = gst.NewElementWithProperties(elementName, map[string]interface{}{})
+	var err error
+	audioIn.Decoder, err = gst.NewElementWithProperties("g711dtmf-audio", map[string]interface{}{})
 	if err != nil {
-		err = fmt.Errorf("Failed to create %s element for pad %s: %w", elementName, name, err)
-		return gst.PadProbeRemove
+		return fmt.Errorf("Failed to create g711dtmf-audio element for pad %s: %w", name, err)
 	}
-	if addErr := self.Add(audioIn.Decoder); addErr != nil {
-		err = fmt.Errorf("Failed to add %s element to SIP IO element for pad %s: %w", elementName, name, addErr)
-		return gst.PadProbeRemove
+	if err := self.Add(audioIn.Decoder); err != nil {
+		return fmt.Errorf("Failed to add g711dtmf-audio element to SIP IO element for pad %s: %w", name, err)
 	}
 
 	audioIn.pad = e.Compositor.GetRequestPad(fmt.Sprintf("sink_%d_%d_%d", session, ssrc, pt))
 	if audioIn.pad == nil {
-		err = fmt.Errorf("Failed to get request pad from compositor for pad %s", name)
-		return gst.PadProbeRemove
+		return fmt.Errorf("Failed to get request pad from compositor for pad %s", name)
 	}
 
 	if ret := audioIn.Decoder.GetStaticPad("src").Link(audioIn.pad); ret != gst.PadLinkOK {
-		err = fmt.Errorf("Failed to link %s src pad to compositor pad for pad %s: %v", elementName, name, ret)
-		return gst.PadProbeRemove
+		return fmt.Errorf("Failed to link g711dtmf-audio src pad to compositor pad for pad %s: %v", name, ret)
 	}
 
 	if !gpad.SetTarget(audioIn.Decoder.GetStaticPad("sink")) {
-		err = fmt.Errorf("Failed to set target pad for ghost pad %s", name)
-		return gst.PadProbeRemove
+		return fmt.Errorf("Failed to set target pad for ghost pad %s", name)
 	}
 
 	if !audioIn.Decoder.SyncStateWithParent() {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state of %s element with parent for pad %s", elementName, name))
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state of g711dtmf-audio element with parent for pad %s", name))
 	}
 
-	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Successfully linked audio pad %s with %s decoder", name, elementName))
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Successfully linked audio pad %s with g711dtmf-audio decoder", name))
 
-	return gst.PadProbeRemove
+	return nil
+}
+
+func (e *IoManagerSip) linkNewPadAudioDtmf(self *gst.Bin, pad *gst.Pad, name string, caps *gst.Caps, session int, ssrc int, pt int) error {
+	e.inMu.Lock()
+	defer e.inMu.Unlock()
+
+	gpad := pad.AsGhostPad()
+
+	_, exists := e.DtmfIn[name]
+	if exists {
+		return fmt.Errorf("Audio input pad %s already exists in map", name)
+	}
+
+	dtmfIn := &SipDtmfInTranscode{}
+	dtmfIn.gpad = gpad
+
+	var err error
+	dtmfIn.RtpDtmfDepay, err = gst.NewElementWithProperties("rtpdtmfdepay", map[string]interface{}{})
+	if err != nil {
+		return fmt.Errorf("Failed to create rtpdtmfdepay element for pad %s: %w", name, err)
+	}
+
+	dtmfIn.FakeSink, err = gst.NewElementWithProperties("fakesink", map[string]interface{}{
+		"sync": false,
+	})
+	if err != nil {
+		return fmt.Errorf("Failed to create fakesink element for pad %s: %w", name, err)
+	}
+
+	if err := self.AddMany(dtmfIn.RtpDtmfDepay, dtmfIn.FakeSink); err != nil {
+		return fmt.Errorf("Failed to add rtpdtmfdepay element to SIP IO element for pad %s: %w", name, err)
+	}
+
+	if ret := dtmfIn.RtpDtmfDepay.GetStaticPad("src").Link(dtmfIn.FakeSink.GetStaticPad("sink")); ret != gst.PadLinkOK {
+		return fmt.Errorf("Failed to link rtpdtmfdepay src pad to fakesink pad for pad %s: %v", name, ret)
+	}
+
+	if !gpad.SetTarget(dtmfIn.RtpDtmfDepay.GetStaticPad("sink")) {
+		return fmt.Errorf("Failed to set target pad for ghost pad %s", name)
+	}
+
+	if !dtmfIn.RtpDtmfDepay.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state of rtpdtmfdepay element with parent for pad %s", name))
+	}
+
+	if !dtmfIn.FakeSink.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state of fakesink element with parent for pad %s", name))
+	}
+
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Successfully linked audio pad %s with rtpdtmfdepay element", name))
+
+	return nil
 }
 
 func (e *IoManagerSip) requestNewPadCameraIn(self *gst.Bin, templ *gst.PadTemplate, name string, session int, ssrc int, pt int) *gst.Pad {
@@ -454,6 +515,10 @@ func (e *IoManagerSip) releasePadAudioIn(self *gst.Bin, _ *gst.GhostPad, pname s
 
 	audioIn, exists := e.AudioIn[pname]
 	if !exists {
+		if dtmfIn, exists := e.DtmfIn[pname]; exists {
+			e.releasePadAudioDtmf(self, dtmfIn, pname)
+			return
+		}
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("No audio input pad found with name %s", pname))
 		return
 	}
@@ -475,6 +540,23 @@ func (e *IoManagerSip) releasePadAudioIn(self *gst.Bin, _ *gst.GhostPad, pname s
 	delete(e.AudioIn, pname)
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Successfully released audio input pad %s for session %d", pname, session))
+}
+
+func (e *IoManagerSip) releasePadAudioDtmf(self *gst.Bin, dtmfIn *SipDtmfInTranscode, pname string) {
+	for _, element := range []*gst.Element{dtmfIn.RtpDtmfDepay, dtmfIn.FakeSink} {
+		if element != nil {
+			if err := element.SetState(gst.StateNull); err != nil {
+				self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set element %s to NULL state for pad %s: %v", element.GetName(), pname, err))
+			}
+			if err := self.Remove(element); err != nil {
+				self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove element %s from SIP IO element for pad %s: %v", element.GetName(), pname, err))
+			}
+		}
+	}
+
+	delete(e.DtmfIn, pname)
+
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Successfully released DTMF input pad %s", pname))
 }
 
 func (e *IoManagerSip) releasePadCameraIn(self *gst.Bin, _ *gst.GhostPad, pname string, session int, _ int, _ int) {
