@@ -13,7 +13,7 @@ import (
 
 type SipAudioInTranscode struct {
 	gpad    *gst.GhostPad
-	Decoder *gst.Element // g711-audio or dtmf-audio
+	Decoder *gst.Element // g711dtmf-audio or dtmf-audio
 	pad     *gst.Pad     // compositor sink pad
 }
 
@@ -286,7 +286,7 @@ func (e *IoManagerSip) linkNewPadAudio(pad *gst.Pad, info *gst.PadProbeInfo, nam
 	var elementName string
 	switch strings.ToLower(enc) {
 	case "pcmu", "pcma":
-		elementName = "g711-audio"
+		elementName = "g711dtmf-audio"
 	case "telephone-event":
 		elementName = "dtmf-audio"
 	default:

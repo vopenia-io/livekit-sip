@@ -47,6 +47,9 @@ void setup_gst_log_handler() {
 import "C"
 
 import (
+	"fmt"
+	"time"
+
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/g711opusdtmf"
@@ -62,6 +65,7 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audioopus"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/dtmfaudio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/g711audio"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/g711dtmfaudio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/h264video"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/opusaudio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/pcm16audio"
@@ -103,6 +107,10 @@ func init() {
 
 	if !g711audio.Register() {
 		panic("Failed to register g711-audio")
+	}
+
+	if !g711dtmfaudio.Register() {
+		panic("Failed to register g711dtmf-audio")
 	}
 
 	if !audioopus.Register() {
@@ -158,4 +166,32 @@ func init() {
 	// C.setup_gst_log_handler()
 
 	go MainLoop.Run()
+
+	time.Sleep(10 * time.Millisecond)
+	go func() {
+		done := make(chan time.Time)
+		defer close(done)
+
+		go func() {
+			ticker := time.NewTicker(3 * time.Second)
+			defer ticker.Stop()
+
+			for range ticker.C {
+				if _, err := glib.IdleAdd(func() {
+					done <- time.Now()
+				}); err != nil {
+					fmt.Println("Error adding idle callback:", err)
+				}
+			}
+		}()
+
+		for {
+			select {
+			case t := <-done:
+				fmt.Println("Main loop is alive at", t)
+			case <-time.After(5 * time.Second):
+				fmt.Println("Main loop is not responding")
+			}
+		}
+	}()
 }
