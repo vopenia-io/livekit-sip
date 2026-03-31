@@ -1,0 +1,243 @@
+package sipbin
+
+import (
+	"fmt"
+	"net"
+	"strconv"
+
+	"github.com/go-gst/go-gst/gst"
+	"github.com/go-gst/go-gst/gst/gstsdp"
+	"github.com/go-gst/go-gst/gst/rtp"
+	"github.com/livekit/protocol/livekit"
+)
+
+func (e *SipBin) makeOfferMedia(self *gst.Bin, kind livekit.TrackSource, idx int, proto string) (*gstsdp.Media, error) {
+	var targetMedia string
+	switch kind {
+	case livekit.TrackSource_CAMERA, livekit.TrackSource_SCREEN_SHARE:
+		targetMedia = "video"
+	case livekit.TrackSource_MICROPHONE, livekit.TrackSource_SCREEN_SHARE_AUDIO:
+		targetMedia = "audio"
+	default:
+		return nil, fmt.Errorf("unsupported track source: %d", kind)
+	}
+
+	media, err := gstsdp.NewMedia()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create SDP media: %w", err)
+	}
+
+	targetCaps := make([]*gst.Caps, 0, len(e.formats))
+	for _, caps := range e.formats {
+		for i := range caps.GetSize() {
+			structure := caps.GetStructureAt(i)
+			mediaVal, err := structure.GetValue("media")
+			if err != nil {
+				continue
+			}
+			mediaStr, ok := mediaVal.(string)
+			if !ok {
+				continue
+			}
+			if mediaStr == targetMedia {
+				targetCaps = append(targetCaps, caps.Copy())
+				break
+			}
+		}
+	}
+
+	offerCaps := make([]*gst.Caps, 0, len(targetCaps))
+	dynamicPt := uint8(96)
+	for _, caps := range targetCaps {
+		for i := range caps.GetSize() {
+			structure := caps.GetStructureAt(i)
+			encodingVal, err := structure.GetValue("encoding-name")
+			if err != nil {
+				self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to get encoding-name value from caps structure: %v", err))
+				continue
+			}
+			encoding, ok := encodingVal.(string)
+			if !ok {
+				self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Invalid encoding-name value in caps structure: %v", encodingVal))
+				continue
+			}
+			mediaVal, err := structure.GetValue("media")
+			if err != nil {
+				self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to get media value from caps structure: %v", err))
+				continue
+			}
+			mediaStr, ok := mediaVal.(string)
+			if !ok {
+				self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Invalid media value in caps structure: %v", mediaVal))
+				continue
+			}
+
+			info := rtp.PayloadInfoForName(mediaStr, encoding)
+			if info == nil {
+				self.Log(CAT, gst.LevelWarning, fmt.Sprintf("No payload info found for media %s and encoding %s", mediaStr, encoding))
+				continue
+			}
+			pt := info.PayloadType()
+			if pt >= 96 {
+				pt = dynamicPt
+				dynamicPt++
+			}
+			if err := structure.SetValue("payload", int(pt)); err != nil {
+				self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set payload type on caps structure: %v", err))
+				continue
+			}
+			offerCaps = append(offerCaps, caps.Copy())
+		}
+	}
+
+	if len(offerCaps) == 0 {
+		return nil, fmt.Errorf("no offer caps found for track source %d", kind)
+	}
+
+	if ret := gstsdp.MediaSetFromCaps(offerCaps[0], media); ret != gstsdp.SDPResultOk {
+		return nil, fmt.Errorf("failed to set media from caps: %v", ret)
+	}
+	for i := range offerCaps[0].GetSize() - 1 {
+		structure := offerCaps[0].GetStructureAt(i + 1)
+		if ret := gstsdp.MediaAddMediaFromStructure(structure, media); ret != gstsdp.SDPResultOk {
+			return nil, fmt.Errorf("failed to add media from structure: %v", ret)
+		}
+	}
+
+	offerCaps = offerCaps[1:]
+	for _, caps := range offerCaps {
+		for i := range caps.GetSize() {
+			structure := caps.GetStructureAt(i)
+			if ret := gstsdp.MediaAddMediaFromStructure(structure, media); ret != gstsdp.SDPResultOk {
+				return nil, fmt.Errorf("failed to add media from structure: %v", ret)
+			}
+		}
+	}
+
+	if proto == "" {
+		proto = "RTP/AVP"
+	}
+	if ret := media.SetProto(proto); ret != gstsdp.SDPResultOk {
+		return nil, fmt.Errorf("failed to set proto on media: %v", ret)
+	}
+
+	if ret := media.AddAttribute("rtcp-fb", "* nack pli"); ret != gstsdp.SDPResultOk {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to add rtcp-fb attribute to media: %v", ret))
+	}
+	if ret := media.AddAttribute("rtcp-fb", "* ccm fir"); ret != gstsdp.SDPResultOk {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to add rtcp-fb attribute to media: %v", ret))
+	}
+
+	switch kind {
+	case livekit.TrackSource_SCREEN_SHARE, livekit.TrackSource_SCREEN_SHARE_AUDIO:
+		if ret := media.AddAttribute("content", "slides"); ret != gstsdp.SDPResultOk {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to add content attribute to media: %v", ret))
+		}
+	case livekit.TrackSource_CAMERA:
+		if ret := media.AddAttribute("content", "main"); ret != gstsdp.SDPResultOk {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to add content attribute to media: %v", ret))
+		}
+	}
+
+	track, err := e.NewTrack(self, idx, kind, proto)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create track for media %d: %w", idx, err)
+	}
+	e.Tracks[kind] = track
+
+	port := uint(track.rtpConn.LocalAddr().(*net.UDPAddr).Port)
+	if ret := media.SetPortInfo(port, 1); ret != gstsdp.SDPResultOk {
+		return nil, fmt.Errorf("failed to set port info on media: %v", ret)
+	}
+
+	return media, nil
+}
+
+func (e *SipBin) selectCapsForMedia(self *gst.Bin, media *gstsdp.Media, kind livekit.TrackSource) (*gst.Caps, error) {
+	var resCaps *gst.Caps = nil
+	for _, format := range media.Formats() {
+		pt, err := strconv.Atoi(format)
+		if err != nil {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Invalid format %s for media %s: %v", format, media.GetMedia(), err))
+			continue
+		}
+
+		caps, err := media.GetCaps(pt)
+		if err != nil || caps.GetSize() == 0 {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to get caps for format %s and payload type %d: %v", format, pt, err))
+			continue
+		}
+		caps.GetStructureAt(0).SetName("application/x-rtp")
+		// caps.GetStructureAt(0).RemoveValue("proto") // TODO: properly handle srtp if we want to support it
+
+		if existing, exist := e.PtMap[kind][uint8(pt)]; exist {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Received duplicate caps for payload type %d: existing %s, new %s", pt, existing.String(), caps.String()))
+		}
+		e.PtMap[kind][uint8(pt)] = caps
+
+		if resCaps != nil {
+			continue
+		}
+
+		for _, formatCaps := range e.formats {
+			icaps := caps.IntersectFull(formatCaps, gst.CapsIntersectFirst)
+			if icaps != nil && !icaps.IsEmpty() {
+				resCaps = caps
+				break
+			}
+		}
+	}
+	if resCaps == nil {
+		return nil, fmt.Errorf("no compatible caps found for media %s: %s", media.GetMedia(), media.AsText())
+	}
+	return resCaps, nil
+}
+
+func (e *SipBin) makeTrackMedia(self *gst.Bin, track *SipTrack, caps *gst.Caps) (*gstsdp.Media, error) {
+	if caps == nil {
+		caps = track.Caps
+	}
+	if caps == nil {
+		return nil, fmt.Errorf("no caps available for track media")
+	}
+
+	media, err := gstsdp.NewMedia()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create SDP media: %w", err)
+	}
+	if ret := gstsdp.MediaSetFromCaps(caps, media); ret != gstsdp.SDPResultOk {
+		return nil, fmt.Errorf("failed to set media from caps: %v", ret)
+	}
+	for i := range caps.GetSize() - 1 {
+		structure := caps.GetStructureAt(i + 1)
+		if ret := gstsdp.MediaAddMediaFromStructure(structure, media); ret != gstsdp.SDPResultOk {
+			return nil, fmt.Errorf("failed to add media from structure: %v", ret)
+		}
+	}
+
+	if ret := media.SetPortInfo(uint(track.rtpConn.LocalAddr().(*net.UDPAddr).Port), 1); ret != gstsdp.SDPResultOk {
+		return nil, fmt.Errorf("failed to set port info on media: %v", ret)
+	}
+	if ret := media.SetProto(track.Proto); ret != gstsdp.SDPResultOk {
+		return nil, fmt.Errorf("failed to set proto on media: %v", ret)
+	}
+
+	if track.Label != "" {
+		if ret := media.AddAttribute("label", track.Label); ret != gstsdp.SDPResultOk {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to add label attribute to media: %v", ret))
+		}
+	}
+
+	switch track.Kind {
+	case livekit.TrackSource_SCREEN_SHARE, livekit.TrackSource_SCREEN_SHARE_AUDIO:
+		if ret := media.AddAttribute("content", "slides"); ret != gstsdp.SDPResultOk {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to add content attribute to media: %v", ret))
+		}
+	case livekit.TrackSource_CAMERA:
+		if ret := media.AddAttribute("content", "main"); ret != gstsdp.SDPResultOk {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to add content attribute to media: %v", ret))
+		}
+	}
+
+	return media, nil
+}
