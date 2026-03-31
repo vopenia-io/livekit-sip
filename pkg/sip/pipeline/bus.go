@@ -54,6 +54,9 @@ func (p *Pipeline) CloseBus() {
 }
 
 func (p *Pipeline) onMessage(msg *gst.Message) bool {
+	if p.Closed() {
+		return true
+	}
 	switch msg.Type() {
 	case gst.MessageError:
 		gErr := msg.ParseError()
