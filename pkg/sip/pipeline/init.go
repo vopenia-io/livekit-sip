@@ -49,13 +49,12 @@ import "C"
 import (
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/g711opusdtmf"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/h264vp8"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/iolivekit"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/iosip"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitcompositor"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/mediacut"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/rtph264capsintersect"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/samplewriter"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipbin"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipcompositor"
@@ -79,14 +78,6 @@ var MainLoop *glib.MainLoop
 
 func init() {
 	gst.Init(nil)
-
-	if !g711opusdtmf.Register() {
-		panic("Failed to register g711-opus-dtmf")
-	}
-
-	if !h264vp8.Register() {
-		panic("Failed to register h264-vp8")
-	}
 
 	if !sipmanager.Register() {
 		panic("Failed to register sipmanager")
@@ -166,6 +157,10 @@ func init() {
 
 	if !pcm16audio.Register() {
 		panic("Failed to register pcm16audio")
+	}
+
+	if !rtph264capsintersect.Register() {
+		panic("Failed to register rtph264capsintersect")
 	}
 
 	MainLoop = glib.NewMainLoop(glib.MainContextDefault(), false)

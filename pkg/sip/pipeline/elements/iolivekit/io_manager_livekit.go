@@ -635,7 +635,7 @@ func (e *IoManagerLivekit) padAddedCameraOut(self *gst.Bin, pad *gst.Pad, name s
 	cameraOut := &CameraOutTranscode{}
 
 	var err error
-	cameraOut.VideoH264, err = gst.NewElementWithProperties("video-vp8", map[string]interface{}{}) // TODO: change back to h264 after testing
+	cameraOut.VideoH264, err = gst.NewElementWithProperties("video-h264", map[string]interface{}{}) // TODO: change back to h264 after testing
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create video-h264 element for camera output pad: %v", err))
 		self.Error("Failed to create video-h264 element for camera output pad", err)

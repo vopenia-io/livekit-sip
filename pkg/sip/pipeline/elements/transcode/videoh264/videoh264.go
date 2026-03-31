@@ -26,9 +26,10 @@ var properties = []*glib.ParamSpec{
 }
 
 type VideoH264 struct {
-	X264Enc    *gst.Element
-	H264Parse  *gst.Element
-	RtpH264Pay *gst.Element
+	X264Enc              *gst.Element
+	H264Parse            *gst.Element
+	RtpH264Pay           *gst.Element
+	RtpH264CapsIntersect *gst.Element
 }
 
 func (e *VideoH264) New() glib.GoObjectSubclass {
@@ -55,7 +56,7 @@ func (e *VideoH264) ClassInit(klass *glib.ObjectClass) {
 		"src",
 		gst.PadDirectionSource,
 		gst.PadPresenceAlways,
-		gst.NewCapsFromString("application/x-rtp, media=(string)video, clock-rate=(int)90000, encoding-name=(string)H264"),
+		gst.NewCapsFromString("application/x-rtp, media=(string)video, encoding-name=(string)H264"),
 	))
 
 	class.InstallProperties(properties)
@@ -97,16 +98,25 @@ func (e *VideoH264) InstanceInit(instance *glib.Object) {
 		return
 	}
 
+	e.RtpH264CapsIntersect, err = gst.NewElementWithProperties("rtph264capsintersect", map[string]interface{}{})
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create rtph264capsintersect element: %v", err))
+		self.Error("Failed to create rtph264capsintersect element", err)
+		return
+	}
+
 	self.AddMany(
 		e.X264Enc,
 		e.H264Parse,
 		e.RtpH264Pay,
+		e.RtpH264CapsIntersect,
 	)
 
 	if err := gst.ElementLinkMany(
 		e.X264Enc,
 		e.H264Parse,
 		e.RtpH264Pay,
+		e.RtpH264CapsIntersect,
 	); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link elements: %v", err))
 		self.Error("Failed to link elements", err)
@@ -118,7 +128,7 @@ func (e *VideoH264) InstanceInit(instance *glib.Object) {
 	ghostSink := gst.NewGhostPadFromTemplate("sink", e.X264Enc.GetStaticPad("sink"), elemClass.GetPadTemplate("sink"))
 	self.AddPad(ghostSink.Pad)
 
-	ghostSrc := gst.NewGhostPadFromTemplate("src", e.RtpH264Pay.GetStaticPad("src"), elemClass.GetPadTemplate("src"))
+	ghostSrc := gst.NewGhostPadFromTemplate("src", e.RtpH264CapsIntersect.GetStaticPad("src"), elemClass.GetPadTemplate("src"))
 	self.AddPad(ghostSrc.Pad)
 }
 
@@ -174,6 +184,7 @@ func (e *VideoH264) ChangeState(instance *gst.Element, transition gst.StateChang
 		e.X264Enc = nil
 		e.H264Parse = nil
 		e.RtpH264Pay = nil
+		e.RtpH264CapsIntersect = nil
 	}
 
 	return ret

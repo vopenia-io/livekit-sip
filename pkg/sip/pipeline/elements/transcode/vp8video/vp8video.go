@@ -60,9 +60,7 @@ func (e *Vp8Video) InstanceInit(instance *glib.Object) {
 		return
 	}
 
-	e.Vp8Dec, err = gst.NewElementWithProperties("vp8dec", map[string]interface{}{
-		
-	})
+	e.Vp8Dec, err = gst.NewElementWithProperties("vp8dec", map[string]interface{}{})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create vp8dec element: %v", err))
 		self.Error("Failed to create vp8dec element", err)
