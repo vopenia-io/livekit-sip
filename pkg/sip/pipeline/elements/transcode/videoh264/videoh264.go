@@ -66,7 +66,7 @@ func (e *VideoH264) InstanceInit(instance *glib.Object) {
 	var err error
 
 	e.X264Enc, err = gst.NewElementWithProperties("x264enc", map[string]interface{}{
-		"bitrate":          uint(2000),
+		// "bitrate":          uint(2000),
 		"speed-preset":     int(1),
 		"tune":             uint(4),
 		"key-int-max":      uint(12),

@@ -51,20 +51,20 @@ func (e *VideoVp8) InstanceInit(instance *glib.Object) {
 	var err error
 
 	e.Vp8Enc, err = gst.NewElementWithProperties("vp8enc", map[string]interface{}{
-		"deadline":            int(1),
-		"target-bitrate":      int(2_000_000),
+		"deadline":            int(1), // realtime
 		"cpu-used":            int(8),
 		"keyframe-max-dist":   int(12),
 		"lag-in-frames":       int(0),
-		"threads":             int(4),
-		"buffer-initial-size": int(100),
-		"buffer-optimal-size": int(150),
-		"buffer-size":         int(200),
+		"threads":             int(2),
+		"token-partitions":    int(2),   // Enable 4 partitions for multi-threaded encoding
+		"buffer-initial-size": int(200), // Increased for long sessions
+		"buffer-optimal-size": int(300), // Increased for long sessions
+		"buffer-size":         int(500), // Increased for long sessions
 		"min-quantizer":       int(4),
 		"max-quantizer":       int(32),
 		"cq-level":            int(10),
 		"error-resilient":     int(1),
-		"end-usage":           int(1),
+		"end-usage":           int(1), // CBR
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create vp8enc element: %v", err))
@@ -73,7 +73,7 @@ func (e *VideoVp8) InstanceInit(instance *glib.Object) {
 	}
 
 	e.Vp8Pay, err = gst.NewElementWithProperties("rtpvp8pay", map[string]interface{}{
-		"pt":              int(96),
+		// "pt":              int(96),
 		"mtu":             int(1200),
 		"picture-id-mode": int(2),
 	})
