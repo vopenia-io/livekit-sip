@@ -153,7 +153,7 @@ func (e *SipBin) InstanceInit(instance *glib.Object) {
 		if e == nil {
 			return ""
 		}
-		self = gst.ToGstBin(instance)
+		self := gst.ToGstBin(instance)
 		answerData, err := e.OnOfferSdp(self, []byte(offer))
 		if err != nil {
 			// self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to process offer: %v", err))
@@ -171,7 +171,7 @@ func (e *SipBin) InstanceInit(instance *glib.Object) {
 		if e == nil {
 			return
 		}
-		self = gst.ToGstBin(instance)
+		self := gst.ToGstBin(instance)
 		err := e.OnAnswerSdp(self, []byte(answer))
 		if err != nil {
 			// self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to process answer: %v", err))
@@ -188,7 +188,7 @@ func (e *SipBin) InstanceInit(instance *glib.Object) {
 		if e == nil {
 			return
 		}
-		self = gst.ToGstBin(instance)
+		self := gst.ToGstBin(instance)
 		err := e.OnAckSDP(self, []byte(ack))
 		if err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to process ack: %v", err))
@@ -278,27 +278,31 @@ func (e *SipBin) ChangeState(instance *gst.Element, transition gst.StateChange) 
 		case <-time.After(5 * time.Second):
 			self.Log(CAT, gst.LevelWarning, "Timeout waiting for SipBin to finish pending operations during state change to NULL")
 		}
-		e.mu.Lock()
-		defer e.mu.Unlock()
-		for _, track := range e.Tracks {
-			if track != nil {
-				if track.rtpConn != nil {
-					track.rtpConn.Close()
-				}
-				if track.rtcpConn != nil {
-					track.rtcpConn.Close()
-				}
+	}
+
+	return ret
+}
+
+func (e *SipBin) Finalize(instance *glib.Object) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, track := range e.Tracks {
+		if track != nil {
+			if track.rtpConn != nil {
+				track.rtpConn.Close()
+			}
+			if track.rtcpConn != nil {
+				track.rtcpConn.Close()
 			}
 		}
-		e.Tracks = [NbTracks]*SipTrack{}
-		e.PtMap = [NbTracks]map[uint8]*gst.Caps{}
-		for i := range e.PtMap {
-			e.PtMap[i] = make(map[uint8]*gst.Caps)
-		}
-		e.RtpBin = nil
-		e.Medias = nil
 	}
-	return ret
+	e.Tracks = [NbTracks]*SipTrack{}
+	e.PtMap = [NbTracks]map[uint8]*gst.Caps{}
+	for i := range e.PtMap {
+		e.PtMap[i] = make(map[uint8]*gst.Caps)
+	}
+	e.RtpBin = nil
+	e.Medias = nil
 }
 
 func (e *SipBin) RequestNewPad(instance *gst.Element, templ *gst.PadTemplate, name string, caps *gst.Caps) *gst.Pad {
@@ -419,7 +423,7 @@ func (e *SipBin) releasePadSendRtpSink(self *gst.Bin, pad *gst.Pad) {
 	}
 
 	sink := ti.RtpFilter.GetStaticPad("src").GetPeer()
-	if sink != nil {
+	if sink != nil && e.RtpBin != nil {
 		e.RtpBin.ReleaseRequestPad(sink)
 	}
 
