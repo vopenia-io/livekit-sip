@@ -402,7 +402,7 @@ func (s *SipManager) AddMedia(self *gst.Bin, media *pj.PjSdpMedia, id uint) erro
 		s.medias = append(s.medias, sipMedia)
 	default:
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unsupported media type: %s", media.DescMedia()))
-		ghostMedia := pj.NewGhostPjSdpMedia(*s.pjpool, media)
+		ghostMedia := pj.NewGhostPjSdpMedia(s.pjpool, media)
 		if err := s.local.SetMedia(s.pjpool, ghostMedia, uint(id)); err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set ghost media for media %d: %v", id, err))
 			return err
