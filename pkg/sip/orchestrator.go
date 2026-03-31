@@ -280,24 +280,48 @@ func (o *MediaOrchestrator) AnswerSDP(offer []byte) (answer []byte, err error) {
 }
 
 func (o *MediaOrchestrator) answerSDP(offerData []byte) ([]byte, error) {
-	res, err := o.pipeline.SipManager.Emit("on-remote-offer", string(offerData))
+	res, err := o.pipeline.SipBin.Emit("offer-sdp", string(offerData))
 	if err != nil {
-		o.log.Errorw("failed to emit on-remote-offer", err)
-		return nil, fmt.Errorf("failed to emit on-remote-offer: %w", err)
+		o.log.Errorw("failed to emit offer-sdp", err)
+		return nil, fmt.Errorf("failed to emit offer-sdp: %w", err)
 	}
 	answerStr, ok := res.(string)
 	if !ok {
-		o.log.Errorw("on-remote-offer did not return a string", nil, "value", res)
-		return nil, fmt.Errorf("on-remote-offer did not return a string")
+		o.log.Errorw("offer-sdp did not return a string", nil, "value", res)
+		return nil, fmt.Errorf("offer-sdp did not return a string")
 	}
 	if answerStr == "" {
-		o.log.Errorw("on-remote-offer returned an empty answer", nil)
-		return nil, fmt.Errorf("on-remote-offer returned an empty answer")
+		o.log.Errorw("offer-sdp returned an empty answer", nil)
+		return nil, fmt.Errorf("offer-sdp returned an empty answer")
 	}
 
 	o.state = MediaStateReady
 
+	// TODO: proper ack support, this only avoid deadlocks when no ack is received
+	if err := o.ackSDP([]byte{}); err != nil {
+		o.log.Errorw("failed to send ACK for SDP answer", err)
+		return nil, fmt.Errorf("failed to send ACK for SDP answer: %w", err)
+	}
+
 	return []byte(answerStr), nil
+}
+
+func (o *MediaOrchestrator) AckSDP(ack []byte) error {
+	if err := o.okStates(MediaStateFailed, MediaStateOK, MediaStateReady, MediaStateStarted); err != nil {
+		return err
+	}
+	return o.dispatch(func() error {
+		return o.ackSDP(ack)
+	})
+}
+
+func (o *MediaOrchestrator) ackSDP(ack []byte) error {
+	if _, err := o.pipeline.SipBin.Emit("ack-sdp", string(ack)); err != nil {
+		o.log.Errorw("failed to emit ack-sdp", err)
+		return fmt.Errorf("failed to emit ack-sdp: %w", err)
+	}
+
+	return nil
 }
 
 func (o *MediaOrchestrator) start() error {

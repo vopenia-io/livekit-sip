@@ -101,9 +101,40 @@ func (p *Pipeline) Close() error {
 	var err error
 	go func() {
 		defer close(done)
-		p.Log.Debugw("Setting pipeline to null state", "pid", pid)
-		err = p.Pipeline().SetState(gst.StateNull)
-		p.Log.Debugw("Pipeline set to null state complete", "pid", pid, "err", err)
+
+		p.SipIo.SipBin.SetLockedState(true)
+		p.WebrtcIo.LivekitBin.SetLockedState(true)
+		p.IOManager.SipController.SetLockedState(true)
+		p.IOManager.LivekitController.SetLockedState(true)
+
+		p.Log.Debugw("Pipline SetState NULL")
+		err = errors.Join(err, p.Pipeline().SetState(gst.StateNull))
+		p.Log.Debugw("Pipline SetState NULL complete")
+
+		p.Log.Debugw("SipBin SetState NULL")
+		err = errors.Join(err, p.SipIo.SipBin.SetState(gst.StateNull))
+		p.Log.Debugw("SipBin SetState NULL complete")
+
+		p.Log.Debugw("LivekitController SetState NULL")
+		err = errors.Join(err, p.IOManager.LivekitController.SetState(gst.StateNull))
+		p.Log.Debugw("LivekitController SetState NULL complete")
+
+		p.Log.Debugw("LivekitBin SetState NULL")
+		err = errors.Join(err, p.WebrtcIo.LivekitBin.SetState(gst.StateNull))
+		p.Log.Debugw("LivekitBin SetState NULL complete")
+
+		p.Log.Debugw("SipController SetState NULL")
+		err = errors.Join(err, p.IOManager.SipController.SetState(gst.StateNull))
+		p.Log.Debugw("SipController SetState NULL complete")
+
+		p.SipIo.SipBin.SetLockedState(false)
+		p.WebrtcIo.LivekitBin.SetLockedState(false)
+		p.IOManager.SipController.SetLockedState(false)
+		p.IOManager.LivekitController.SetLockedState(false)
+
+		err = errors.Join(err, p.Pipeline().SetState(gst.StateNull))
+
+		p.Log.Infow("Pipeline set to null state complete", "pid", pid, "err", err)
 	}()
 
 	closed := false

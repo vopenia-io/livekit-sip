@@ -102,7 +102,7 @@ func (c *IOManager) handleLivekitCompositorPadAdded(_ *gst.Element, pad *gst.Pad
 		return
 	}
 
-	destPad := c.pipeline.SipIo.SipRtpBin.GetRequestPad(fmt.Sprintf("send_rtp_sink_%d", session))
+	destPad := c.pipeline.SipIo.SipBin.GetRequestPad(fmt.Sprintf("send_rtp_sink_%d", session))
 	if destPad == nil {
 		c.log.Warnw("Failed to get request pad", nil, "pad", fmt.Sprintf("send_rtp_sink_%d", session))
 		return

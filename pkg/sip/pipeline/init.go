@@ -47,9 +47,6 @@ void setup_gst_log_handler() {
 import "C"
 
 import (
-	"fmt"
-	"time"
-
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/g711opusdtmf"
@@ -58,7 +55,9 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/iosip"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitcompositor"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/mediacut"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/samplewriter"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipbin"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipcompositor"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipmanager"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audiog711"
@@ -91,6 +90,14 @@ func init() {
 
 	if !sipmanager.Register() {
 		panic("Failed to register sipmanager")
+	}
+
+	if !mediacut.Register() {
+		panic("Failed to register mediacut")
+	}
+
+	if !sipbin.Register() {
+		panic("Failed to register sipbin")
 	}
 
 	if !livekitbin.Register() {
@@ -166,32 +173,4 @@ func init() {
 	// C.setup_gst_log_handler()
 
 	go MainLoop.Run()
-
-	time.Sleep(10 * time.Millisecond)
-	go func() {
-		done := make(chan time.Time)
-		defer close(done)
-
-		go func() {
-			ticker := time.NewTicker(3 * time.Second)
-			defer ticker.Stop()
-
-			for range ticker.C {
-				if _, err := glib.IdleAdd(func() {
-					done <- time.Now()
-				}); err != nil {
-					fmt.Println("Error adding idle callback:", err)
-				}
-			}
-		}()
-
-		for {
-			select {
-			case t := <-done:
-				fmt.Println("Main loop is alive at", t)
-			case <-time.After(5 * time.Second):
-				fmt.Println("Main loop is not responding")
-			}
-		}
-	}()
 }
