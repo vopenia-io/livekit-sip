@@ -53,7 +53,10 @@ func (e *Vp8Video) InstanceInit(instance *glib.Object) {
 	self := gst.ToGstBin(instance)
 	var err error
 
-	e.Vp8Depay, err = gst.NewElementWithProperties("rtpvp8depay", map[string]interface{}{})
+	e.Vp8Depay, err = gst.NewElementWithProperties("rtpvp8depay", map[string]interface{}{
+		"request-keyframe":  true,
+		"wait-for-keyframe": false,
+	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create rtpvp8depay element: %v", err))
 		self.Error("Failed to create rtpvp8depay element", err)

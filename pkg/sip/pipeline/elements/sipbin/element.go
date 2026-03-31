@@ -210,6 +210,7 @@ func (e *SipBin) InstanceInit(instance *glib.Object) {
 		"timeout-inactive-sources": true,
 		"drop-on-latency":          false,
 		"latency":                  uint(200),
+		"do-lost":                  true,
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to create rtpbin element: %v", err))

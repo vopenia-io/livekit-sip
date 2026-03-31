@@ -161,6 +161,7 @@ func (e *LivekitBin) InstanceInit(instance *glib.Object) {
 		"timeout-inactive-sources": true,
 		"drop-on-latency":          false,
 		"latency":                  uint(200),
+		"do-lost":                  true,
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create rtpbin: %v", err))

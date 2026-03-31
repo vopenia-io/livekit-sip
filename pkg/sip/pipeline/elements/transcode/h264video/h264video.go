@@ -55,7 +55,10 @@ func (e *H264Video) InstanceInit(instance *glib.Object) {
 	self := gst.ToGstBin(instance)
 	var err error
 
-	e.H264Depay, err = gst.NewElementWithProperties("rtph264depay", map[string]interface{}{})
+	e.H264Depay, err = gst.NewElementWithProperties("rtph264depay", map[string]interface{}{
+		"request-keyframe":  true,
+		"wait-for-keyframe": false,
+	})
 	if err != nil {
 		self.Error("Failed to create rtph264depay element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create rtph264depay element: %v", err))
