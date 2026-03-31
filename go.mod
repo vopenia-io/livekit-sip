@@ -139,7 +139,7 @@ require (
 	golang.org/x/crypto v0.45.0 // indirect
 	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/sync v0.18.0 // indirect
-	golang.org/x/sys v0.38.0 // indirect
+	golang.org/x/sys v0.38.0
 	golang.org/x/text v0.31.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20251014184007-4626949a642f // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251014184007-4626949a642f // indirect
@@ -149,6 +149,6 @@ require (
 
 replace github.com/livekit/media-sdk => github.com/vopenia-io/media-sdk v0.0.0-20251229153245-6b76cc17de47
 
-replace github.com/go-gst/go-gst => github.com/vopenia-io/go-gst v0.0.0-20260323092656-0cbf1d49f756
+replace github.com/go-gst/go-gst => github.com/vopenia-io/go-gst v0.0.0-20260331124637-a8c9b8fb2728
 
-replace github.com/go-gst/go-glib => github.com/vopenia-io/go-glib v0.0.0-20260323091857-632313c792eb
+replace github.com/go-gst/go-glib => github.com/vopenia-io/go-glib v0.0.0-20260331095234-b9e9d7b98559
