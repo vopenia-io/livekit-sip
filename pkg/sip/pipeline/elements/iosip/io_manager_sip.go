@@ -416,7 +416,7 @@ func (e *IoManagerSip) requestNewPadCameraIn(self *gst.Bin, templ *gst.PadTempla
 	cameraIn := &SipCameraInTranscode{}
 
 	var err error
-	cameraIn.H264Video, err = gst.NewElementWithProperties("h264-video", map[string]interface{}{})
+	cameraIn.H264Video, err = gst.NewElementWithProperties("vp8-video", map[string]interface{}{}) // TODO: change back to h264 after testing
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create h264-video element for pad %s: %v", name, err))
 		self.Error(fmt.Sprintf("Failed to create h264-video element for pad %s", name), err)
