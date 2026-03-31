@@ -124,17 +124,18 @@ func (e *LivekitBin) Close() {
 		return
 	}
 
+	e.UnsubscribeAll()
+
 	if e.room.ConnectionState() != lksdk.ConnectionStateDisconnected {
 		e.room.Disconnect()
 	}
-
-	e.UnsubscribeAll()
 
 	if _, err := self.Emit("closed"); err != nil {
 		self.Log(CAT, gst.LevelError, "Error emitting closed signal")
 		self.Error("Error emitting closed signal", err)
 	}
 	self.Log(CAT, gst.LevelInfo, "Disconnected from LiveKit room")
+
 }
 
 func (e *LivekitBin) OnActiveSpeakersChanged(p []lksdk.Participant) {
@@ -143,9 +144,14 @@ func (e *LivekitBin) OnActiveSpeakersChanged(p []lksdk.Participant) {
 		return
 	}
 
+	if e.Is(RoomStateClosed) {
+		self.Log(CAT, gst.LevelWarning, "Received active speakers changed callback after room was closed")
+		return
+	}
+
 	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Active speakers changed: %v", lo.Map(p, func(part lksdk.Participant, i int) string { return part.SID() })))
 
-	if !e.Is(RoomStateJoined) {
+	if !e.IsAll(RoomStateJoined | RoomStatePlaying) {
 		self.Log(CAT, gst.LevelWarning, "Received active speakers changed callback while not joined to a room")
 		return
 	}

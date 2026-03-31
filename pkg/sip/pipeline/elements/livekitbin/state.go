@@ -55,6 +55,10 @@ func (s *state) Is(state RoomState) bool {
 	return (s.state.Load() & int64(state)) != 0
 }
 
+func (s *state) IsAll(state RoomState) bool {
+	return (s.state.Load() & int64(state)) == int64(state)
+}
+
 func (s *state) Set(state RoomState) RoomState {
 	s.mu.Lock()
 	old := s.state.Or(int64(state))
