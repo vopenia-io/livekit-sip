@@ -49,6 +49,7 @@ import "C"
 import (
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/bfcpserver"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/iolivekit"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/iosip"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin"
@@ -161,6 +162,10 @@ func init() {
 
 	if !rtph264capsintersect.Register() {
 		panic("Failed to register rtph264capsintersect")
+	}
+
+	if !bfcpserver.Register() {
+		panic("Failed to register bfcpserver")
 	}
 
 	MainLoop = glib.NewMainLoop(glib.MainContextDefault(), false)

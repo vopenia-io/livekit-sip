@@ -18,9 +18,10 @@ var CAT = gst.NewDebugCategory(
 
 type BFCPServer struct {
 	props
-	bfcpServer *bfcp.Server
-	bfcpConfig *bfcp.ServerConfig
-	started    bool
+	bfcpServer  *bfcp.Server
+	bfcpConfig  *bfcp.ServerConfig
+	started     bool
+	constructed bool
 }
 
 func (e *BFCPServer) New() glib.GoObjectSubclass {
@@ -125,6 +126,8 @@ func (e *BFCPServer) Constructed(instance *glib.Object) {
 	e.SetupSignals(self)
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("BFCP server started on %s:%d", host, port))
+
+	e.constructed = true
 }
 
 func (e *BFCPServer) ChangeState(self *gst.Element, transition gst.StateChange) gst.StateChangeReturn {

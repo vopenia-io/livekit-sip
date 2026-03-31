@@ -17,7 +17,7 @@ var properties = []*glib.ParamSpec{
 		0,
 		0xFFFF,
 		1024,
-		glib.ParameterReadable|glib.ParameterWritable,
+		glib.ParameterReadable|glib.ParameterWritable|glib.ParameterConstruct,
 	),
 	glib.NewUintParam(
 		"port-end",
@@ -26,7 +26,7 @@ var properties = []*glib.ParamSpec{
 		2,
 		0xFFFF,
 		65535,
-		glib.ParameterReadable|glib.ParameterWritable,
+		glib.ParameterReadable|glib.ParameterWritable|glib.ParameterConstruct,
 	),
 	glib.NewUintParam(
 		"port",
@@ -42,7 +42,7 @@ var properties = []*glib.ParamSpec{
 		"Bind IP",
 		"The IP address to bind to",
 		nil,
-		glib.ParameterReadable|glib.ParameterWritable,
+		glib.ParameterReadable|glib.ParameterWritable|glib.ParameterConstruct,
 	),
 	glib.NewUintParam(
 		"floor-id",
@@ -51,7 +51,7 @@ var properties = []*glib.ParamSpec{
 		0,
 		math.MaxUint16,
 		1,
-		glib.ParameterReadable|glib.ParameterWritable,
+		glib.ParameterReadable|glib.ParameterWritable|glib.ParameterConstruct,
 	),
 }
 
@@ -65,12 +65,12 @@ type props struct {
 
 func (e *BFCPServer) SetProperty(instance *glib.Object, id uint, value *glib.Value) {
 	self := gst.ToGstBin(instance)
-	if e.bfcpServer != nil {
-		self.Log(CAT, gst.LevelWarning, "Attempt to set property after BFCP server has been created, ignoring")
+	param := properties[id]
+
+	if e.constructed {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Attempt to set property %s after BFCP server has been created, ignoring", param.Name()))
 		return
 	}
-
-	param := properties[id]
 	switch param.Name() {
 	case "port-start":
 		gv, err := value.GoValue()

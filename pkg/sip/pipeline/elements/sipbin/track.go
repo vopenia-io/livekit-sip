@@ -305,9 +305,9 @@ func (b *BfcpTrack) Init(e *SipBin, self *gst.Bin, media *gstsdp.Media, session 
 		return nil
 	}
 
-	if err := b.BfcpServer.SetProperty("floor-id", uint(b.FloorID)); err != nil {
-		return fmt.Errorf("failed to set floor-id property on BFCP server: %w", err)
-	}
+	// if err := b.BfcpServer.SetProperty("floor-id", uint(b.FloorID)); err != nil {
+	// 	return fmt.Errorf("failed to set floor-id property on BFCP server: %w", err)
+	// }
 
 	if version := media.GetAttributeVal("bfcpver"); version != "" {
 		if v, err := strconv.Atoi(version); err == nil {

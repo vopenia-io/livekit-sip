@@ -62,6 +62,9 @@ func (e *SipBin) makeBfcpMedia(bfcp *BfcpTrack) (*gstsdp.Media, error) {
 	if ret := media.AddAttribute("setup", "actpass"); ret != gstsdp.SDPResultOk {
 		return nil, fmt.Errorf("failed to add setup attribute to BFCP media: %v", ret)
 	}
+	if ret := media.AddAttribute("connection", "new"); ret != gstsdp.SDPResultOk {
+		return nil, fmt.Errorf("failed to add connection attribute to BFCP media: %v", ret)
+	}
 
 	return media, nil
 }
