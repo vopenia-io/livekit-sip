@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"fmt"
+	"strings"
 	"weak"
 
 	"github.com/go-gst/go-glib/glib"
@@ -34,6 +35,45 @@ type SipIo struct {
 	SipBin *gst.Element
 }
 
+func makeH264HighCaps() *gst.Caps {
+	profiles := []string{
+		"640c1f", // 3.1
+		"640c28", // 4.0
+		"640c29", // 4.1
+		"640c2a", // 4.2
+	}
+	profiles = append(profiles, []string{
+		"64001f", // 3.1
+		"640020", // 3.2
+		"640028", // 4.0
+		"64002a", // 4.2
+		"64001e", // 3.0
+		"640032", // 5.0
+		"640033", // 5.1
+	}...)
+
+	profiles = lo.Map(profiles, func(p string, _ int) string { return "(string)" + p })
+
+	return gst.NewCapsFromString(fmt.Sprintf(
+		"application/x-rtp,media=video,encoding-name=H264,clock-rate=90000,packetization-mode=(string)1,profile-level-id={%s}",
+		strings.Join(profiles, ",")))
+}
+
+func makeH264MainCaps() *gst.Caps {
+	profiles := []string{
+		"4d001f", // Main 3.1
+		"4d0028", // Main 4.0
+		"4d002a", // Main 4.2
+		"42e01f", // Main 4.2
+	}
+
+	profiles = lo.Map(profiles, func(p string, _ int) string { return "(string)" + p })
+
+	return gst.NewCapsFromString(fmt.Sprintf(
+		"application/x-rtp,media=video,encoding-name=H264,clock-rate=90000,packetization-mode=(string)1,profile-level-id={%s}",
+		strings.Join(profiles, ",")))
+}
+
 var _ GstChain = (*SipIo)(nil)
 
 // Create implements [GstChain].
@@ -43,6 +83,11 @@ func (sio *SipIo) Create() error {
 	formatCaps := []*gst.Caps{
 		gst.NewCapsFromString("application/x-rtp,media=audio,encoding-name=PCMU,clock-rate=8000"),
 		// gst.NewCapsFromString("application/x-rtp,media=audio,encoding-name=PCMA,clock-rate=8000"), // TODO: fix g711-audio and then enable that back
+		gst.NewCapsFromString("application/x-rtp,media=video,encoding-name=H264,clock-rate=90000,packetization-mode=(string)1,profile-level-id=640029"),
+		makeH264HighCaps(),
+		gst.NewCapsFromString("application/x-rtp,media=video,encoding-name=H264,clock-rate=90000,packetization-mode=(string)1,profile-level-id=4d0029"),
+		makeH264MainCaps(),
+		gst.NewCapsFromString("application/x-rtp,media=video,encoding-name=H264,clock-rate=90000,packetization-mode=(string)1"),
 		gst.NewCapsFromString("application/x-rtp,media=video,encoding-name=H264,clock-rate=90000"),
 	}
 

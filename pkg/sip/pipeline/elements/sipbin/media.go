@@ -154,7 +154,7 @@ func (e *SipBin) makeOfferMedia(self *gst.Bin, kind livekit.TrackSource, idx int
 }
 
 func (e *SipBin) selectCapsForMedia(self *gst.Bin, media *gstsdp.Media, kind livekit.TrackSource) (*gst.Caps, error) {
-	var resCaps *gst.Caps = nil
+	mediaCaps := make([]*gst.Caps, 0, media.FormatsLen())
 	for _, format := range media.Formats() {
 		pt, err := strconv.Atoi(format)
 		if err != nil {
@@ -175,22 +175,24 @@ func (e *SipBin) selectCapsForMedia(self *gst.Bin, media *gstsdp.Media, kind liv
 		}
 		e.PtMap[kind][uint8(pt)] = caps
 
-		if resCaps != nil {
-			continue
-		}
+		mediaCaps = append(mediaCaps, caps)
+	}
 
-		for _, formatCaps := range e.formats {
+	if len(mediaCaps) == 0 {
+		return nil, fmt.Errorf("no caps found for media %s", media.GetMedia())
+	}
+
+	for _, formatCaps := range e.formats {
+		for _, caps := range mediaCaps {
+			self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Intersecting media caps %s with format caps %s", caps.String(), formatCaps.String()))
 			icaps := caps.IntersectFull(formatCaps, gst.CapsIntersectFirst)
 			if icaps != nil && !icaps.IsEmpty() {
-				resCaps = caps
-				break
+				return icaps, nil
 			}
 		}
 	}
-	if resCaps == nil {
-		return nil, fmt.Errorf("no compatible caps found for media %s: %s", media.GetMedia(), media.AsText())
-	}
-	return resCaps, nil
+
+	return nil, fmt.Errorf("no compatible caps found for media %s: %s", media.GetMedia(), media.AsText())
 }
 
 func (e *SipBin) makeTrackMedia(self *gst.Bin, track *SipTrack, caps *gst.Caps) (*gstsdp.Media, error) {
