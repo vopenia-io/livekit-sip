@@ -31,7 +31,7 @@ func (p *Pipeline) DumpDot() {
 			count++
 			done := make(chan struct{})
 			glib.IdleAdd(func() {
-				p.Pipeline().DebugBinToDotFileWithTs(gst.DebugGraphShowAll, fmt.Sprintf("%s_pipeline_%d.dot", p.Pipeline().GetName(), count))
+				p.Pipeline().DebugBinToDotFileWithTs(gst.DebugGraphShowAll|gst.DebugGraphShowFullParams, fmt.Sprintf("%s_pipeline_%d.dot", p.Pipeline().GetName(), count))
 				close(done)
 			})
 			<-done

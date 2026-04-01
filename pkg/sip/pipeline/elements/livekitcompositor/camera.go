@@ -20,7 +20,6 @@ type LivekitCompositorCamera struct {
 	PatchBay   *gst.Element
 	Compositor *gst.Element
 	Filter     *gst.Element
-
 }
 
 func (e *LivekitCompositor) initCamera(self *gst.Bin) error {
@@ -41,7 +40,7 @@ func (e *LivekitCompositor) initCamera(self *gst.Bin) error {
 		return err
 	}
 	e.LivekitCompositorCamera.FallbackFilter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-		"caps": gst.NewCapsFromString("video/x-raw,format=I420,width=1280,height=720,framerate=30/1"),
+		"caps": gst.NewCapsFromString("video/x-raw,format=I420,width=1280,height=720,framerate=24/1"),
 	})
 	if err != nil {
 		return err
@@ -59,7 +58,7 @@ func (e *LivekitCompositor) initCamera(self *gst.Bin) error {
 		return err
 	}
 	e.LivekitCompositorCamera.Filter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-		"caps": gst.NewCapsFromString("video/x-raw,format=I420,width=1280,height=720,framerate=30/1"),
+		"caps": gst.NewCapsFromString("video/x-raw,format=I420,width=1280,height=720,framerate=24/1"),
 	})
 	if err != nil {
 		return err
