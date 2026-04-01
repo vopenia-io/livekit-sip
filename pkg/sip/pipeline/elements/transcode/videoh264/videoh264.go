@@ -13,19 +13,21 @@ var CAT = gst.NewDebugCategory(
 	"video-h264 Element",
 )
 
-var properties = []*glib.ParamSpec{
-	glib.NewUintParam(
-		"pt",
-		"H264 Payload Type",
-		"The payload type of H264 RTP stream",
-		0,
-		127,
-		96,
-		glib.ParameterWritable|glib.ParameterReadable,
-	),
-}
+// var properties = []*glib.ParamSpec{
+// 	glib.NewUintParam(
+// 		"pt",
+// 		"H264 Payload Type",
+// 		"The payload type of H264 RTP stream",
+// 		0,
+// 		127,
+// 		96,
+// 		glib.ParameterWritable|glib.ParameterReadable,
+// 	),
+// }
 
 type VideoH264 struct {
+	VideoScale           *gst.Element
+	ScaleFilter          *gst.Element
 	X264Enc              *gst.Element
 	H264Parse            *gst.Element
 	RtpH264Pay           *gst.Element
@@ -59,12 +61,26 @@ func (e *VideoH264) ClassInit(klass *glib.ObjectClass) {
 		gst.NewCapsFromString("application/x-rtp, media=(string)video, encoding-name=(string)H264"),
 	))
 
-	class.InstallProperties(properties)
+	// class.InstallProperties(properties)
 }
 
 func (e *VideoH264) InstanceInit(instance *glib.Object) {
 	self := gst.ToGstBin(instance)
 	var err error
+
+	e.VideoScale, err = gst.NewElementWithProperties("videoscale", map[string]interface{}{})
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create videoscale element: %v", err))
+		self.Error("Failed to create videoscale element", err)
+		return
+	}
+
+	e.ScaleFilter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{})
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create scale capsfilter: %v", err))
+		self.Error("Failed to create scale capsfilter", err)
+		return
+	}
 
 	e.X264Enc, err = gst.NewElementWithProperties("x264enc", map[string]interface{}{
 		// "bitrate":          uint(2000),
@@ -105,7 +121,29 @@ func (e *VideoH264) InstanceInit(instance *glib.Object) {
 		return
 	}
 
+	wscaleFilter := glib.WeakRefInit(e.ScaleFilter)
+	wself := glib.WeakRefInit(self)
+	if _, err := e.RtpH264CapsIntersect.Connect("max-resolution", func(_ *gst.Element, w, h int) {
+		self := gst.ToGstBin(wself.Get())
+		if self == nil {
+			return
+		}
+		scaleFilter := gst.ToElement(wscaleFilter.Get())
+		if scaleFilter == nil {
+			return
+		}
+		if err := scaleFilter.SetProperty("caps", gst.NewCapsFromString(fmt.Sprintf("video/x-raw, width=[1,%d], height=[1,%d], pixel-aspect-ratio=1/1", w, h))); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set scale filter caps: %v", err))
+			self.Error("Failed to set scale filter caps", err)
+		}
+	}); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to connect max-resolution signal: %v", err))
+		self.Error("Failed to connect max-resolution signal", err)
+	}
+
 	self.AddMany(
+		e.VideoScale,
+		e.ScaleFilter,
 		e.X264Enc,
 		e.H264Parse,
 		e.RtpH264Pay,
@@ -113,6 +151,8 @@ func (e *VideoH264) InstanceInit(instance *glib.Object) {
 	)
 
 	if err := gst.ElementLinkMany(
+		e.VideoScale,
+		e.ScaleFilter,
 		e.X264Enc,
 		e.H264Parse,
 		e.RtpH264Pay,
@@ -125,67 +165,61 @@ func (e *VideoH264) InstanceInit(instance *glib.Object) {
 
 	elemClass := gst.ToElementClass(self.Class())
 
-	ghostSink := gst.NewGhostPadFromTemplate("sink", e.X264Enc.GetStaticPad("sink"), elemClass.GetPadTemplate("sink"))
+	ghostSink := gst.NewGhostPadFromTemplate("sink", e.VideoScale.GetStaticPad("sink"), elemClass.GetPadTemplate("sink"))
 	self.AddPad(ghostSink.Pad)
 
 	ghostSrc := gst.NewGhostPadFromTemplate("src", e.RtpH264CapsIntersect.GetStaticPad("src"), elemClass.GetPadTemplate("src"))
 	self.AddPad(ghostSrc.Pad)
 }
 
-func (e *VideoH264) SetProperty(instance *glib.Object, id uint, value *glib.Value) {
+// func (e *VideoH264) SetProperty(instance *glib.Object, id uint, value *glib.Value) {
+// 	self := gst.ToGstBin(instance)
+// 	param := properties[id]
+// 	switch param.Name() {
+// 	case "pt":
+// 		gv, _ := value.GoValue()
+// 		val, _ := gv.(uint)
+// 		if val > 127 {
+// 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid H264 PT value: %d", val))
+// 			return
+// 		}
+// 		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Setting H264 PT to %d", val))
+// 		if err := e.RtpH264Pay.SetProperty("pt", val); err != nil {
+// 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set H264 PT: %v", err))
+// 		}
+// 	}
+// }
+
+// func (e *VideoH264) GetProperty(instance *glib.Object, id uint) *glib.Value {
+// 	self := gst.ToGstBin(instance)
+// 	param := properties[id]
+// 	switch param.Name() {
+// 	case "pt":
+// 		val, err := e.RtpH264Pay.GetProperty("pt")
+// 		if err != nil {
+// 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get H264 PT: %v", err))
+// 			return nil
+// 		}
+// 		gv, err := glib.GValue(val)
+// 		if err != nil {
+// 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to convert H264 PT to GValue: %v", err))
+// 			return nil
+// 		}
+// 		return gv
+// 	default:
+// 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown property ID: %d", id))
+// 		return nil
+// 	}
+// }
+
+func (e *VideoH264) Finalize(instance *glib.Object) {
 	self := gst.ToGstBin(instance)
-	param := properties[id]
-	switch param.Name() {
-	case "pt":
-		gv, _ := value.GoValue()
-		val, _ := gv.(uint)
-		if val > 127 {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid H264 PT value: %d", val))
-			return
-		}
-		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Setting H264 PT to %d", val))
-		if err := e.RtpH264Pay.SetProperty("pt", val); err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set H264 PT: %v", err))
-		}
-	}
-}
+	self.Log(CAT, gst.LevelDebug, "Finalizing VideoH264 element")
 
-func (e *VideoH264) GetProperty(instance *glib.Object, id uint) *glib.Value {
-	self := gst.ToGstBin(instance)
-	param := properties[id]
-	switch param.Name() {
-	case "pt":
-		val, err := e.RtpH264Pay.GetProperty("pt")
-		if err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get H264 PT: %v", err))
-			return nil
-		}
-		gv, err := glib.GValue(val)
-		if err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to convert H264 PT to GValue: %v", err))
-			return nil
-		}
-		return gv
-	default:
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown property ID: %d", id))
-		return nil
-	}
-}
-
-func (e *VideoH264) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
-	self := gst.ToGstBin(instance)
-
-	ret := self.ParentChangeState(transition)
-	if ret != gst.StateChangeSuccess {
-		return ret
-	}
-
-	if transition == gst.StateChangeReadyToNull {
-		e.X264Enc = nil
-		e.H264Parse = nil
-		e.RtpH264Pay = nil
-		e.RtpH264CapsIntersect = nil
-	}
-
-	return ret
+	e.VideoScale = nil
+	e.ScaleFilter = nil
+	e.X264Enc = nil
+	e.H264Parse = nil
+	e.RtpH264Pay = nil
+	e.RtpH264CapsIntersect = nil
 }

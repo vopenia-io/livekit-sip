@@ -3,6 +3,7 @@ package rtph264capsintersect
 import (
 	"encoding/hex"
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -117,6 +118,106 @@ func levelOrd(p parsedProfileLevelID) int {
 	return v + 1
 }
 
+// h264LevelLimits holds the constraints for a single H.264 level from ITU-T H.264 Table A-1.
+type h264LevelLimits struct {
+	levelIDC  uint8
+	isLevel1b bool
+	maxFS     uint32 // max frame size in macroblocks
+	maxMBPS   uint32 // max macroblock processing rate per second
+}
+
+// h264Levels is the H.264 level table ordered from lowest to highest.
+var h264Levels = []h264LevelLimits{
+	{10, false, 99, 1485},
+	{11, true, 99, 1485},     // Level 1b
+	{11, false, 396, 3000},   // Level 1.1
+	{12, false, 396, 6000},   // Level 1.2
+	{13, false, 396, 11880},  // Level 1.3
+	{20, false, 396, 11880},  // Level 2
+	{21, false, 792, 19800},  // Level 2.1
+	{22, false, 1620, 20250}, // Level 2.2
+	{30, false, 1620, 40500}, // Level 3
+	{31, false, 3600, 108000},  // Level 3.1
+	{32, false, 5120, 216000},  // Level 3.2
+	{40, false, 8192, 245760},  // Level 4
+	{41, false, 8192, 245760},  // Level 4.1
+	{42, false, 8704, 522240},  // Level 4.2
+	{50, false, 22080, 589824},  // Level 5
+	{51, false, 36864, 983040},  // Level 5.1
+	{52, false, 36864, 2073600}, // Level 5.2
+}
+
+// minLevelForConstraints returns the minimum H.264 level that satisfies both
+// maxFS and maxMBPS constraints. Returns found=false if no level is sufficient.
+func minLevelForConstraints(maxFS, maxMBPS uint32) (levelIDC uint8, isLevel1b bool, found bool) {
+	for _, l := range h264Levels {
+		if l.maxFS >= maxFS && l.maxMBPS >= maxMBPS {
+			return l.levelIDC, l.isLevel1b, true
+		}
+	}
+	return 0, false, false
+}
+
+// limitsForLevel returns the h264LevelLimits for the given levelIDC and isLevel1b.
+// Returns nil if the level is not found in the table.
+func limitsForLevel(levelIDC uint8, isLevel1b bool) *h264LevelLimits {
+	for i := range h264Levels {
+		if h264Levels[i].levelIDC == levelIDC && h264Levels[i].isLevel1b == isLevel1b {
+			return &h264Levels[i]
+		}
+	}
+	return nil
+}
+
+// maxResolutionForLevel computes the maximum width and height (assuming 16:9 aspect ratio)
+// that fit within the given profile-level-id's constraints at the specified framerate.
+func maxResolutionForLevel(plid string, fps int) (maxWidth, maxHeight int, ok bool) {
+	parsed, err := parseProfileLevelID(plid)
+	if err != nil {
+		return 0, 0, false
+	}
+
+	limits := limitsForLevel(parsed.levelIDC, parsed.isLevel1b)
+	if limits == nil {
+		return 0, 0, false
+	}
+
+	if fps <= 0 {
+		fps = 30
+	}
+
+	effectiveFS := limits.maxFS
+	mbpsFS := limits.maxMBPS / uint32(fps)
+	if mbpsFS < effectiveFS {
+		effectiveFS = mbpsFS
+	}
+
+	heightMBs := int(math.Sqrt(float64(effectiveFS) * 9.0 / 16.0))
+	if heightMBs == 0 {
+		return 0, 0, false
+	}
+	widthMBs := int(effectiveFS) / heightMBs
+
+	return widthMBs * 16, heightMBs * 16, true
+}
+
+// buildProfileLevelID encodes a profile-level-id hex string from raw bytes,
+// handling the Level 1b serialization exception per RFC 6184.
+func buildProfileLevelID(profileIDC, profileIOP, levelIDC uint8, isLevel1b bool) string {
+	outIOP := profileIOP
+	outLevel := levelIDC
+	if isLevel1b {
+		switch profileIDC {
+		case 0x42, 0x4D, 0x58:
+			outLevel = 0x0B
+			outIOP |= 0x10 // set csf3
+		default:
+			outLevel = 0x09
+		}
+	}
+	return fmt.Sprintf("%02x%02x%02x", profileIDC, outIOP, outLevel)
+}
+
 type canonicalForm struct {
 	profileIDC uint8
 	profileIOP uint8
@@ -189,20 +290,5 @@ func intersectProfileLevelID(upstream, downstream string) (string, bool) {
 
 	// Upstream has a lower level than downstream — must emit downstream's profile
 	// encoding with upstream's (lower) level value.
-	outIDC := d.profileIDC
-	outIOP := d.profileIOP
-	outLevel := u.levelIDC
-
-	// Level 1b serialization exception
-	if u.isLevel1b {
-		switch outIDC {
-		case 0x42, 0x4D, 0x58:
-			outLevel = 0x0B
-			outIOP |= 0x10 // set csf3
-		default:
-			outLevel = 0x09
-		}
-	}
-
-	return fmt.Sprintf("%02x%02x%02x", outIDC, outIOP, outLevel), true
+	return buildProfileLevelID(d.profileIDC, d.profileIOP, u.levelIDC, u.isLevel1b), true
 }

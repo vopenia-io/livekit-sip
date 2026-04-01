@@ -258,10 +258,10 @@ func TestIntersectProfileLevelID_EmptyDownstream(t *testing.T) {
 
 func TestLevelOrd(t *testing.T) {
 	// Verify ordering: 1 < 1b < 1.1
-	l1, _ := parseProfileLevelID("42e00a")   // Level 1.0
-	l1b, _ := parseProfileLevelID("42f00b")  // Level 1b
-	l11, _ := parseProfileLevelID("42e00b")  // Level 1.1
-	l31, _ := parseProfileLevelID("42e01f")  // Level 3.1
+	l1, _ := parseProfileLevelID("42e00a")  // Level 1.0
+	l1b, _ := parseProfileLevelID("42f00b") // Level 1b
+	l11, _ := parseProfileLevelID("42e00b") // Level 1.1
+	l31, _ := parseProfileLevelID("42e01f") // Level 3.1
 
 	if levelOrd(l1) >= levelOrd(l1b) {
 		t.Errorf("Level 1.0 (%d) should be < Level 1b (%d)", levelOrd(l1), levelOrd(l1b))
@@ -274,12 +274,171 @@ func TestLevelOrd(t *testing.T) {
 	}
 }
 
+// --- Unit tests for level table helpers ---
+
+func TestMinLevelForConstraints(t *testing.T) {
+	tests := []struct {
+		name      string
+		maxFS     uint32
+		maxMBPS   uint32
+		wantLevel uint8
+		wantIs1b  bool
+		wantFound bool
+	}{
+		{"level 1.0", 99, 1485, 10, false, true},
+		{"level 2.2", 1620, 20250, 22, false, true},
+		{"level 3.1", 3600, 108000, 31, false, true},
+		{"cisco case level 4.2", 8160, 490000, 42, false, true},
+		{"exact level 4.0 by fs", 8192, 245760, 40, false, true},
+		{"exceeds all levels", 99999, 99999999, 0, false, false},
+		{"high mbps low fs", 99, 300000, 42, false, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			levelIDC, is1b, found := minLevelForConstraints(tt.maxFS, tt.maxMBPS)
+			if found != tt.wantFound {
+				t.Fatalf("found = %v, want %v", found, tt.wantFound)
+			}
+			if !found {
+				return
+			}
+			if levelIDC != tt.wantLevel {
+				t.Errorf("levelIDC = %d, want %d", levelIDC, tt.wantLevel)
+			}
+			if is1b != tt.wantIs1b {
+				t.Errorf("isLevel1b = %v, want %v", is1b, tt.wantIs1b)
+			}
+		})
+	}
+}
+
+func TestBuildProfileLevelID(t *testing.T) {
+	tests := []struct {
+		name       string
+		profileIDC uint8
+		profileIOP uint8
+		levelIDC   uint8
+		isLevel1b  bool
+		want       string
+	}{
+		{"CB level 3.1", 0x42, 0xe0, 0x1f, false, "42e01f"},
+		{"Baseline level 4.2 (Cisco)", 0x42, 0x80, 0x2a, false, "42802a"},
+		{"High level 4.0", 0x64, 0x00, 0x28, false, "640028"},
+		{"CB level 1b baseline-family", 0x42, 0xe0, 0x0b, true, "42f00b"},
+		{"High level 1b", 0x64, 0x00, 0x09, true, "640009"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildProfileLevelID(tt.profileIDC, tt.profileIOP, tt.levelIDC, tt.isLevel1b)
+			if got != tt.want {
+				t.Errorf("buildProfileLevelID(%02x, %02x, %02x, %v) = %s, want %s",
+					tt.profileIDC, tt.profileIOP, tt.levelIDC, tt.isLevel1b, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- Unit tests for level limits and max resolution ---
+
+func TestLimitsForLevel(t *testing.T) {
+	tests := []struct {
+		levelIDC  uint8
+		isLevel1b bool
+		wantFS    uint32
+		wantMBPS  uint32
+	}{
+		{10, false, 99, 1485},
+		{11, true, 99, 1485},
+		{22, false, 1620, 20250},
+		{31, false, 3600, 108000},
+		{40, false, 8192, 245760},
+	}
+	for _, tt := range tests {
+		name := fmt.Sprintf("level_%d_1b=%v", tt.levelIDC, tt.isLevel1b)
+		t.Run(name, func(t *testing.T) {
+			l := limitsForLevel(tt.levelIDC, tt.isLevel1b)
+			if l == nil {
+				t.Fatal("expected non-nil limits")
+			}
+			if l.maxFS != tt.wantFS {
+				t.Errorf("maxFS = %d, want %d", l.maxFS, tt.wantFS)
+			}
+			if l.maxMBPS != tt.wantMBPS {
+				t.Errorf("maxMBPS = %d, want %d", l.maxMBPS, tt.wantMBPS)
+			}
+		})
+	}
+
+	if l := limitsForLevel(99, false); l != nil {
+		t.Error("expected nil for unknown level")
+	}
+}
+
+func TestMaxResolutionForLevel(t *testing.T) {
+	tests := []struct {
+		name          string
+		plid          string
+		fps           int
+		wantOK        bool
+		minWidth      int
+		maxWidth      int
+		minHeight     int
+		maxHeight     int
+	}{
+		// Level 3.1: maxFS=3600 MBs, maxMBPS=108000 at 30fps -> effectiveFS=3600
+		{"CB level 3.1 at 30fps", "42e01f", 30, true, 960, 1280, 528, 720},
+		// Level 2.2: maxFS=1620, maxMBPS=20250 at 30fps -> effectiveFS=min(1620,675)=675
+		{"CB level 2.2 at 30fps", "428016", 30, true, 400, 640, 240, 400},
+		// Level 4.0: maxFS=8192
+		{"CB level 4.0 at 30fps", "42e028", 30, true, 1280, 2048, 720, 1200},
+		// Invalid plid
+		{"invalid plid", "zzzzzz", 30, false, 0, 0, 0, 0},
+		// Default fps (0 -> 30)
+		{"default fps", "42e01f", 0, true, 960, 1280, 528, 720},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w, h, ok := maxResolutionForLevel(tt.plid, tt.fps)
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if !ok {
+				return
+			}
+			if w < tt.minWidth || w > tt.maxWidth {
+				t.Errorf("width = %d, want [%d, %d]", w, tt.minWidth, tt.maxWidth)
+			}
+			if h < tt.minHeight || h > tt.maxHeight {
+				t.Errorf("height = %d, want [%d, %d]", h, tt.minHeight, tt.maxHeight)
+			}
+		})
+	}
+}
+
 // --- Integration tests (pipeline-based) ---
+//
+// Both tests use a 720p source with videoscale + scaleCapsFilter wired to the
+// max-resolution signal. The dot files show the negotiated resolution at each
+// point in the pipeline:
+//   - Compatible (level 3.1): 720p passes through videoscale untouched.
+//   - Low level  (level 2.2): videoscale downscales 720p to fit the level.
 
-func TestPipeline_CompatibleCaps(t *testing.T) {
-	defer testutils.AssertNoLeaks(t)
+// buildTestPipeline creates a pipeline for integration tests:
+//
+//	videotestsrc → rawCaps(720p30) → videoscale → scaleCaps → videoconvert
+//	  → x264enc → rtph264pay → rtph264capsintersect → rtpCaps(plid) → fakesink
+//
+// Returns all elements needed for assertions and the pipeline itself.
+func buildTestPipeline(t *testing.T, name, downstreamPLID string) (
+	pipeline *gst.Pipeline,
+	intersect *gst.Element,
+	scaleCapsFilter *gst.Element,
+	sink *gst.Element,
+) {
+	t.Helper()
 
-	pipeline, err := gst.NewPipeline("test-rtph264capsintersect")
+	var err error
+	pipeline, err = gst.NewPipeline(name)
 	if err != nil {
 		t.Fatal("failed to create pipeline:", err)
 	}
@@ -294,7 +453,23 @@ func TestPipeline_CompatibleCaps(t *testing.T) {
 	if err != nil {
 		t.Fatal("failed to create capsfilter:", err)
 	}
-	rawCapsFilter.SetProperty("caps", gst.NewCapsFromString("video/x-raw,width=320,height=240,framerate=15/1"))
+	rawCapsFilter.SetProperty("caps", gst.NewCapsFromString(
+		"video/x-raw, width=1280, height=720, framerate=30/1"))
+
+	videoscale, err := gst.NewElement("videoscale")
+	if err != nil {
+		t.Fatal("failed to create videoscale:", err)
+	}
+
+	scaleCapsFilter, err = gst.NewElement("capsfilter")
+	if err != nil {
+		t.Fatal("failed to create scale capsfilter:", err)
+	}
+
+	videoconvert, err := gst.NewElement("videoconvert")
+	if err != nil {
+		t.Fatal("failed to create videoconvert:", err)
+	}
 
 	encoder, err := gst.NewElementWithProperties("x264enc", map[string]interface{}{
 		"speed-preset": 1,
@@ -310,32 +485,40 @@ func TestPipeline_CompatibleCaps(t *testing.T) {
 		t.Fatal("failed to create rtph264pay:", err)
 	}
 
-	intersect, err := gst.NewElement("rtph264capsintersect")
+	intersect, err = gst.NewElement("rtph264capsintersect")
 	if err != nil {
 		t.Fatal("failed to create rtph264capsintersect:", err)
 	}
 
-	// Downstream capsfilter with a CB profile-level-id that may differ in string form
 	rtpCapsFilter, err := gst.NewElement("capsfilter")
 	if err != nil {
-		t.Fatal("failed to create capsfilter:", err)
+		t.Fatal("failed to create rtp capsfilter:", err)
 	}
 	rtpCapsFilter.SetProperty("caps", gst.NewCapsFromString(
-		"application/x-rtp, media=(string)video, encoding-name=(string)H264, profile-level-id=(string)42e01f"))
+		"application/x-rtp, media=(string)video, encoding-name=(string)H264, "+
+			"profile-level-id=(string)"+downstreamPLID))
 
-	sink, err := gst.NewElement("fakesink")
+	sink, err = gst.NewElement("fakesink")
 	if err != nil {
 		t.Fatal("failed to create fakesink:", err)
 	}
 	sink.SetProperty("sync", false)
 
-	if err := pipeline.AddMany(videoSrc, rawCapsFilter, encoder, payloader, intersect, rtpCapsFilter, sink); err != nil {
+	if err := pipeline.AddMany(videoSrc, rawCapsFilter, videoscale, scaleCapsFilter,
+		videoconvert, encoder, payloader, intersect, rtpCapsFilter, sink); err != nil {
 		t.Fatal("failed to add elements:", err)
 	}
 
-	if err := gst.ElementLinkMany(videoSrc, rawCapsFilter, encoder, payloader, intersect, rtpCapsFilter, sink); err != nil {
+	if err := gst.ElementLinkMany(videoSrc, rawCapsFilter, videoscale, scaleCapsFilter,
+		videoconvert, encoder, payloader, intersect, rtpCapsFilter, sink); err != nil {
 		t.Fatal("failed to link elements:", err)
 	}
+
+	return
+}
+
+func runTestPipeline(t *testing.T, pipeline *gst.Pipeline, sink *gst.Element, dotFile string) int32 {
+	t.Helper()
 
 	var bufferCount atomic.Int32
 	sinkPad := sink.GetStaticPad("sink")
@@ -370,7 +553,7 @@ func TestPipeline_CompatibleCaps(t *testing.T) {
 
 done:
 	dotData := pipeline.DebugBinToDotData(gst.DebugGraphShowAll)
-	if err := os.WriteFile("rtph264capsintersect_test.dot", []byte(dotData), 0644); err != nil {
+	if err := os.WriteFile(dotFile, []byte(dotData), 0644); err != nil {
 		t.Logf("failed to write DOT file: %v", err)
 	}
 
@@ -378,104 +561,116 @@ done:
 		t.Fatal("failed to set pipeline to NULL:", err)
 	}
 
-	count := bufferCount.Load()
-	t.Logf("received %d buffers", count)
+	return bufferCount.Load()
+}
+
+// runPipelineTest is the core test logic shared by all pipeline subtests.
+// It wires the max-resolution signal to the scaleCapsFilter, runs the pipeline,
+// writes a dot file, and asserts that the signal fired and buffers flowed.
+// If the downstream level's max resolution is below 720p, it also asserts that
+// the signal reported a downscaled resolution.
+func runPipelineTest(t *testing.T, name, plid string, expectDownscale bool) {
+	t.Helper()
+	defer testutils.AssertNoLeaks(t)
+
+	pipeline, intersect, scaleCapsFilter, sink := buildTestPipeline(t, name, plid)
+
+	var signalWidth, signalHeight atomic.Int32
+	intersect.Connect("max-resolution", func(_ *gst.Element, w, h int) {
+		signalWidth.Store(int32(w))
+		signalHeight.Store(int32(h))
+		scaleCapsFilter.SetProperty("caps", gst.NewCapsFromString(
+			fmt.Sprintf("video/x-raw, width=[1,%d], height=[1,%d], pixel-aspect-ratio=1/1", w, h)))
+	})
+
+	dotFile := fmt.Sprintf("rtph264capsintersect_%s_test.dot", name)
+	count := runTestPipeline(t, pipeline, sink, dotFile)
 	if count <= 0 {
-		t.Fatal("no buffers received through rtph264capsintersect element")
+		t.Fatal("no buffers received")
+	}
+	t.Logf("received %d buffers", count)
+
+	w, h := signalWidth.Load(), signalHeight.Load()
+	t.Logf("max-resolution signal: %dx%d", w, h)
+	if w <= 0 || h <= 0 {
+		t.Fatal("max-resolution signal was not emitted")
+	}
+
+	if expectDownscale && (w >= 1280 || h >= 720) {
+		t.Errorf("expected downscale from 720p, got %dx%d", w, h)
+	}
+	if !expectDownscale && (w < 1280 || h < 720) {
+		t.Errorf("expected 720p passthrough, got %dx%d", w, h)
 	}
 }
 
-func TestPipeline_IncompatibleCaps(t *testing.T) {
-	defer testutils.AssertNoLeaks(t)
+func TestPipeline_ProfileLevelID(t *testing.T) {
+	// Source is 1280x720@30fps = 3600 MBs at 108000 MB/s.
+	// Levels with maxFS >= 3600 AND maxMBPS >= 108000 can handle 720p (level 3.1+).
+	tests := []struct {
+		name            string
+		plid            string
+		expectDownscale bool
+	}{
+		// --- Constrained Baseline (0x42, csf1 set → profileIOP 0xE0) ---
+		{"cb_level_1.2", "42e00c", true},
+		{"cb_level_1.3", "42e00d", true},
+		{"cb_level_2.0", "42e014", true},
+		{"cb_level_2.1", "42e015", true},
+		{"cb_level_2.2", "42e016", true},
+		{"cb_level_3.0", "42e01e", true},
+		{"cb_level_3.1", "42e01f", false},
+		{"cb_level_3.2", "42e020", false},
+		{"cb_level_4.0", "42e028", false},
+		{"cb_level_4.1", "42e029", false},
+		{"cb_level_4.2", "42e02a", false},
+		{"cb_level_5.0", "42e032", false},
 
-	pipeline, err := gst.NewPipeline("test-incompatible")
-	if err != nil {
-		t.Fatal("failed to create pipeline:", err)
+		// --- Baseline (0x42, csf1 clear → profileIOP 0x00) ---
+		{"baseline_level_1.2", "42000c", true},
+		{"baseline_level_2.0", "420014", true},
+		{"baseline_level_2.2", "420016", true},
+		{"baseline_level_3.0", "42001e", true},
+		{"baseline_level_3.1", "42001f", false},
+		{"baseline_level_4.0", "420028", false},
+		{"baseline_level_5.0", "420032", false},
+
+		// --- Main (0x4D, profileIOP 0x00) ---
+		{"main_level_1.2", "4d000c", true},
+		{"main_level_2.0", "4d0014", true},
+		{"main_level_2.2", "4d0016", true},
+		{"main_level_3.0", "4d001e", true},
+		{"main_level_3.1", "4d001f", false},
+		{"main_level_4.0", "4d0028", false},
+		{"main_level_5.0", "4d0032", false},
+
+		// --- High (0x64, profileIOP 0x00) ---
+		{"high_level_1.2", "64000c", true},
+		{"high_level_2.0", "640014", true},
+		{"high_level_2.2", "640016", true},
+		{"high_level_3.0", "64001e", true},
+		{"high_level_3.1", "64001f", false},
+		{"high_level_4.0", "640028", false},
+		{"high_level_5.0", "640032", false},
+
+		// --- Constrained High (0x64, csf4+csf5 set → profileIOP 0x0C) ---
+		{"constrained_high_level_3.1", "640c1f", false},
+		{"constrained_high_level_4.0", "640c28", false},
+		{"constrained_high_level_5.0", "640c32", false},
+
+		// --- Constrained Baseline via Main IDC (0x4D, csf0 set → profileIOP 0x80) ---
+		{"cb_via_main_level_2.2", "4d8016", true},
+		{"cb_via_main_level_3.1", "4d801f", false},
+		{"cb_via_main_level_4.0", "4d8028", false},
+
+		// --- Mixed case (uppercase plid from SDP) ---
+		{"cb_level_3.1_uppercase", "42E01F", false},
+		{"high_level_4.0_uppercase", "640028", false},
 	}
 
-	videoSrc, err := gst.NewElement("videotestsrc")
-	if err != nil {
-		t.Fatal("failed to create videotestsrc:", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runPipelineTest(t, tt.name, tt.plid, tt.expectDownscale)
+		})
 	}
-	videoSrc.SetProperty("num-buffers", 10)
-
-	rawCapsFilter, err := gst.NewElement("capsfilter")
-	if err != nil {
-		t.Fatal("failed to create capsfilter:", err)
-	}
-	rawCapsFilter.SetProperty("caps", gst.NewCapsFromString("video/x-raw,width=320,height=240,framerate=15/1"))
-
-	encoder, err := gst.NewElementWithProperties("x264enc", map[string]interface{}{
-		"speed-preset": 1,
-		"tune":         4,
-		"key-int-max":  30,
-	})
-	if err != nil {
-		t.Fatal("failed to create x264enc:", err)
-	}
-
-	payloader, err := gst.NewElement("rtph264pay")
-	if err != nil {
-		t.Fatal("failed to create rtph264pay:", err)
-	}
-
-	intersectElem, err := gst.NewElement("rtph264capsintersect")
-	if err != nil {
-		t.Fatal("failed to create rtph264capsintersect:", err)
-	}
-
-	// Downstream requires High profile — incompatible with x264enc's CB/Baseline output
-	rtpCapsFilter, err := gst.NewElement("capsfilter")
-	if err != nil {
-		t.Fatal("failed to create capsfilter:", err)
-	}
-	rtpCapsFilter.SetProperty("caps", gst.NewCapsFromString(
-		"application/x-rtp, media=(string)video, encoding-name=(string)H264, profile-level-id=(string)640028"))
-
-	sink, err := gst.NewElement("fakesink")
-	if err != nil {
-		t.Fatal("failed to create fakesink:", err)
-	}
-	sink.SetProperty("sync", false)
-
-	if err := pipeline.AddMany(videoSrc, rawCapsFilter, encoder, payloader, intersectElem, rtpCapsFilter, sink); err != nil {
-		t.Fatal("failed to add elements:", err)
-	}
-
-	if err := gst.ElementLinkMany(videoSrc, rawCapsFilter, encoder, payloader, intersectElem, rtpCapsFilter, sink); err != nil {
-		// Link failure is expected — incompatible caps
-		t.Logf("link failed as expected: %v", err)
-		pipeline.SetState(gst.StateNull)
-		return
-	}
-
-	// If linking succeeded, try to play — should fail during negotiation
-	err = pipeline.SetState(gst.StatePlaying)
-	if err != nil {
-		t.Logf("set state failed as expected: %v", err)
-		pipeline.SetState(gst.StateNull)
-		return
-	}
-
-	// Wait briefly for error on bus
-	bus := pipeline.GetPipelineBus()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		msg := bus.TimedPop(gst.ClockTime(time.Second))
-		if msg == nil {
-			continue
-		}
-		switch msg.Type() {
-		case gst.MessageError:
-			t.Logf("pipeline error as expected: %v", msg.ParseError())
-			pipeline.SetState(gst.StateNull)
-			return
-		case gst.MessageEOS:
-			t.Fatal("unexpected EOS — negotiation should have failed")
-		}
-	}
-
-	pipeline.SetState(gst.StateNull)
-	t.Log("pipeline did not produce data (negotiation blocked as expected)")
-	_ = fmt.Sprintf("") // keep fmt imported
 }
