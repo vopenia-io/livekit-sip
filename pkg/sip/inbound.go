@@ -403,7 +403,19 @@ func (s *Server) processInvite(req *sip.Request, tx sip.ServerTransaction) (retE
 	if existing != nil && existing.cc.InviteCSeq() < cc.InviteCSeq() {
 		log.Infow("accepting reinvite", "content-type", req.ContentType(), "content-length", req.ContentLength())
 		existing.log().Infow("reinvite", "content-type", req.ContentType(), "content-length", req.ContentLength(), "cseq", cc.InviteCSeq())
-		cc.AcceptAsKeepAlive(existing.cc.OwnSDP())
+		offerData := req.Body()
+		if existing.medias != nil && len(offerData) > 0 {
+			answerData, err := existing.medias.AnswerSDP(offerData)
+			if err != nil {
+				existing.log().Errorw("Cannot create SDP answer for re-INVITE", err)
+				cc.AcceptAsKeepAlive(existing.cc.OwnSDP())
+			} else {
+				existing.cc.SetOwnSDP(answerData)
+				cc.AcceptAsKeepAlive(answerData)
+			}
+		} else {
+			cc.AcceptAsKeepAlive(existing.cc.OwnSDP())
+		}
 		return nil
 	}
 
@@ -1788,6 +1800,12 @@ func (c *sipInbound) OwnSDP() []byte {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.lastSDP
+}
+
+func (c *sipInbound) SetOwnSDP(sdp []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.lastSDP = sdp
 }
 
 func (c *sipInbound) Accept(ctx context.Context, sdpData []byte, headers map[string]string) error {
