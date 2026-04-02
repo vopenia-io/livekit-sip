@@ -940,6 +940,20 @@ func (c *inboundCall) handleInvite(ctx context.Context, tid traceid.ID, req *sip
 		}
 	}
 	p := &disp.Room.Participant
+
+	from := c.cc.From()
+	sipCallID := c.cc.SIPCallID()
+	if p.Identity == "sip_" || p.Identity == "" {
+		shortID := sipCallID
+		if len(shortID) > 8 {
+			shortID = shortID[:8]
+		}
+		p.Identity = fmt.Sprintf("sip_%s_%s", from.Host, shortID)
+	}
+	if p.Name == "Phone " || p.Name == "" {
+		p.Name = fmt.Sprintf("Phone %s", from.Host)
+	}
+
 	p.Attributes = HeadersToAttrs(p.Attributes, disp.HeadersToAttributes, disp.IncludeHeaders, c.cc, nil)
 	if disp.MaxCallDuration <= 0 || disp.MaxCallDuration > maxCallDuration {
 		disp.MaxCallDuration = maxCallDuration
@@ -1361,7 +1375,6 @@ func (c *inboundCall) AcceptAck(req *sip.Request, tx sip.ServerTransaction) {
 		}
 	}
 }
-
 
 func (c *inboundCall) Close() error {
 	c.cancel()
