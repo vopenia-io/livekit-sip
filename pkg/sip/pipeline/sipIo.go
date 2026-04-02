@@ -1,22 +1,23 @@
 package pipeline
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"weak"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
-	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
 	"github.com/samber/lo"
 )
 
 func NewSipInput(log logger.Logger, parent *Pipeline, opts SipOpt) *SipIo {
 	return &SipIo{
-		log:      log.WithComponent("sip_input"),
-		pipeline: parent,
-		opts:     opts,
+		log:         log.WithComponent("sip_input"),
+		pipeline:    parent,
+		opts:        opts,
+		sendOfferCh: make(chan string, 1),
 	}
 }
 
@@ -32,7 +33,8 @@ type SipIo struct {
 
 	opts SipOpt
 
-	SipBin *gst.Element
+	SipBin      *gst.Element
+	sendOfferCh chan string
 }
 
 func makeH264HighCaps() *gst.Caps {
@@ -143,32 +145,49 @@ func (sio *SipIo) binPadAddedRecvRtpSrc(rtpbin *gst.Element, pad *gst.Pad) {
 	sio.log.Infow("Linked new recv RTP src pad from rtpbin to sipbin sink pad", "session", session, "ssrc", ssrc, "pt", pt)
 
 	// go func() {
-	switch livekit.TrackSource(session) {
-	case livekit.TrackSource_CAMERA:
-		if err := sio.pipeline.WebrtcIo.LivekitBin.SetProperty("camera", true); err != nil {
-			sio.log.Errorw("Failed to set camera property on LiveKit bin after linking new RTP pad for camera track", err)
-		}
-	case livekit.TrackSource_MICROPHONE:
-		if err := sio.pipeline.WebrtcIo.LivekitBin.SetProperty("microphone", true); err != nil {
-			sio.log.Errorw("Failed to set microphone property on LiveKit bin after linking new RTP pad for microphone track", err)
-		}
-	case livekit.TrackSource_SCREEN_SHARE:
-		if err := sio.pipeline.WebrtcIo.LivekitBin.SetProperty("screenshare", true); err != nil {
-			sio.log.Errorw("Failed to set screenshare property on LiveKit bin after linking new RTP pad for screenshare track", err)
-		}
-		// most sip devices mix screenshare audio into the microphone track
-		if err := sio.pipeline.WebrtcIo.LivekitBin.SetProperty("screenshare-audio", true); err != nil {
-			sio.log.Errorw("Failed to set screenshare-audio property on LiveKit bin after linking new RTP pad for screenshare audio track", err)
-		}
-	case livekit.TrackSource_SCREEN_SHARE_AUDIO:
-		if err := sio.pipeline.WebrtcIo.LivekitBin.SetProperty("screenshare-audio", true); err != nil {
-			sio.log.Errorw("Failed to set screenshare-audio property on LiveKit bin after linking new RTP pad for screenshare audio track", err)
-		}
-	default:
-		sio.log.Warnw("Received new recv RTP src pad on rtpbin with unrecognized session kind", nil, "session", session, "ssrc", ssrc, "pt", pt)
-		return
-	}
+	// switch livekit.TrackSource(session) {
+	// case livekit.TrackSource_CAMERA:
+	// 	if err := sio.pipeline.WebrtcIo.LivekitBin.SetProperty("camera", true); err != nil {
+	// 		sio.log.Errorw("Failed to set camera property on LiveKit bin after linking new RTP pad for camera track", err)
+	// 	}
+	// case livekit.TrackSource_MICROPHONE:
+	// 	if err := sio.pipeline.WebrtcIo.LivekitBin.SetProperty("microphone", true); err != nil {
+	// 		sio.log.Errorw("Failed to set microphone property on LiveKit bin after linking new RTP pad for microphone track", err)
+	// 	}
+	// case livekit.TrackSource_SCREEN_SHARE:
+	// 	if err := sio.pipeline.WebrtcIo.LivekitBin.SetProperty("screenshare", true); err != nil {
+	// 		sio.log.Errorw("Failed to set screenshare property on LiveKit bin after linking new RTP pad for screenshare track", err)
+	// 	}
+	// 	// most sip devices mix screenshare audio into the microphone track
+	// 	if err := sio.pipeline.WebrtcIo.LivekitBin.SetProperty("screenshare-audio", true); err != nil {
+	// 		sio.log.Errorw("Failed to set screenshare-audio property on LiveKit bin after linking new RTP pad for screenshare audio track", err)
+	// 	}
+	// case livekit.TrackSource_SCREEN_SHARE_AUDIO:
+	// 	if err := sio.pipeline.WebrtcIo.LivekitBin.SetProperty("screenshare-audio", true); err != nil {
+	// 		sio.log.Errorw("Failed to set screenshare-audio property on LiveKit bin after linking new RTP pad for screenshare audio track", err)
+	// 	}
+	// default:
+	// 	sio.log.Warnw("Received new recv RTP src pad on rtpbin with unrecognized session kind", nil, "session", session, "ssrc", ssrc, "pt", pt)
+	// 	return
+	// }
 	// }()
+}
+
+func (sio *SipIo) onAvailableMedia(camera, microphone, screenshare, screenshareAudio bool) {
+	screenshareAudio = screenshareAudio || (microphone && screenshare)
+
+	err := errors.Join(
+		sio.pipeline.WebrtcIo.LivekitBin.SetProperty("camera", camera),
+		sio.pipeline.WebrtcIo.LivekitBin.SetProperty("microphone", microphone),
+		sio.pipeline.WebrtcIo.LivekitBin.SetProperty("screenshare", screenshare),
+		// sio.pipeline.WebrtcIo.LivekitBin.SetProperty("screenshare-audio", screenshareAudio),
+	)
+
+	if err != nil {
+		sio.log.Errorw("Failed to set available media properties on LiveKit bin", err, "camera", camera, "microphone", microphone, "screenshare", screenshare, "screenshareAudio", screenshareAudio)
+	} else {
+		sio.log.Infow("Set available media properties on LiveKit bin", "camera", camera, "microphone", microphone, "screenshare", screenshare, "screenshareAudio", screenshareAudio)
+	}
 }
 
 // Link implements [GstChain].
@@ -183,6 +202,28 @@ func (sio *SipIo) Link() error {
 		}
 	}); err != nil {
 		return fmt.Errorf("failed to connect to rtpbin pad-added signal: %w", err)
+	}
+
+	if _, err := sio.SipBin.Connect("send-offer-sdp", func(_ *gst.Element, offer string) {
+		ptr := siow.Value()
+		if ptr != nil {
+			select {
+			case ptr.sendOfferCh <- offer:
+			default:
+				ptr.log.Warnw("send-offer-sdp channel full, dropping offer", nil)
+			}
+		}
+	}); err != nil {
+		return fmt.Errorf("failed to connect send-offer-sdp signal: %w", err)
+	}
+
+	if _, err := sio.SipBin.Connect("available-media", func(_ *gst.Element, camera, microphone, screenshare, screenshareAudio bool) {
+		ptr := siow.Value()
+		if ptr != nil {
+			ptr.onAvailableMedia(camera, microphone, screenshare, screenshareAudio)
+		}
+	}); err != nil {
+		return fmt.Errorf("failed to connect available-media signal: %w", err)
 	}
 
 	return nil

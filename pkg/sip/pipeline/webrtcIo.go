@@ -103,6 +103,7 @@ func (wio *WebrtcIo) binPadAdded(_ *gst.Element, pad *gst.Pad) {
 	switch livekit.TrackSource(session) {
 	case livekit.TrackSource_CAMERA:
 	case livekit.TrackSource_MICROPHONE:
+	case livekit.TrackSource_SCREEN_SHARE:
 	default:
 		wio.log.Warnw("Unknown track source in RTP pad name", nil, "session", session, "pad", padName)
 		return

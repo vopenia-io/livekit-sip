@@ -12,6 +12,36 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/samplewriter"
 )
 
+func (p *Pipeline) EmitOfferSDP(offer string) (string, error) {
+	res, err := p.SipBin.Emit("offer-sdp", offer)
+	if err != nil {
+		return "", fmt.Errorf("failed to emit offer-sdp: %w", err)
+	}
+	answer, ok := res.(string)
+	if !ok {
+		return "", fmt.Errorf("offer-sdp did not return a string")
+	}
+	return answer, nil
+}
+
+func (p *Pipeline) EmitAnswerSDP(answer string) error {
+	if _, err := p.SipBin.Emit("answer-sdp", answer); err != nil {
+		return fmt.Errorf("failed to emit answer-sdp: %w", err)
+	}
+	return nil
+}
+
+func (p *Pipeline) EmitAckSDP(sdp string) error {
+	if _, err := p.SipBin.Emit("ack-sdp", sdp); err != nil {
+		return fmt.Errorf("failed to emit ack-sdp: %w", err)
+	}
+	return nil
+}
+
+func (p *Pipeline) SendOfferCh() <-chan string {
+	return p.SipIo.sendOfferCh
+}
+
 func (p *Pipeline) ConnectRoom(wsUrl, token string, attributes map[string]string) error {
 	attr := gst.NewStructure("participant-attributes")
 

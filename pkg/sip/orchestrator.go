@@ -14,6 +14,7 @@ import (
 	sdpv2 "github.com/livekit/media-sdk/sdp/v2"
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/sip/pkg/sip/pipeline"
+	"github.com/livekit/sipgo/sip"
 	"github.com/vopenia-io/go-pjmedia/pj"
 )
 
@@ -136,9 +137,8 @@ func (o *MediaOrchestrator) init() error {
 	}
 	o.pipeline = pipeline
 
-	// pipeline.Monitor()
-
-	// o.bfcp = NewBFCPManager(o.ctx, o.log, o.opts, o.inbound)
+	o.wg.Add(1)
+	go o.sendOfferLoop()
 
 	if err := o.pipeline.SetStateWait(gst.StateReady); err != nil {
 		return fmt.Errorf("failed to set pipeline to ready state: %w", err)
@@ -280,15 +280,10 @@ func (o *MediaOrchestrator) AnswerSDP(offer []byte) (answer []byte, err error) {
 }
 
 func (o *MediaOrchestrator) answerSDP(offerData []byte) ([]byte, error) {
-	res, err := o.pipeline.SipBin.Emit("offer-sdp", string(offerData))
+	answerStr, err := o.pipeline.EmitOfferSDP(string(offerData))
 	if err != nil {
 		o.log.Errorw("failed to emit offer-sdp", err)
-		return nil, fmt.Errorf("failed to emit offer-sdp: %w", err)
-	}
-	answerStr, ok := res.(string)
-	if !ok {
-		o.log.Errorw("offer-sdp did not return a string", nil, "value", res)
-		return nil, fmt.Errorf("offer-sdp did not return a string")
+		return nil, err
 	}
 	if answerStr == "" {
 		o.log.Errorw("offer-sdp returned an empty answer", nil)
@@ -297,28 +292,83 @@ func (o *MediaOrchestrator) answerSDP(offerData []byte) ([]byte, error) {
 
 	o.state = MediaStateReady
 
-	// TODO: proper ack support, this only avoid deadlocks when no ack is received
-	if err := o.ackSDP([]byte{}); err != nil {
-		o.log.Errorw("failed to send ACK for SDP answer", err)
-		return nil, fmt.Errorf("failed to send ACK for SDP answer: %w", err)
-	}
-
 	return []byte(answerStr), nil
 }
 
-func (o *MediaOrchestrator) AckSDP(ack []byte) error {
+func (o *MediaOrchestrator) AckSDP(req *sip.Request, tx sip.ServerTransaction) error {
 	if err := o.okStates(MediaStateFailed, MediaStateOK, MediaStateReady, MediaStateStarted); err != nil {
 		return err
 	}
 	return o.dispatch(func() error {
-		return o.ackSDP(ack)
+		return o.ackSDP(req, tx)
 	})
 }
 
-func (o *MediaOrchestrator) ackSDP(ack []byte) error {
-	if _, err := o.pipeline.SipBin.Emit("ack-sdp", string(ack)); err != nil {
+func (o *MediaOrchestrator) ackSDP(req *sip.Request, tx sip.ServerTransaction) error {
+	sdp := req.Body()
+	if sdp == nil {
+		sdp = []byte{}
+	}
+
+	if err := o.pipeline.EmitAckSDP(string(sdp)); err != nil {
 		o.log.Errorw("failed to emit ack-sdp", err)
-		return fmt.Errorf("failed to emit ack-sdp: %w", err)
+		return err
+	}
+
+	o.log.Infow("ACKed SDP answer", "sdp", string(sdp))
+
+	return nil
+}
+
+func (o *MediaOrchestrator) sendOfferLoop() {
+	defer o.wg.Done()
+	for {
+		select {
+		case <-o.ctx.Done():
+			return
+		case offer := <-o.pipeline.SendOfferCh():
+			if err := o.handleSendOffer(offer); err != nil {
+				o.log.Errorw("failed to handle send-offer-sdp", err)
+			}
+		}
+	}
+}
+
+func (o *MediaOrchestrator) handleSendOffer(offer string) error {
+	// Release the pending SipTransaction from earlyReinvite
+	if err := o.pipeline.EmitAckSDP(""); err != nil {
+		o.log.Errorw("failed to emit ack-sdp before re-INVITE", err)
+		return err
+	}
+
+	// Send SIP re-INVITE with the offer, get 200 OK with answer
+	resp, err := o.inbound.sendReInvite(o.ctx, []byte(offer))
+	if err != nil {
+		o.log.Errorw("re-INVITE failed", err)
+		return err
+	}
+
+	if resp.StatusCode != 200 {
+		o.log.Errorw("re-INVITE rejected", nil, "status", resp.StatusCode)
+		return fmt.Errorf("re-INVITE rejected with status %d", resp.StatusCode)
+	}
+
+	answerSDP := string(resp.Body())
+	if answerSDP == "" {
+		o.log.Errorw("re-INVITE 200 OK has no SDP body", nil)
+		return fmt.Errorf("re-INVITE 200 OK has no SDP body")
+	}
+
+	// Feed answer back to sipbin
+	if err := o.pipeline.EmitAnswerSDP(answerSDP); err != nil {
+		o.log.Errorw("failed to emit answer-sdp after re-INVITE", err)
+		return err
+	}
+
+	// Finalize the transaction
+	if err := o.pipeline.EmitAckSDP(""); err != nil {
+		o.log.Errorw("failed to emit final ack-sdp after re-INVITE", err)
+		return err
 	}
 
 	return nil

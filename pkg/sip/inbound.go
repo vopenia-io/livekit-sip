@@ -533,6 +533,7 @@ func (s *Server) onAck(log *slog.Logger, req *sip.Request, tx sip.ServerTransact
 	}
 	c.log().Infow("ACK from remote")
 	c.cc.AcceptAck(req, tx)
+	c.AcceptAck(req, tx)
 }
 
 func (s *Server) onBye(log *slog.Logger, req *sip.Request, tx sip.ServerTransaction) {
@@ -1341,6 +1342,15 @@ func (c *inboundCall) Bye(reason ReasonHeader) {
 	_ = c.Close()
 }
 
+func (c *inboundCall) AcceptAck(req *sip.Request, tx sip.ServerTransaction) {
+	if c.medias != nil {
+		if err := c.medias.AckSDP(req, tx); err != nil {
+			c.log().Errorw("failed to forward ACK SDP", err)
+		}
+	}
+}
+
+
 func (c *inboundCall) Close() error {
 	c.cancel()
 	return nil
@@ -1933,6 +1943,69 @@ func (c *sipInbound) sendBye() {
 	c.swapSrcDst(r)
 	c.drop()
 	sendAndACK(ctx, c, r)
+}
+
+func (c *sipInbound) sendReInvite(ctx context.Context, offerSDP []byte) (*sip.Response, error) {
+	if c.invite == nil || c.inviteOk == nil {
+		return nil, fmt.Errorf("call not established")
+	}
+
+	_, span := tracer.Start(ctx, "sipInbound.sendReInvite")
+	defer span.End()
+
+	req := sip.NewRequest(sip.INVITE, c.invite.Recipient)
+	req.SipVersion = c.invite.SipVersion
+
+	sip.CopyHeaders("Via", c.invite, req)
+	req.Via().Params.Add("branch", sip.GenerateBranch())
+
+	if len(c.invite.GetHeaders("Route")) > 0 {
+		sip.CopyHeaders("Route", c.invite, req)
+	} else {
+		hdrs := c.inviteOk.GetHeaders("Record-Route")
+		for i := len(hdrs) - 1; i >= 0; i-- {
+			rrh, ok := hdrs[i].(*sip.RecordRouteHeader)
+			if ok {
+				req.AppendHeader(&sip.RouteHeader{Address: rrh.Address})
+			}
+		}
+	}
+
+	sip.CopyHeaders("Call-ID", c.invite, req)
+	sip.CopyHeaders("From", c.invite, req)
+	sip.CopyHeaders("To", c.inviteOk, req)
+
+	req.AppendHeader(c.contact)
+	maxFwd := sip.MaxForwardsHeader(70)
+	req.AppendHeader(&maxFwd)
+	req.AppendHeader(&contentTypeHeaderSDP)
+	req.SetBody(offerSDP)
+
+	c.setCSeq(req)
+	c.swapSrcDst(req)
+
+	if c.setHeaders != nil {
+		for k, v := range c.setHeaders(nil) {
+			req.AppendHeader(sip.NewHeader(k, v))
+		}
+	}
+
+	tx, err := c.Transaction(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create re-INVITE transaction: %w", err)
+	}
+	defer tx.Terminate()
+
+	resp, err := sipResponse(ctx, tx, nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("re-INVITE failed: %w", err)
+	}
+
+	if resp.StatusCode == 200 {
+		_ = c.WriteRequest(sip.NewAckRequest(req, resp, nil))
+	}
+
+	return resp, nil
 }
 
 func (c *sipInbound) sendStatus(code sip.StatusCode, status string) {
