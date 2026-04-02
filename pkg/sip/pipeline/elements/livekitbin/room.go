@@ -156,6 +156,11 @@ func (e *LivekitBin) OnActiveSpeakersChanged(p []lksdk.Participant) {
 		return
 	}
 
+	p = lo.Filter(p, func(part lksdk.Participant, i int) bool {
+		_, ok := part.(*lksdk.RemoteParticipant)
+		return ok
+	})
+
 	maxParticipants := e.maxActiveParticipants
 	if maxParticipants == 0 {
 		maxParticipants = MAX_ACTIVE_PARTICIPANTS
@@ -238,6 +243,8 @@ func (e *LivekitBin) OnParticipantDisconnected(rp *lksdk.RemoteParticipant) {
 	if self == nil || self.Instance() == nil {
 		return
 	}
+
+	e.activeSpeakers = lo.Without(e.activeSpeakers, rp.SID())
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Participant disconnected: %s", rp.SID()))
 	if _, err := self.Emit("participant-left", rp.SID()); err != nil {

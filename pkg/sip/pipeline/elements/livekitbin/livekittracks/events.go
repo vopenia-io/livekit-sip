@@ -201,7 +201,8 @@ func NewActiveSpeakerChangeInfo(activeParticipants []lksdk.Participant) ActiveSp
 		audioLevels[i] = participant.AudioLevel()
 		rp, ok := participant.(*lksdk.RemoteParticipant)
 		if !ok {
-			panic(fmt.Sprintf("expected RemoteParticipant, got %T", participant))
+			// can be local participant when we are speaking
+			continue
 		}
 		pub := rp.TrackPublications()
 		trackSIDs := make([]string, len(pub))
