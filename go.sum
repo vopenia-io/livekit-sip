@@ -256,8 +256,8 @@ github.com/vopenia-io/bfcp v0.0.0-20260224094451-fe3a4475f424 h1:5XPKdPYB4OZh8u4
 github.com/vopenia-io/bfcp v0.0.0-20260224094451-fe3a4475f424/go.mod h1:7jnTF4sbeePMizEP59DvLPmVOtDNgYxgRjAg1cIi43s=
 github.com/vopenia-io/go-glib v0.0.0-20260331095234-b9e9d7b98559 h1:AEA0zszOyMM5ws9o366PfH2CEKolq2lDbcbOa7Of5Qg=
 github.com/vopenia-io/go-glib v0.0.0-20260331095234-b9e9d7b98559/go.mod h1:dqdh3eCmMS9ofMtyPGoO5jeTzaoGLS+nGMdnoL33is8=
-github.com/vopenia-io/go-gst v0.0.0-20260401122511-a758fa8b45ff h1:XTKvfEXgvk5sV/to7+BEtJ+7nOoC7tzOD0ZjHZT+XE0=
-github.com/vopenia-io/go-gst v0.0.0-20260401122511-a758fa8b45ff/go.mod h1:JWpcZSM0cK+BMlnIw12CCgWIDwp8bIDwpBgTk+IADYE=
+github.com/vopenia-io/go-gst v0.0.0-20260402114712-4141765125be h1:FZp6KWhCW/hYc/tm/5Nwup8JJi1F4APy+PTn37tRzjo=
+github.com/vopenia-io/go-gst v0.0.0-20260402114712-4141765125be/go.mod h1:JWpcZSM0cK+BMlnIw12CCgWIDwp8bIDwpBgTk+IADYE=
 github.com/vopenia-io/go-pjmedia v0.0.0-20260331124148-c1f4eb8e723d h1:tBcmUo7uBWhKjZ85Dfmnpi4c5nlfy+z+Hn3KVGVIYNo=
 github.com/vopenia-io/go-pjmedia v0.0.0-20260331124148-c1f4eb8e723d/go.mod h1:mo5FrDHH1vgFbiaPOaHi7g3AvAEfj5jVcAP5xZuYaF8=
 github.com/vopenia-io/media-sdk v0.0.0-20251229153245-6b76cc17de47 h1:C7C20LfJw+i6IC4PVxsby0mJhX5UkWjsI3+FgYUb3Q8=
