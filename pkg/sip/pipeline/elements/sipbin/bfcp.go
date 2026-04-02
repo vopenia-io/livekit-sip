@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/gstsdp"
 	"github.com/livekit/protocol/livekit"
 )
@@ -97,4 +98,30 @@ func (e *SipBin) mediaAddBfcpLabel(bfcpMedia *gstsdp.Media, media *gstsdp.Media,
 		return fmt.Errorf("failed to add label attribute to media: %v", ret)
 	}
 	return nil
+}
+
+func (e *SipBin) bfcpStartScreenshare(self *gst.Bin) {
+	if e.Bfcp == nil {
+		return
+	}
+
+	if _, err := e.Bfcp.BfcpServer.Emit("start-screenshare", int(e.Bfcp.FloorID)); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to emit start-screenshare signal: %v", err))
+		self.Error("Failed to emit start-screenshare signal", err)
+	} else {
+		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Emitted start-screenshare signal for floor ID %d", e.Bfcp.FloorID))
+	}
+}
+
+func (e *SipBin) bfcpStopScreenshare(self *gst.Bin) {
+	if e.Bfcp == nil {
+		return
+	}
+
+	if _, err := e.Bfcp.BfcpServer.Emit("stop-screenshare", int(e.Bfcp.FloorID)); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to emit stop-screenshare signal: %v", err))
+		self.Error("Failed to emit stop-screenshare signal", err)
+	} else {
+		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Emitted stop-screenshare signal for floor ID %d", e.Bfcp.FloorID))
+	}
 }

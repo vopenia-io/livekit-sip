@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"strconv"
 	"strings"
+	"time"
 	"weak"
 
 	"github.com/go-gst/go-glib/glib"
@@ -28,6 +29,9 @@ func (e *SipBin) OnOfferSdp(self *gst.Bin, offerData []byte) ([]byte, error) {
 		return nil, fmt.Errorf("transaction is not ready: %w", err)
 	}
 	defer unlock()
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
 
 	if e.ip == nil {
 		return nil, fmt.Errorf("no IP address configured for SIP media")
@@ -151,7 +155,7 @@ func (e *SipBin) OnOfferSdp(self *gst.Bin, offerData []byte) ([]byte, error) {
 
 	for i, media := range medias {
 		if media == nil {
-			self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Disabling media %d because it is not compatible or supported", i))
+			self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Disabling media %d because it is not compatible or supported: %s", i, offer.Media(i).AsText()))
 			disabledMedia, err := disableMedia(offer.Media(i), answer)
 			if err != nil {
 				return nil, fmt.Errorf("failed to disable media %d: %w", i, err)
@@ -178,11 +182,13 @@ func (e *SipBin) OnOfferSdp(self *gst.Bin, offerData []byte) ([]byte, error) {
 
 	e.Medias = medias
 
-	e.earlyReinvite(self)
-
 	e.transaction.SetPending()
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Generated answer SDP:\n%s", answerData))
+
+	e.emitAvailableMedia(self)
+
+	e.earlyReinvite(self)
 
 	return []byte(answerData), nil
 }
@@ -195,6 +201,9 @@ func (e *SipBin) OnAnswerSdp(self *gst.Bin, answerData []byte) error {
 	}
 	defer unlock()
 
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	if e.ip == nil {
 		return fmt.Errorf("no IP address configured for SIP media")
 	}
@@ -204,12 +213,14 @@ func (e *SipBin) OnAnswerSdp(self *gst.Bin, answerData []byte) error {
 		return err
 	}
 
-	if len(e.Medias) < answer.MediasLen() {
-		return fmt.Errorf("answer contains more media than expected: %d vs %d", answer.MediasLen(), len(e.Medias))
-	}
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Received answer SDP:\n%s", answer.AsText()))
 
 	medias := make([]*gstsdp.Media, answer.MediasLen())
 	for i, media := range answer.Medias() {
+		if i >= len(e.Medias) {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Received more media than expected in answer: media index %d exceeds expected media count %d, disabling media", i, len(e.Medias)))
+			continue
+		}
 		if media.GetPort() == 0 || media.GetAttributeVal("direction") == "inactive" {
 			self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Media %d is disabled in answer, skipping", i))
 			continue
@@ -238,13 +249,30 @@ func (e *SipBin) OnAnswerSdp(self *gst.Bin, answerData []byte) error {
 				self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to initialize track for media %d: %v", i, err))
 			}
 			continue
+		case TrackSource_BFCP:
+			if e.Bfcp == nil {
+				self.Log(CAT, gst.LevelWarning, fmt.Sprintf("No existing BFCP track for media %d, disabling media", i))
+				continue
+			}
+			if err := e.Bfcp.Init(e, self, media, answer); err != nil {
+				e.Bfcp = nil
+				self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to initialize BFCP track for media %d: %v", i, err))
+				continue
+			}
+			localMedia, err := e.makeBfcpMedia(e.Bfcp)
+			if err != nil {
+				self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to make answer media for BFCP media %d: %v", i, err))
+				continue
+			}
+			medias[i] = localMedia
+			continue
 		}
 		medias[i] = nil
 	}
 
 	for i, media := range medias {
 		if media == nil {
-			self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Disabling media %d because it is not compatible or supported", i))
+			self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Disabling media %d because it is not compatible or supported: %s", i, answer.Media(i).AsText()))
 			disabledMedia, err := disableMedia(answer.Media(i), nil)
 			if err != nil {
 				return fmt.Errorf("failed to disable media %d: %w", i, err)
@@ -269,6 +297,10 @@ func (e *SipBin) OnAnswerSdp(self *gst.Bin, answerData []byte) error {
 	e.Medias = medias
 
 	e.transaction.SetPending()
+
+	self.Log(CAT, gst.LevelInfo, "Answer SDP processed successfully")
+
+	e.emitAvailableMedia(self)
 
 	return nil
 }
@@ -323,6 +355,22 @@ func disableMedia(media *gstsdp.Media, answer *gstsdp.Message) (*gstsdp.Media, e
 	}
 	if newMedia.SetPortInfo(0, 0) != gstsdp.SDPResultOk {
 		return nil, fmt.Errorf("could not set port to 0 for media %s: %s", media.GetMedia(), media.AsText())
+	}
+
+	i := newMedia.AttributesLen()
+	for i > 0 {
+		i--
+		attr := newMedia.GetAttribute(i)
+		switch attr.Key() {
+		case "direction", "recvonly", "sendrecv", "sendonly":
+			if ret := newMedia.RemoveAttribute(i); ret != gstsdp.SDPResultOk {
+				return nil, fmt.Errorf("could not remove attribute %s from media %s: %v", attr.Key(), media.GetMedia(), ret)
+			}
+		}
+	}
+
+	if ret := newMedia.AddAttribute("inactive", ""); ret != gstsdp.SDPResultOk {
+		return nil, fmt.Errorf("could not add inactive attribute to media %s: %v", media.GetMedia(), ret)
 	}
 
 	if answer != nil {
@@ -396,6 +444,9 @@ func (e *SipBin) earlyReinvite(self *gst.Bin) {
 	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
+
+		time.Sleep(500 * time.Millisecond) // give time to device for internal processing. should not be necessary but sip implementation are broken half of the time
+
 		self := gst.ToGstBin(weakself.Get())
 		e := weake.Value()
 		if self == nil || self.Instance() == nil || e == nil {
@@ -408,11 +459,14 @@ func (e *SipBin) earlyReinvite(self *gst.Bin) {
 			return
 		}
 		defer unlock()
+
+		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Generated offer SDP:\n%s", string(offerData)))
+
 		if _, err := self.Emit("send-offer-sdp", string(offerData)); err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to emit send-offer-sdp signal: %v", err))
 			return
 		}
 		e.transaction.SetPending()
-		return
+		self.Log(CAT, gst.LevelInfo, "Early reinvite offer sent successfully")
 	}()
 }

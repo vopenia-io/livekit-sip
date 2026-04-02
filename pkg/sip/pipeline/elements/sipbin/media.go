@@ -170,7 +170,17 @@ func (e *SipBin) selectCapsForMedia(self *gst.Bin, media *gstsdp.Media, kind liv
 		caps.GetStructureAt(0).SetName("application/x-rtp")
 		// caps.GetStructureAt(0).RemoveValue("proto") // TODO: properly handle srtp if we want to support it
 
-		if existing, exist := e.PtMap[kind][uint8(pt)]; exist {
+		info := rtp.PayloadInfoForPt(uint8(pt))
+		if info != nil && info.PayloadType() < 96 {
+			encodingName, err := caps.GetStructureAt(0).GetString("encoding-name")
+			if err != nil || encodingName != info.EncodingName() {
+				if err := caps.GetStructureAt(0).SetString("encoding-name", info.EncodingName()); err != nil {
+					self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set encoding-name attribute on caps: %v", err))
+				}
+			}
+		}
+
+		if existing, exist := e.PtMap[kind][uint8(pt)]; exist && existing != nil && !existing.IsEqual(caps) {
 			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Received duplicate caps for payload type %d: existing %s, new %s", pt, existing.String(), caps.String()))
 		}
 		e.PtMap[kind][uint8(pt)] = caps
@@ -184,9 +194,10 @@ func (e *SipBin) selectCapsForMedia(self *gst.Bin, media *gstsdp.Media, kind liv
 
 	for _, formatCaps := range e.formats {
 		for _, caps := range mediaCaps {
-			self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Intersecting media caps %s with format caps %s", caps.String(), formatCaps.String()))
+			self.Log(CAT, gst.LevelTrace, fmt.Sprintf("Intersecting media caps %s with format caps %s", caps.String(), formatCaps.String()))
 			icaps := caps.IntersectFull(formatCaps, gst.CapsIntersectFirst)
 			if icaps != nil && !icaps.IsEmpty() {
+				self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Found compatible caps for media %s: %s", kind.String(), icaps.String()))
 				return icaps, nil
 			}
 		}

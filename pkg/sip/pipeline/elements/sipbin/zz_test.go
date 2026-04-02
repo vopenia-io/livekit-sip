@@ -1544,7 +1544,7 @@ func TestEarlyReinvite_Triggered(t *testing.T) {
 	f.emitAck(t)
 
 	// Wait for the early re-INVITE offer
-	reInviteOffer := waitForOffer(t, ch, 500*time.Millisecond)
+	reInviteOffer := waitForOffer(t, ch, 5500*time.Millisecond)
 	f.emitAck(t)
 	msg := parseAnswer(t, reInviteOffer)
 
@@ -1665,7 +1665,7 @@ func TestEarlyReinvite_OfferContent(t *testing.T) {
 	videoPort := answerMsg.Media(1).GetPort()
 	bfcpPort := answerMsg.Media(2).GetPort()
 
-	reInviteOffer := waitForOffer(t, ch, 500*time.Millisecond)
+	reInviteOffer := waitForOffer(t, ch, 5500*time.Millisecond)
 	f.emitAck(t)
 	msg := parseAnswer(t, reInviteOffer)
 
@@ -1719,7 +1719,7 @@ func TestEarlyReinvite_FullFlow(t *testing.T) {
 	dumpDot(t, f.pipeline, "after_initial_offer")
 
 	// Step 2: wait for re-INVITE offer
-	reInviteOffer := waitForOffer(t, ch, 500*time.Millisecond)
+	reInviteOffer := waitForOffer(t, ch, 5500*time.Millisecond)
 	f.emitAck(t)
 	reInviteMsg := parseAnswer(t, reInviteOffer)
 	if reInviteMsg.MediasLen() != 4 {
@@ -1738,6 +1738,146 @@ func TestEarlyReinvite_FullFlow(t *testing.T) {
 	f.emitAnswer(t, reInviteAnswer)
 	f.emitAck(t)
 	dumpDot(t, f.pipeline, "after_reinvite_answer")
+
+	f.close()
+}
+
+// Polycom X30 answers our re-INVITE screenshare with vnd.polycom.lpr (pt=116)
+// as the first codec, which we never offered. OnAnswerSdp should pick H264
+// from the answer and ignore the unsupported codecs.
+func TestEarlyReinvite_PolycomX30_UnsupportedCodecInAnswer(t *testing.T) {
+	defer testutils.AssertNoLeaks(t)
+
+	f := newFixture(t, []*gst.Caps{pcmuCaps(), h264Caps()})
+	ch := f.connectSendOffer(t)
+
+	// Step 1: Initial offer from Polycom X30
+	// audio + video (LPR, H265, H264 variants, H263) + H224 app + BFCP
+	offer := makeSDP("192.168.0.35",
+		"m=audio 23166 RTP/AVP 115 9 102 0 8 15 18 101\r\n"+
+			"a=rtpmap:115 G7221/32000\r\n"+
+			"a=fmtp:115 bitrate=48000\r\n"+
+			"a=rtpmap:9 G722/8000\r\n"+
+			"a=rtpmap:102 G7221/16000\r\n"+
+			"a=fmtp:102 bitrate=32000\r\n"+
+			"a=rtpmap:0 PCMU/8000\r\n"+
+			"a=rtpmap:8 PCMA/8000\r\n"+
+			"a=rtpmap:15 G728/8000\r\n"+
+			"a=rtpmap:18 G729/8000\r\n"+
+			"a=fmtp:18 annexb=no\r\n"+
+			"a=rtpmap:101 telephone-event/8000\r\n"+
+			"a=fmtp:101 0-15\r\n"+
+			"a=sendrecv",
+		"m=video 22334 RTP/AVP 116 98 109 110 111 96 34\r\n"+
+			"b=TIAS:4096000\r\n"+
+			"a=rtpmap:116 vnd.polycom.lpr/9000\r\n"+
+			"a=fmtp:116 V=2;minPP=0;PP=150;RS=52;RP=10;PS=1400\r\n"+
+			"a=rtpmap:98 H265/90000\r\n"+
+			"a=fmtp:98 level-id=90; max-lsr=250675200; max-lps=8355840; max-fps=6000\r\n"+
+			"a=rtpmap:109 H264/90000\r\n"+
+			"a=fmtp:109 profile-level-id=428020; max-mbps=490000; max-fs=8192; sar-supported=13; sar=13\r\n"+
+			"a=rtpmap:110 H264/90000\r\n"+
+			"a=fmtp:110 profile-level-id=428020; packetization-mode=1; max-mbps=490000; max-fs=8192; sar-supported=13; sar=13\r\n"+
+			"a=rtpmap:111 H264/90000\r\n"+
+			"a=fmtp:111 profile-level-id=640020; packetization-mode=1; max-mbps=490000; max-fs=8192; sar-supported=13; sar=13\r\n"+
+			"a=rtpmap:96 H263-1998/90000\r\n"+
+			"a=fmtp:96 CIF4=2;CIF=1;QCIF=1;SQCIF=1;CUSTOM=432,240,1\r\n"+
+			"a=rtpmap:34 H263/90000\r\n"+
+			"a=fmtp:34 CIF4=2;CIF=1;QCIF=1;SQCIF=1\r\n"+
+			"a=rtcp-fb:* ccm tmmbr\r\n"+
+			"a=rtcp-fb:* ccm fir\r\n"+
+			"a=sendrecv\r\n"+
+			"a=content:main",
+		"m=application 21486 RTP/AVP 100\r\n"+
+			"a=rtpmap:100 H224/4800\r\n"+
+			"a=sendrecv",
+		"m=application 23748 UDP/BFCP *\r\n"+
+			"a=floorctrl:c-s\r\n"+
+			"a=confid:1\r\n"+
+			"a=userid:2\r\n"+
+			"a=floorid:1 mstrm:3\r\n"+
+			"a=setup:actpass\r\n"+
+			"a=connection:new",
+	)
+
+	answer := f.emitOffer(t, offer)
+	if answer == "" {
+		t.Fatal("expected non-empty answer")
+	}
+	f.emitAck(t)
+
+	// Step 2: wait for the early re-INVITE offer (earlyReinvite adds screenshare)
+	reInviteOffer := waitForOffer(t, ch, 5500*time.Millisecond)
+	f.emitAck(t)
+	reInviteMsg := parseAnswer(t, reInviteOffer)
+	t.Logf("Re-INVITE offer has %d media lines", reInviteMsg.MediasLen())
+
+	// Step 3: Polycom answers with unsupported codecs first in screenshare
+	// The Poly puts vnd.polycom.lpr (pt=116) first, H265, then H264 variants
+	// This is non-RFC compliant: it includes codecs we never offered
+	polyAnswer := makeSDP("192.168.0.35",
+		"m=audio 23166 RTP/AVP 0\r\n"+
+			"a=rtpmap:0 PCMU/8000\r\n"+
+			"a=sendrecv",
+		"m=video 22334 RTP/AVP 111\r\n"+
+			"b=TIAS:4096000\r\n"+
+			"a=rtpmap:111 H264/90000\r\n"+
+			"a=fmtp:111 profile-level-id=640020; packetization-mode=1; max-mbps=490000; max-fs=8192; sar-supported=13; sar=13\r\n"+
+			"a=rtcp-fb:* ccm tmmbr\r\n"+
+			"a=rtcp-fb:* ccm fir\r\n"+
+			"a=content:main\r\n"+
+			"a=sendrecv",
+		"m=application 0 RTP/AVP 100",
+		"m=application 23748 UDP/BFCP *\r\n"+
+			"a=floorctrl:c-only\r\n"+
+			"a=floorid:1 m-stream:3\r\n"+
+			"a=setup:active\r\n"+
+			"a=connection:new",
+		"m=video 26416 RTP/AVP 116 98 109 110 111 96 34\r\n"+
+			"b=TIAS:4096000\r\n"+
+			"a=rtpmap:116 vnd.polycom.lpr/9000\r\n"+
+			"a=fmtp:116 V=2;minPP=0;PP=150;RS=52;RP=10;PS=1400\r\n"+
+			"a=rtpmap:98 H265/90000\r\n"+
+			"a=fmtp:98 level-id=90; max-lsr=250675200; max-lps=8355840; max-fps=6000\r\n"+
+			"a=rtpmap:109 H264/90000\r\n"+
+			"a=fmtp:109 profile-level-id=428020; max-mbps=490000; max-fs=8192; sar-supported=13; sar=13\r\n"+
+			"a=rtpmap:110 H264/90000\r\n"+
+			"a=fmtp:110 profile-level-id=428020; packetization-mode=1; max-mbps=490000; max-fs=8192; sar-supported=13; sar=13\r\n"+
+			"a=rtpmap:111 H264/90000\r\n"+
+			"a=fmtp:111 profile-level-id=640020; packetization-mode=1; max-mbps=490000; max-fs=8192; sar-supported=13; sar=13\r\n"+
+			"a=rtpmap:96 H263-1998/90000\r\n"+
+			"a=fmtp:96 CIF4=2;CIF=1;QCIF=1;SQCIF=1;CUSTOM=432,240,1\r\n"+
+			"a=rtpmap:34 H263/90000\r\n"+
+			"a=fmtp:34 CIF4=2;CIF=1;QCIF=1;SQCIF=1\r\n"+
+			"a=rtcp-fb:* ccm tmmbr\r\n"+
+			"a=rtcp-fb:* ccm fir\r\n"+
+			"a=content:slides\r\n"+
+			"a=sendrecv",
+	)
+
+	// Step 4: emit Polycom's answer — should not crash or select unsupported codecs
+	f.emitAnswer(t, polyAnswer)
+	f.emitAck(t)
+	dumpDot(t, f.pipeline, "after_poly_reinvite_answer")
+
+	// Step 5: request the screenshare send pad — its capsfilter should have H264 caps,
+	// not vnd.polycom.lpr or any other unsupported codec
+	pad := f.sipbin.GetRequestPad("send_rtp_sink_3") // 3 = SCREEN_SHARE
+	if pad == nil {
+		t.Fatal("failed to request send_rtp_sink_3 pad for screenshare")
+	}
+	padCaps := pad.GetCurrentCaps()
+	if padCaps == nil {
+		padCaps = pad.QueryCaps(nil)
+	}
+	if padCaps == nil || padCaps.IsEmpty() {
+		t.Fatal("screenshare pad has no caps")
+	}
+
+	h264Filter := gst.NewCapsFromString("application/x-rtp,encoding-name=H264")
+	if padCaps.IntersectFull(h264Filter, gst.CapsIntersectFirst).IsEmpty() {
+		t.Fatalf("screenshare capsfilter has non-H264 caps: %s", padCaps.String())
+	}
 
 	f.close()
 }

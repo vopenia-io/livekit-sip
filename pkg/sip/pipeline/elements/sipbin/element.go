@@ -63,10 +63,11 @@ type SipBin struct {
 }
 
 var (
-	SignalOfferSdpID     uint
-	SignalAnswerSdpID    uint
-	SignalAckSdpID       uint
-	SignalSendOfferSdpID uint
+	SignalOfferSdpID       uint
+	SignalAnswerSdpID      uint
+	SignalAckSdpID         uint
+	SignalSendOfferSdpID   uint
+	SignalAvailableMediaID uint
 )
 
 func (e *SipBin) New() glib.GoObjectSubclass {
@@ -116,6 +117,17 @@ func (e *SipBin) ClassInit(klass *glib.ObjectClass) {
 		glib.TYPE_STRING,
 	)
 
+	SignalAvailableMediaID = gst.SignalNew(
+		class.Type(),
+		"available-media",
+		gst.SignalRunLast,
+		glib.TYPE_NONE,
+		glib.TYPE_BOOLEAN, // camera
+		glib.TYPE_BOOLEAN, // microphone
+		glib.TYPE_BOOLEAN, // screen share
+		glib.TYPE_BOOLEAN, // screen share audio (never used)
+	)
+
 	class.AddPadTemplate(gst.NewPadTemplate(
 		"recv_rtp_src_%u_%u_%u",
 		gst.PadDirectionSource,
@@ -156,7 +168,7 @@ func (e *SipBin) InstanceInit(instance *glib.Object) {
 		self := gst.ToGstBin(instance)
 		answerData, err := e.OnOfferSdp(self, []byte(offer))
 		if err != nil {
-			// self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to process offer: %v", err))
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to process offer: %v", err))
 			return ""
 		}
 		return string(answerData)
@@ -174,7 +186,7 @@ func (e *SipBin) InstanceInit(instance *glib.Object) {
 		self := gst.ToGstBin(instance)
 		err := e.OnAnswerSdp(self, []byte(answer))
 		if err != nil {
-			// self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to process answer: %v", err))
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to process answer: %v", err))
 			return
 		}
 	}); err != nil {
@@ -374,6 +386,18 @@ func (e *SipBin) requestNewPadSendRtpSink(self *gst.Bin, templ *gst.PadTemplate,
 		return nil
 	}
 
+	switch kind {
+	case livekit.TrackSource_CAMERA:
+		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Created new RTP sink pad for camera track: %s", gpad.GetName()))
+	case livekit.TrackSource_SCREEN_SHARE:
+		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Created new RTP sink pad for screen share track: %s", gpad.GetName()))
+		e.bfcpStartScreenshare(self)
+	case livekit.TrackSource_MICROPHONE:
+		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Created new RTP sink pad for microphone track: %s", gpad.GetName()))
+	case livekit.TrackSource_SCREEN_SHARE_AUDIO:
+		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Created new RTP sink pad for screen share audio track: %s", gpad.GetName()))
+	}
+
 	return gpad.Pad
 }
 
@@ -425,10 +449,23 @@ func (e *SipBin) releasePadSendRtpSink(self *gst.Bin, pad *gst.Pad) {
 
 	sink := ti.RtpFilter.GetStaticPad("src").GetPeer()
 	if sink != nil && e.RtpBin != nil {
+		ti.RtpFilter.GetStaticPad("src").Unlink(sink)
 		e.RtpBin.ReleaseRequestPad(sink)
 	}
 
 	if !self.RemovePad(pad) {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to remove pad %s", name))
+	}
+
+	switch kind {
+	case livekit.TrackSource_CAMERA:
+		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Released RTP sink pad for camera track: %s", name))
+	case livekit.TrackSource_SCREEN_SHARE:
+		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Released RTP sink pad for screen share track: %s", name))
+		e.bfcpStopScreenshare(self)
+	case livekit.TrackSource_MICROPHONE:
+		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Released RTP sink pad for microphone track: %s", name))
+	case livekit.TrackSource_SCREEN_SHARE_AUDIO:
+		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Released RTP sink pad for screen share audio track: %s", name))
 	}
 }
