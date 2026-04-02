@@ -69,8 +69,7 @@ func (c *IOManager) handleSipControllerPadAdded(_ *gst.Element, pad *gst.Pad) {
 	}
 
 	switch livekit.TrackSource(session) {
-	case livekit.TrackSource_CAMERA:
-	case livekit.TrackSource_MICROPHONE:
+	case livekit.TrackSource_CAMERA, livekit.TrackSource_MICROPHONE, livekit.TrackSource_SCREEN_SHARE:
 	default:
 		c.log.Warnw("Unknown session kind in SIP controller pad name", nil, "session", session, "pad", pname)
 		return

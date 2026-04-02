@@ -41,6 +41,18 @@ type SipCameraOutTranscode struct {
 	pad      *gst.Pad
 }
 
+type SipScreenshareInTranscode struct {
+	gpad      *gst.GhostPad
+	H264Video *gst.Element
+	pad       *gst.Pad
+}
+
+type SipScreenshareOutTranscode struct {
+	gpad     *gst.GhostPad
+	VideoVP8 *gst.Element
+	pad      *gst.Pad
+}
+
 type IoManagerSip struct {
 	inMu       sync.Mutex
 	outMu      sync.Mutex
@@ -53,6 +65,9 @@ type IoManagerSip struct {
 
 	CameraIn  map[string]*SipCameraInTranscode
 	CameraOut *SipCameraOutTranscode
+
+	ScreenshareIn  map[string]*SipScreenshareInTranscode
+	ScreenshareOut *SipScreenshareOutTranscode
 }
 
 func (e *IoManagerSip) New() glib.GoObjectSubclass {
@@ -91,6 +106,7 @@ func (e *IoManagerSip) InstanceInit(instance *glib.Object) {
 	e.AudioIn = make(map[string]*SipAudioInTranscode)
 	e.DtmfIn = make(map[string]*SipDtmfInTranscode)
 	e.CameraIn = make(map[string]*SipCameraInTranscode)
+	e.ScreenshareIn = make(map[string]*SipScreenshareInTranscode)
 
 	var err error
 	e.Compositor, err = gst.NewElementWithProperties("sip_compositor", map[string]interface{}{})
@@ -177,6 +193,8 @@ func (e *IoManagerSip) ChangeState(instance *gst.Element, transition gst.StateCh
 		e.DtmfIn = make(map[string]*SipDtmfInTranscode)
 		e.CameraIn = make(map[string]*SipCameraInTranscode)
 		e.CameraOut = nil
+		e.ScreenshareIn = make(map[string]*SipScreenshareInTranscode)
+		e.ScreenshareOut = nil
 	}
 	return ret
 }
@@ -205,6 +223,8 @@ func (e *IoManagerSip) RequestNewPad(instance *gst.Element, templ *gst.PadTempla
 		return e.requestNewPadAudioIn(self, templ, name, session, ssrc, pt)
 	case livekit.TrackSource_CAMERA:
 		return e.requestNewPadCameraIn(self, templ, name, session, ssrc, pt)
+	case livekit.TrackSource_SCREEN_SHARE:
+		return e.requestNewPadScreenshareIn(self, templ, name, session, ssrc, pt)
 	default:
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unsupported session kind in pad name %s: %d (%s)", name, session, livekit.TrackSource(session).String()))
 		return nil
@@ -466,6 +486,68 @@ func (e *IoManagerSip) requestNewPadCameraIn(self *gst.Bin, templ *gst.PadTempla
 	return cameraIn.gpad.Pad
 }
 
+func (e *IoManagerSip) requestNewPadScreenshareIn(self *gst.Bin, templ *gst.PadTemplate, name string, session int, ssrc int, pt int) *gst.Pad {
+	e.inMu.Lock()
+	defer e.inMu.Unlock()
+
+	if _, exists := e.ScreenshareIn[name]; exists {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Pad with name %s already exists", name))
+		return nil
+	}
+
+	screenshareIn := &SipScreenshareInTranscode{}
+
+	var err error
+	screenshareIn.H264Video, err = gst.NewElementWithProperties("h264-video", map[string]interface{}{}) // TODO: change back to h264 after testing
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create h264-video element for pad %s: %v", name, err))
+		self.Error(fmt.Sprintf("Failed to create h264-video element for pad %s", name), err)
+		return nil
+	}
+	if err := self.Add(screenshareIn.H264Video); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add h264-video element to SIP IO element for pad %s: %v", name, err))
+		self.Error(fmt.Sprintf("Failed to add h264-video element to SIP IO element for pad %s", name), err)
+		return nil
+	}
+
+	screenshareIn.pad = e.Compositor.GetRequestPad(fmt.Sprintf("sink_%d_%d_%d", session, ssrc, pt))
+	if screenshareIn.pad == nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get request pad from compositor for pad %s", name))
+		self.Error(fmt.Sprintf("Failed to get request pad from compositor for pad %s", name), fmt.Errorf("compositor returned nil pad"))
+		return nil
+	}
+
+	if ret := screenshareIn.H264Video.GetStaticPad("src").Link(screenshareIn.pad); ret != gst.PadLinkOK {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link h264-video src pad to compositor pad for pad %s: %v", name, ret))
+		self.Error(fmt.Sprintf("Failed to link h264-video src pad to compositor pad for pad %s", name), fmt.Errorf("failed to link pads"))
+		return nil
+	}
+
+	screenshareIn.gpad = gst.NewGhostPadFromTemplate(name, screenshareIn.H264Video.GetStaticPad("sink"), templ)
+	if screenshareIn.gpad == nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create ghost pad for pad %s", name))
+		self.Error(fmt.Sprintf("Failed to create ghost pad for pad %s", name), fmt.Errorf("gst.NewGhostPadFromTemplate returned nil"))
+		return nil
+	}
+	if !screenshareIn.gpad.SetActive(true) {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to activate ghost pad for pad %s", name))
+	}
+	if !self.AddPad(screenshareIn.gpad.Pad) {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add ghost pad to SIP IO element for pad %s", name))
+		self.Error(fmt.Sprintf("Failed to add ghost pad to SIP IO element for pad %s", name), fmt.Errorf("self.AddPad returned false"))
+		return nil
+	}
+
+	if !screenshareIn.H264Video.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state of h264-video element with parent for pad %s", name))
+	}
+
+	e.ScreenshareIn[name] = screenshareIn
+
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Successfully created new screenshare input pad %s for session %d", name, session))
+	return screenshareIn.gpad.Pad
+}
+
 func (e *IoManagerSip) ReleasePad(instance *gst.Element, pad *gst.Pad) {
 	self := gst.ToGstBin(instance)
 
@@ -492,6 +574,8 @@ func (e *IoManagerSip) ReleasePad(instance *gst.Element, pad *gst.Pad) {
 		e.releasePadAudioIn(self, gpad, pname, session, ssrc, pt)
 	case livekit.TrackSource_CAMERA:
 		e.releasePadCameraIn(self, gpad, pname, session, ssrc, pt)
+	case livekit.TrackSource_SCREEN_SHARE:
+		e.releasePadScreenshareIn(self, gpad, pname, session, ssrc, pt)
 	default:
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unsupported session kind in pad name %s: %d (%s)", pname, session, livekit.TrackSource(session).String()))
 		return
@@ -584,6 +668,31 @@ func (e *IoManagerSip) releasePadCameraIn(self *gst.Bin, _ *gst.GhostPad, pname 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Successfully released camera input pad %s for session %d", pname, session))
 }
 
+func (e *IoManagerSip) releasePadScreenshareIn(self *gst.Bin, _ *gst.GhostPad, pname string, session int, _ int, _ int) {
+	e.inMu.Lock()
+	defer e.inMu.Unlock()
+
+	screenshareIn, exists := e.ScreenshareIn[pname]
+	if !exists {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("No screenshare input pad found with name %s", pname))
+		return
+	}
+
+	if err := screenshareIn.H264Video.SetState(gst.StateNull); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set h264-video element to NULL state for pad %s: %v", pname, err))
+	}
+
+	e.Compositor.ReleaseRequestPad(screenshareIn.pad)
+
+	if err := self.Remove(screenshareIn.H264Video); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove h264-video element from SIP IO element for pad %s: %v", pname, err))
+	}
+
+	delete(e.ScreenshareIn, pname)
+
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Successfully released screenshare input pad %s for session %d", pname, session))
+}
+
 func (e *IoManagerSip) compositorPadAdded(self *gst.Bin, pad *gst.Pad) {
 	pname := pad.GetName()
 
@@ -602,6 +711,8 @@ func (e *IoManagerSip) compositorPadAdded(self *gst.Bin, pad *gst.Pad) {
 		e.padAddedAudioOut(self, pad, pname)
 	case livekit.TrackSource_CAMERA:
 		e.padAddedCameraOut(self, pad, pname)
+	case livekit.TrackSource_SCREEN_SHARE:
+		e.padAddedScreenshareOut(self, pad, pname)
 	default:
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unsupported session kind in compositor pad name %s: %d (%s)", pname, session, livekit.TrackSource(session).String()))
 	}
@@ -723,6 +834,64 @@ func (e *IoManagerSip) padAddedCameraOut(self *gst.Bin, pad *gst.Pad, name strin
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Successfully added camera output pad %s", pad.GetName()))
 }
 
+func (e *IoManagerSip) padAddedScreenshareOut(self *gst.Bin, pad *gst.Pad, name string) {
+	e.outMu.Lock()
+	defer e.outMu.Unlock()
+
+	if e.ScreenshareOut != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Screenshare output pad already exists, cannot add new pad %s", pad.GetName()))
+		return
+	}
+
+	screenshareOut := &SipScreenshareOutTranscode{}
+
+	var err error
+	screenshareOut.VideoVP8, err = gst.NewElementWithProperties("video-vp8", map[string]interface{}{})
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create video-vp8 element for screenshare output pad: %v", err))
+		self.Error("Failed to create video-vp8 element for screenshare output pad", err)
+		return
+	}
+	if err := self.Add(screenshareOut.VideoVP8); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add video-vp8 element to SIP IO element for screenshare output pad: %v", err))
+		self.Error("Failed to add video-vp8 element to SIP IO element for screenshare output pad", err)
+		return
+	}
+
+	screenshareOut.pad = pad
+
+	class := gst.ToElementClass(self.Class())
+
+	if ret := screenshareOut.pad.Link(screenshareOut.VideoVP8.GetStaticPad("sink")); ret != gst.PadLinkOK {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link screenshare output pad to video-vp8 sink pad: %v", ret))
+		self.Error("Failed to link screenshare output pad to video-vp8 sink pad", fmt.Errorf("failed to link pads"))
+		return
+	}
+
+	screenshareOut.gpad = gst.NewGhostPadFromTemplate(fmt.Sprintf("send_rtp_src_%d", livekit.TrackSource_SCREEN_SHARE), screenshareOut.VideoVP8.GetStaticPad("src"), class.GetPadTemplate("send_rtp_src_%u"))
+	if screenshareOut.gpad == nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create ghost pad for screenshare output pad %s", name))
+		self.Error(fmt.Sprintf("Failed to create ghost pad for screenshare output pad %s", name), fmt.Errorf("gst.NewGhostPadFromTemplate returned nil"))
+		return
+	}
+	if !screenshareOut.gpad.SetActive(true) {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to activate ghost pad for screenshare output pad %s", name))
+	}
+	if !self.AddPad(screenshareOut.gpad.Pad) {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add ghost pad to SIP IO element for screenshare output pad %s", name))
+		self.Error(fmt.Sprintf("Failed to add ghost pad to SIP IO element for screenshare output pad %s", name), fmt.Errorf("self.AddPad returned false"))
+		return
+	}
+
+	if !screenshareOut.VideoVP8.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, "Failed to sync state of video-vp8 element with parent")
+	}
+
+	e.ScreenshareOut = screenshareOut
+
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Successfully added screenshare output pad %s", pad.GetName()))
+}
+
 func (e *IoManagerSip) compositorPadRemoved(self *gst.Bin, pad *gst.Pad) {
 	pname := pad.GetName()
 
@@ -741,6 +910,8 @@ func (e *IoManagerSip) compositorPadRemoved(self *gst.Bin, pad *gst.Pad) {
 		e.padRemovedAudioOut(self, pad, pname)
 	case livekit.TrackSource_CAMERA:
 		e.padRemovedCameraOut(self, pad, pname)
+	case livekit.TrackSource_SCREEN_SHARE:
+		e.padRemovedScreenshareOut(self, pad, pname)
 	default:
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unsupported session kind in compositor pad name %s: %d (%s)", pname, session, livekit.TrackSource(session).String()))
 	}
@@ -796,4 +967,30 @@ func (e *IoManagerSip) padRemovedCameraOut(self *gst.Bin, pad *gst.Pad, name str
 	e.CameraOut = nil
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Removed camera output pad %s", pad.GetName()))
+}
+
+func (e *IoManagerSip) padRemovedScreenshareOut(self *gst.Bin, pad *gst.Pad, name string) {
+	e.outMu.Lock()
+	defer e.outMu.Unlock()
+
+	if e.ScreenshareOut == nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("No screenshare output pad exists, cannot remove pad %s", pad.GetName()))
+		return
+	}
+
+	if err := e.ScreenshareOut.VideoVP8.SetState(gst.StateNull); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set video-vp8 element to NULL state for pad %s: %v", name, err))
+	}
+
+	if err := self.Remove(e.ScreenshareOut.VideoVP8); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove video-vp8 element from SIP IO element for pad %s: %v", name, err))
+	}
+
+	if !self.RemovePad(e.ScreenshareOut.gpad.Pad) {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove ghost pad for screenshare output pad %s", name))
+	}
+
+	e.ScreenshareOut = nil
+
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Removed screenshare output pad %s", pad.GetName()))
 }

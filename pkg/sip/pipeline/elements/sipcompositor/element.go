@@ -20,6 +20,7 @@ type SipCompositor struct {
 
 	*SipCompositorMicrophone
 	*SipCompositorCamera
+	*SipCompositorScreenshare
 }
 
 func (e *SipCompositor) New() glib.GoObjectSubclass {
@@ -69,6 +70,7 @@ func (e *SipCompositor) ChangeState(instance *gst.Element, transition gst.StateC
 		e.mu.Lock()
 		e.cleanupMicrophone(self)
 		e.cleanupCamera(self)
+		e.cleanupScreenshare(self)
 		e.mu.Unlock()
 	}
 
@@ -77,6 +79,7 @@ func (e *SipCompositor) ChangeState(instance *gst.Element, transition gst.StateC
 	if transition == gst.StateChangeReadyToNull {
 		e.SipCompositorCamera = nil
 		e.SipCompositorMicrophone = nil
+		e.SipCompositorScreenshare = nil
 	}
 
 	return ret
@@ -120,6 +123,8 @@ func (e *SipCompositor) requestNewSinkPad(self *gst.Bin, templ *gst.PadTemplate,
 		pad = e.requestNewMicrophoneSinkPad(self, templ, name)
 	case livekit.TrackSource_CAMERA:
 		pad = e.requestNewCameraSinkPad(self, templ, name)
+	case livekit.TrackSource_SCREEN_SHARE:
+		pad = e.requestNewScreenshareSinkPad(self, templ, name)
 	default:
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown track source in pad name: %s", name))
 		return nil
@@ -157,6 +162,8 @@ func (e *SipCompositor) ReleasePad(instance *gst.Element, pad *gst.Pad) {
 		e.releaseMicrophoneSinkPad(self, gpad)
 	case livekit.TrackSource_CAMERA:
 		e.releaseCameraSinkPad(self, gpad)
+	case livekit.TrackSource_SCREEN_SHARE:
+		e.releaseScreenshareSinkPad(self, gpad)
 	default:
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown track source in released pad name: %s", gpad.GetName()))
 		return
