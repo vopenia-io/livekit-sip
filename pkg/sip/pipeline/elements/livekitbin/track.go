@@ -184,31 +184,50 @@ func (e *LivekitBin) ForwardPublishTrack(instance *gst.Element, templ *gst.PadTe
 	return gpad.Pad
 }
 
+func (e *LivekitBin) capsFromTrack(self *gst.Bin, track *webrtc.TrackRemote, publication *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) (*gst.Caps, uint8) {
+	pt := track.PayloadType()
+	capsStr := fmt.Sprintf("application/x-rtp, media=%s, payload=%d", track.Kind().String(), pt)
+
+	_, enc, ok := strings.Cut(track.Codec().MimeType, "/")
+	if !ok {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Invalid codec mime type for track %s: %s", track.ID(), track.Codec().MimeType))
+	} else {
+		capsStr += fmt.Sprintf(", encoding-name=%s", strings.ToUpper(enc))
+	}
+	codec := track.Codec()
+
+	capsStr += fmt.Sprintf(", clock-rate=%d", codec.ClockRate)
+
+	if codec.Channels > 0 {
+		capsStr += fmt.Sprintf(", channels=%d", codec.Channels)
+	}
+
+	return gst.NewCapsFromString(capsStr), uint8(pt)
+}
+
 func (e *LivekitBin) SubscribeTrack(track *webrtc.TrackRemote, publication *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
 	self := gst.ToGstBin(e.self.Get())
 	if self == nil || self.Instance() == nil {
 		return
 	}
 
-	_, enc, ok := strings.Cut(track.Codec().MimeType, "/")
-	if !ok {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Invalid codec mime type for pt (%d): %s", track.PayloadType(), track.Codec().MimeType))
-	} else {
-		e.encodingMu.RLock()
-		existing, ok := e.encodingPT[uint8(track.PayloadType())]
-		e.encodingMu.RUnlock()
-		if !ok {
-			e.encodingMu.Lock()
-			e.encodingPT[uint8(track.PayloadType())] = strings.ToUpper(enc)
-			e.encodingMu.Unlock()
-		} else {
-			if existing != strings.ToUpper(enc) {
-				self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Codec mime type for pt (%d) changed from %s to %s", track.PayloadType(), existing, enc))
-				self.Error(fmt.Sprintf("Codec mime type for pt (%d) changed from %s to %s", track.PayloadType(), existing, enc), fmt.Errorf("codec change"))
-				return
-			}
-		}
+	kind := publication.Source()
+
+	switch kind {
+	case livekit.TrackSource_CAMERA, livekit.TrackSource_MICROPHONE, livekit.TrackSource_SCREEN_SHARE, livekit.TrackSource_SCREEN_SHARE_AUDIO:
+	default:
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unknown track source for track %s: %d", track.ID(), publication.Source()))
+		return
 	}
+
+	caps, pt := e.capsFromTrack(self, track, publication, rp)
+
+	e.encodingMu.Lock()
+	if existing, exist := e.PtMap[kind][pt]; exist && !existing.IsEqual(caps) {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Overwriting existing caps for payload type %d: old caps: %s, new caps: %s", pt, existing.String(), caps.String()))
+	}
+	e.PtMap[kind][pt] = caps
+	e.encodingMu.Unlock()
 
 	if element, err := self.GetElementByName(livekittracks.SrcTrackName(publication.SID())); err == nil {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Track with SID %s already exists", publication.SID()))

@@ -23,6 +23,7 @@ func init() {
 }
 
 const MAX_ACTIVE_PARTICIPANTS = 100
+const NbTracks = int(livekit.TrackSource_SCREEN_SHARE_AUDIO) + 1
 
 type config struct {
 	wsURL                        string
@@ -55,7 +56,7 @@ type LivekitBin struct {
 	config
 	room *lksdk.Room
 
-	encodingPT map[uint8]string
+	PtMap      [NbTracks]map[uint8]*gst.Caps // indexed by livekit.TrackSource
 	encodingMu sync.RWMutex
 
 	activeSpeakers []string
@@ -147,8 +148,9 @@ func (e *LivekitBin) InstanceInit(instance *glib.Object) {
 
 	e.state.cond = sync.NewCond(&e.state.mu)
 	e.defaultParticipantAttributes = make(map[string]string)
-	e.encodingPT = make(map[uint8]string)
-
+	for i := range e.PtMap {
+		e.PtMap[i] = make(map[uint8]*gst.Caps)
+	}
 	e.self = glib.WeakRefInit(self)
 
 	var err error
@@ -350,6 +352,9 @@ func (e *LivekitBin) ChangeState(instance *gst.Element, transition gst.StateChan
 		e.ScreenshareRtcpFunnel = nil
 		e.ScreenshareAudioRtpFunnel = nil
 		e.ScreenshareAudioRtcpFunnel = nil
+		for i := range e.PtMap {
+			e.PtMap[i] = make(map[uint8]*gst.Caps)
+		}
 
 		self.Log(CAT, gst.LevelDebug, "LivekitBin state changed to NULL, disconnected from LiveKit room and cleaned up resources")
 	}

@@ -165,28 +165,25 @@ func (e *LivekitBin) OnRtpBinRequestPtMap(session, pt uint) *gst.Caps {
 		return nil
 	}
 
-	e.encodingMu.RLock()
-	encoding, knownEnc := e.encodingPT[uint8(pt)]
-	e.encodingMu.RUnlock()
+	kind := livekit.TrackSource(session)
 
-	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Received request-pt-map signal for session %d, pt %d", session, pt))
-	switch livekit.TrackSource(session) {
-	case livekit.TrackSource_MICROPHONE:
-		if !knownEnc {
-			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown payload type %d for microphone track, defaulting to OPUS", pt))
-			encoding = "OPUS"
-		}
-		return gst.NewCapsFromString(fmt.Sprintf("application/x-rtp, media=(string)audio, clock-rate=(int)48000, encoding-name=(string)%s, payload=(int)%d, rtcp-fb-nack-pli=(boolean)true, rtcp-fb-ccm-fir=(boolean)true", encoding, pt))
-	case livekit.TrackSource_CAMERA:
-		if !knownEnc {
-			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown payload type %d for camera track, defaulting to VP8", pt))
-			encoding = "VP8"
-		}
-		return gst.NewCapsFromString(fmt.Sprintf("application/x-rtp, media=(string)video, clock-rate=(int)90000, encoding-name=(string)%s, payload=(int)%d, rtcp-fb-nack-pli=(boolean)true, rtcp-fb-ccm-fir=(boolean)true", encoding, pt))
+	switch kind {
+	case livekit.TrackSource_CAMERA, livekit.TrackSource_MICROPHONE, livekit.TrackSource_SCREEN_SHARE, livekit.TrackSource_SCREEN_SHARE_AUDIO:
 	default:
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unknown track source in request-pt-map signal: %d", session))
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown track source %d in rtpbin request-pt-map callback", session))
 		return nil
 	}
+
+	e.encodingMu.RLock()
+	defer e.encodingMu.RUnlock()
+	caps, ok := e.PtMap[kind][uint8(pt)]
+
+	if !ok {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown payload type %d in rtpbin request-pt-map callback", pt))
+		return nil
+	}
+
+	return caps
 }
 
 func (e *LivekitBin) OnSSRCCollision(session, ssrc uint) {

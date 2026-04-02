@@ -115,6 +115,9 @@ func (e *LivekitBin) UnsubscribeTrack(track *webrtc.TrackRemote, pub *lksdk.Remo
 		return
 	}
 
+	kind := pub.Source()
+	ssrc := track.SSRC()
+
 	src, err := self.GetElementByName(livekittracks.SrcTrackName(pub.SID()))
 	if err != nil {
 		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("No source element found for track %s of participant %s", pub.SID(), rp.SID()))
@@ -122,6 +125,10 @@ func (e *LivekitBin) UnsubscribeTrack(track *webrtc.TrackRemote, pub *lksdk.Remo
 	}
 
 	e.RemoveTrack(src)
+
+	if _, err := e.RtpBin.Emit("clear-ssrc", uint(kind), uint(ssrc)); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to emit clear-ssrc signal for track %s of participant %s: %v", pub.SID(), rp.SID(), err))
+	}
 }
 
 func (e *LivekitBin) RemoveTrack(src *gst.Element) {

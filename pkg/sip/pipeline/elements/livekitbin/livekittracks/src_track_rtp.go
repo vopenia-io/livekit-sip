@@ -70,7 +70,7 @@ func (s *SrcTrackRtp) GetCaps(self *base.GstBaseSrc, filter *gst.Caps) *gst.Caps
 	if s.parent == nil || s.parent.Track == nil {
 		return gst.NewCapsFromString("application/x-rtp").Ref()
 	}
-	codec := s.parent.Track.Codec()
+	// codec := s.parent.Track.Codec()
 
 	// media, enc, ok := strings.Cut(codec.MimeType, "/")
 	// if !ok {
@@ -81,11 +81,11 @@ func (s *SrcTrackRtp) GetCaps(self *base.GstBaseSrc, filter *gst.Caps) *gst.Caps
 	capsStr := "application/x-rtp"
 	// capsStr += fmt.Sprintf(", media=(string)%s", strings.ToLower(media))
 	// capsStr += fmt.Sprintf(", encoding-name=(string)%s", strings.ToUpper(enc))
-	capsStr += fmt.Sprintf(", payload=(int)%d", codec.PayloadType)
+	// capsStr += fmt.Sprintf(", payload=(int)%d", codec.PayloadType)
 	// capsStr += fmt.Sprintf(", clock-rate=(int)%d", codec.ClockRate)
-	if codec.Channels > 0 {
-		capsStr += fmt.Sprintf(", channels=(int)%d", codec.Channels)
-	}
+	// if codec.Channels > 0 {
+	// 	capsStr += fmt.Sprintf(", channels=(int)%d", codec.Channels)
+	// }
 
 	caps := gst.NewCapsFromString(capsStr)
 	if filter != nil && filter.Instance() != nil && !filter.IsEmpty() && !filter.IsAny() {

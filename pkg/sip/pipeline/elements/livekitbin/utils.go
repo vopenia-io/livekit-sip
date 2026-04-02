@@ -77,8 +77,7 @@ func (e *LivekitBin) TrackSourceFromSessionSSRC(session, ssrc uint) *gst.Element
 
 	kind := livekit.TrackSource(session)
 	switch kind {
-	case livekit.TrackSource_MICROPHONE:
-	case livekit.TrackSource_CAMERA:
+	case livekit.TrackSource_MICROPHONE, livekit.TrackSource_SCREEN_SHARE_AUDIO, livekit.TrackSource_CAMERA, livekit.TrackSource_SCREEN_SHARE:
 	default:
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unknown track source for session %d and SSRC %d", session, ssrc))
 		return nil
