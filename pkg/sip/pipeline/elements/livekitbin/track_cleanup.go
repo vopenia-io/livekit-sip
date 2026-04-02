@@ -103,8 +103,10 @@ func (e *LivekitBin) UnsubscribeAll() {
 				continue
 			}
 			track := pub.TrackRemote()
-			pub.SetSubscribed(false)
 			e.UnsubscribeTrack(track, pub, rp)
+			if err := pub.SetSubscribed(false); err != nil {
+				self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to unsubscribe from track %s: %v", pub.SID(), err))
+			}
 		}
 	}
 }
