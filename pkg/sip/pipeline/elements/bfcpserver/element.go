@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"sync/atomic"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
@@ -22,6 +23,7 @@ type BFCPServer struct {
 	bfcpConfig  *bfcp.ServerConfig
 	started     bool
 	constructed bool
+	requestID   atomic.Int64
 }
 
 func (e *BFCPServer) New() glib.GoObjectSubclass {
@@ -54,6 +56,22 @@ func (e *BFCPServer) ClassInit(klass *glib.ObjectClass) {
 		glib.TYPE_NONE,
 		glib.TYPE_INT,
 		glib.TYPE_INT,
+	)
+
+	gst.SignalNew(
+		class.Type(),
+		"start-screenshare",
+		gst.SignalRunLast,
+		glib.TYPE_NONE,
+		glib.TYPE_INT, // floor ID
+	)
+
+	gst.SignalNew(
+		class.Type(),
+		"stop-screenshare",
+		gst.SignalRunLast,
+		glib.TYPE_NONE,
+		glib.TYPE_INT, // floor ID
 	)
 
 	class.AddPadTemplate(gst.NewPadTemplate(
@@ -92,6 +110,10 @@ func (e *BFCPServer) Constructed(instance *glib.Object) {
 	if e.portEnd != 0 {
 		config.PortMax = int(e.portEnd)
 	}
+
+	config.Logger = NewGstLogger(self)
+
+	config.Transport = bfcp.TransportUDP
 
 	e.bfcpConfig = config
 	e.bfcpServer = bfcp.NewServer(config)
