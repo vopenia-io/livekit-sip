@@ -64,6 +64,10 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audiopcmu"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/dtmfaudio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/h264video"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvh264video"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvvideoh264"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvvideovp8"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvvp8video"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/opusaudio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/pcm16audio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/pcmuaudio"
@@ -115,15 +119,30 @@ func init() {
 		panic("Failed to register h264-video")
 	}
 
+	if !nvh264video.Register() {
+		panic("Failed to register nv-h264-video")
+	}
+
 	if !videovp8.Register() {
 		panic("Failed to register video-vp8")
+	}
+
+	if !nvvideovp8.Register() {
+		panic("Failed to register nv-video-vp8")
 	}
 
 	if !vp8video.Register() {
 		panic("Failed to register vp8-video")
 	}
 
+	if !nvvp8video.Register() {
+		panic("Failed to register nv-vp8-video")
+	}
+
 	if !videoh264.Register() {
+		panic("Failed to register video-h264")
+	}
+	if !nvvideoh264.Register() {
 		panic("Failed to register video-h264")
 	}
 
