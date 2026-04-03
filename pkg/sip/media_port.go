@@ -222,6 +222,8 @@ type MediaOptions struct {
 	Stats               *PortStats
 	EnableJitterBuffer  bool
 	NoInputResample     bool
+	VideoWidth          uint
+	VideoHeight         uint
 }
 
 func NewMediaPort(tid traceid.ID, log logger.Logger, mon *stats.CallMonitor, opts *MediaOptions, sampleRate int) (*MediaPort, error) {

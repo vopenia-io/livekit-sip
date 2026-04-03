@@ -118,9 +118,11 @@ func (o *MediaOrchestrator) init() error {
 	}
 
 	pipeline, err := pipeline.New(o.ctx, o.log, pipeline.SipOpt{
-		IP:        o.opts.IP.String(),
-		PortStart: uint16(o.opts.Ports.Start),
-		PortEnd:   uint16(o.opts.Ports.End),
+		IP:          o.opts.IP.String(),
+		PortStart:   uint16(o.opts.Ports.Start),
+		PortEnd:     uint16(o.opts.Ports.End),
+		VideoWidth:  o.opts.VideoWidth,
+		VideoHeight: o.opts.VideoHeight,
 	})
 	if err != nil {
 		return fmt.Errorf("could not create pipeline: %w", err)

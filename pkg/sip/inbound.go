@@ -812,6 +812,8 @@ func (c *inboundCall) handleInvite(ctx context.Context, tid traceid.ID, req *sip
 		EnableJitterBuffer:  c.jitterBuf,
 		Stats:               &c.stats.Port,
 		NoInputResample:     !RoomResample,
+		VideoWidth:          uint(c.s.conf.Video.Width),
+		VideoHeight:         uint(c.s.conf.Video.Height),
 	}
 
 	orchestrator, err := NewMediaOrchestrator(c.log(), c.ctx, c.cc, opts)

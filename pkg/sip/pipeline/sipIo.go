@@ -22,9 +22,11 @@ func NewSipInput(log logger.Logger, parent *Pipeline, opts SipOpt) *SipIo {
 }
 
 type SipOpt struct {
-	IP        string
-	PortStart uint16
-	PortEnd   uint16
+	IP          string
+	PortStart   uint16
+	PortEnd     uint16
+	VideoWidth  uint
+	VideoHeight uint
 }
 
 type SipIo struct {

@@ -8,7 +8,7 @@ import (
 )
 
 type SipCompositorScreenshare struct {
-	queue *gst.Element
+	Itentity *gst.Element
 }
 
 func (e *SipCompositor) initScreenshare(self *gst.Bin) error {
@@ -20,17 +20,17 @@ func (e *SipCompositor) initScreenshare(self *gst.Bin) error {
 	e.SipCompositorScreenshare = &SipCompositorScreenshare{}
 
 	var err error
-	e.SipCompositorScreenshare.queue, err = gst.NewElementWithProperties("queue", map[string]interface{}{})
+	e.SipCompositorScreenshare.Itentity, err = gst.NewElementWithProperties("identity", map[string]interface{}{})
 	if err != nil {
 		return err
 	}
 
-	if err := self.Add(e.SipCompositorScreenshare.queue); err != nil {
-		return fmt.Errorf("failed to add queue to bin: %w", err)
+	if err := self.Add(e.SipCompositorScreenshare.Itentity); err != nil {
+		return fmt.Errorf("failed to add identity to bin: %w", err)
 	}
 
 	class := gst.ToElementClass(self.Class())
-	gpad := gst.NewGhostPadFromTemplate(fmt.Sprintf("src_%d", livekit.TrackSource_SCREEN_SHARE), e.SipCompositorScreenshare.queue.GetStaticPad("src"), class.GetPadTemplate("src_%u"))
+	gpad := gst.NewGhostPadFromTemplate(fmt.Sprintf("src_%d", livekit.TrackSource_SCREEN_SHARE), e.SipCompositorScreenshare.Itentity.GetStaticPad("src"), class.GetPadTemplate("src_%u"))
 	if gpad == nil {
 		return fmt.Errorf("failed to create ghost pad for screenshare source")
 	}
@@ -41,8 +41,8 @@ func (e *SipCompositor) initScreenshare(self *gst.Bin) error {
 		return fmt.Errorf("failed to add ghost pad for screenshare source to bin")
 	}
 
-	if !e.SipCompositorScreenshare.queue.SyncStateWithParent() {
-		self.Log(CAT, gst.LevelWarning, "Failed to sync state of queue with parent")
+	if !e.SipCompositorScreenshare.Itentity.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, "Failed to sync state of identity with parent")
 	}
 
 	return nil
@@ -54,7 +54,7 @@ func (e *SipCompositor) requestNewScreenshareSinkPad(self *gst.Bin, templ *gst.P
 		return nil
 	}
 
-	gpad := gst.NewGhostPadFromTemplate(name, e.SipCompositorScreenshare.queue.GetStaticPad("sink"), templ)
+	gpad := gst.NewGhostPadFromTemplate(name, e.SipCompositorScreenshare.Itentity.GetStaticPad("sink"), templ)
 	if gpad == nil {
 		self.Log(CAT, gst.LevelError, "Failed to create ghost pad for screenshare sink")
 		return nil

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync/atomic"
 	"weak"
 
 	"github.com/go-gst/go-glib/glib"
@@ -13,13 +14,21 @@ import (
 	"github.com/samber/lo"
 )
 
+type TargetSize struct {
+	Width  atomic.Uint32
+	Height atomic.Uint32
+}
+
 type LivekitCompositorCamera struct {
-	FakeVideoSrc   *gst.Element
-	FallbackFilter *gst.Element
+	FakeVideoSrc       *gst.Element
+	FallbackCudaUpload *gst.Element
+	FallbackFilter     *gst.Element
 
 	PatchBay   *gst.Element
 	Compositor *gst.Element
 	Filter     *gst.Element
+
+	targetSize *TargetSize
 }
 
 func (e *LivekitCompositor) initCamera(self *gst.Bin) error {
@@ -33,14 +42,21 @@ func (e *LivekitCompositor) initCamera(self *gst.Bin) error {
 	var err error
 
 	e.LivekitCompositorCamera.FakeVideoSrc, err = gst.NewElementWithProperties("videotestsrc", map[string]interface{}{
-		"pattern": int(2), // black
-		"is-live": true,
+		"pattern":     int(2), // black
+		"is-live":     true,
+		"num-buffers": 1,
 	})
 	if err != nil {
 		return err
 	}
+
+	e.FallbackCudaUpload, err = gst.NewElementWithProperties("cudaupload", map[string]interface{}{})
+	if err != nil {
+		return err
+	}
+
 	e.LivekitCompositorCamera.FallbackFilter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-		"caps": gst.NewCapsFromString("video/x-raw,format=I420,width=1280,height=720,framerate=24/1"),
+		"caps": gst.NewCapsFromString(fmt.Sprintf("video/x-raw(memory:CUDAMemory),width=%d,height=%d,format=NV12", e.videoWidth, e.videoHeight)),
 	})
 	if err != nil {
 		return err
@@ -50,15 +66,16 @@ func (e *LivekitCompositor) initCamera(self *gst.Bin) error {
 	if err != nil {
 		return err
 	}
-	e.LivekitCompositorCamera.Compositor, err = gst.NewElementWithProperties("compositor", map[string]interface{}{
+	e.LivekitCompositorCamera.Compositor, err = gst.NewElementWithProperties("cudacompositor", map[string]interface{}{
+		// "background":           int(1), // black
+		"force-live":           true,
 		"ignore-inactive-pads": true,
-		"background":           int(1), // black
 	})
 	if err != nil {
 		return err
 	}
 	e.LivekitCompositorCamera.Filter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-		"caps": gst.NewCapsFromString("video/x-raw,format=I420,width=1280,height=720,framerate=24/1"),
+		"caps": gst.NewCapsFromString(fmt.Sprintf("video/x-raw(memory:CUDAMemory),width=%d,height=%d,framerate=24/1", e.videoWidth, e.videoHeight)),
 	})
 	if err != nil {
 		return err
@@ -66,6 +83,7 @@ func (e *LivekitCompositor) initCamera(self *gst.Bin) error {
 
 	if err := self.AddMany(
 		e.LivekitCompositorCamera.FakeVideoSrc,
+		e.FallbackCudaUpload,
 		e.LivekitCompositorCamera.FallbackFilter,
 		e.LivekitCompositorCamera.PatchBay,
 		e.LivekitCompositorCamera.Compositor,
@@ -73,7 +91,7 @@ func (e *LivekitCompositor) initCamera(self *gst.Bin) error {
 		return err
 	}
 
-	if err := gst.ElementLinkMany(e.LivekitCompositorCamera.FakeVideoSrc, e.LivekitCompositorCamera.FallbackFilter); err != nil {
+	if err := gst.ElementLinkMany(e.LivekitCompositorCamera.FakeVideoSrc, e.FallbackCudaUpload, e.LivekitCompositorCamera.FallbackFilter); err != nil {
 		return err
 	}
 
@@ -92,10 +110,16 @@ func (e *LivekitCompositor) initCamera(self *gst.Bin) error {
 	if ret := src0.Link(sink0); ret != gst.PadLinkOK {
 		return fmt.Errorf("failed to link source %q and sink %q pads", src0.GetName(), sink0.GetName())
 	}
-	sink0.SetProperty("xpos", 0)
-	sink0.SetProperty("ypos", 0)
-	sink0.SetProperty("width", WIDTH)
-	sink0.SetProperty("height", HEIGHT)
+	if err := errors.Join(
+		sink0.SetProperty("xpos", 0),
+		sink0.SetProperty("ypos", 0),
+		sink0.SetProperty("width", int(e.videoWidth)),
+		sink0.SetProperty("height", int(e.videoHeight)),
+		sink0.SetProperty("max-last-buffer-repeat", uint64(math.MaxUint64)),
+		sink0.SetProperty("repeat-after-eos", true),
+	); err != nil {
+		return fmt.Errorf("failed to set position and size for compositor sink pad for fallback video: %w", err)
+	}
 
 	fallback0 := e.LivekitCompositorCamera.PatchBay.GetRequestPad("sink_%u")
 	if ret := e.LivekitCompositorCamera.FallbackFilter.GetStaticPad("src").Link(fallback0); ret != gst.PadLinkOK {
@@ -114,8 +138,15 @@ func (e *LivekitCompositor) initCamera(self *gst.Bin) error {
 		return fmt.Errorf("failed to add ghost pad for camera source to bin")
 	}
 
+	if _, err := e.LivekitCompositorCamera.PatchBay.Emit("activate-path", fallback0, src0); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to activate initial path from fallback filter to compositor: %v", err))
+	}
+
 	if !e.LivekitCompositorCamera.FakeVideoSrc.SyncStateWithParent() {
 		self.Log(CAT, gst.LevelWarning, "Failed to sync state of fake video source with parent")
+	}
+	if !e.FallbackCudaUpload.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, "Failed to sync state of fallback CUDA upload with parent")
 	}
 	if !e.LivekitCompositorCamera.FallbackFilter.SyncStateWithParent() {
 		self.Log(CAT, gst.LevelWarning, "Failed to sync state of fallback filter with parent")
@@ -131,9 +162,9 @@ func (e *LivekitCompositor) initCamera(self *gst.Bin) error {
 		self.Log(CAT, gst.LevelWarning, "Failed to sync state of filter with parent")
 	}
 
-	if _, err := e.LivekitCompositorCamera.PatchBay.Emit("activate-path", fallback0, src0); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to activate initial path from fallback filter to compositor: %v", err))
-	}
+	e.LivekitCompositorCamera.targetSize = &TargetSize{}
+	e.LivekitCompositorCamera.targetSize.Width.Store(uint32(e.videoWidth))
+	e.LivekitCompositorCamera.targetSize.Height.Store(uint32(e.videoHeight))
 
 	return nil
 }
@@ -155,6 +186,28 @@ func (e *LivekitCompositor) requestNewCameraSinkPad(self *gst.Bin, templ *gst.Pa
 		self.Log(CAT, gst.LevelError, "Failed to create ghost pad for camera sink")
 		return nil
 	}
+
+	target := e.LivekitCompositorCamera.targetSize
+	gpad.SetQueryFunction(func(self *gst.Pad, parent *gst.Object, query *gst.Query) bool {
+		if query.Type() != gst.QueryCaps {
+			return self.QueryDefault(parent, query)
+		}
+
+		w := target.Width.Load()
+		h := target.Height.Load()
+
+		result := gst.NewCapsFromString(fmt.Sprintf(
+			"video/x-raw(memory:CUDAMemory), width=(int)%d, height=(int)%d", w, h))
+
+		filter := query.ParseCaps()
+		if filter != nil && !filter.IsAny() {
+			result = result.Intersect(filter)
+		}
+
+		query.SetCapsResult(result)
+		return true
+	})
+
 	if !gpad.SetActive(true) {
 		self.Log(CAT, gst.LevelError, "Failed to activate ghost pad for camera sink")
 		return nil
@@ -230,7 +283,11 @@ func (e *LivekitCompositor) activateCameraPad(self *gst.Bin, sinkPad *gst.Pad /*
 			self.Error("Failed to get or request sink pad for camera layout", fmt.Errorf("failed to get or request sink pad for camera layout position %d", idx))
 			return false
 		}
-		if err := destPad.SetProperty("sizing-policy", int(1) /* keep-aspect-ratio */); err != nil {
+		if err := errors.Join(
+			destPad.SetProperty("sizing-policy", int(1) /* keep-aspect-ratio */),
+			destPad.SetProperty("max-last-buffer-repeat", uint64(math.MaxUint64)),
+			destPad.SetProperty("repeat-after-eos", true),
+		); err != nil {
 			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set sizing policy on compositor sink pad for layout position %d: %v", idx, err))
 		}
 		srcPad := e.LivekitCompositorCamera.PatchBay.GetRequestPad("src_%u")
@@ -251,13 +308,18 @@ func (e *LivekitCompositor) activateCameraPad(self *gst.Bin, sinkPad *gst.Pad /*
 		self.Error("Compositor sink pad for camera layout is not linked to any source pad", fmt.Errorf("compositor sink pad %s for layout position %d is not linked to any source pad", destPad.GetName(), idx))
 		return false
 	}
+	if err := e.cameraPadSetPosSize(destPad, idx, nTrack); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set position and size for compositor sink pad %s for layout position %d: %v", destPad.GetName(), idx, err))
+	}
 	if _, err := e.LivekitCompositorCamera.PatchBay.Emit("activate-path", sinkPad, srcPad); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to activate path from camera patchbay pad %s to compositor sink pad %s for layout position %d: %v", sinkPad.GetName(), destPad.GetName(), idx, err))
 		return true
 	}
-	if err := cameraPadSetPosSize(destPad, idx, nTrack); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set position and size for compositor sink pad %s for layout position %d: %v", destPad.GetName(), idx, err))
-	}
+	// if !sinkPad.PushEvent(gst.NewReconfigureEvent()) {
+	// 	self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to push reconfigure event on camera patchbay pad %s after activating path for layout position %d", sinkPad.GetName(), idx))
+	// }
+
+	srcPad.MarkReconfigure()
 
 	return true
 }
@@ -278,6 +340,10 @@ func (e *LivekitCompositor) applyCameraLayout(self *gst.Bin, layout []string) {
 	if e.LivekitCompositorCamera == nil {
 		return
 	}
+
+	width, height, _, _ := cameraComputeSize(int(e.videoWidth), int(e.videoHeight), 0, len(layout))
+	e.LivekitCompositorCamera.targetSize.Width.Store(uint32(width))
+	e.LivekitCompositorCamera.targetSize.Height.Store(uint32(height))
 
 	if len(layout) < len(e.currentLayout) {
 		for i := len(layout); i < len(e.currentLayout); i++ {
@@ -300,21 +366,27 @@ func (e *LivekitCompositor) applyCameraLayout(self *gst.Bin, layout []string) {
 	}
 }
 
-func cameraPadSetPosSize(pad *gst.Pad, idx int, nTrack int) error {
+func cameraComputeSize(videoWidth, videoHeight int, idx int, nTrack int) (width, height, x, y int) {
 	cols := int(math.Ceil(math.Sqrt(float64(nTrack))))
 	rows := int(math.Ceil(float64(nTrack) / float64(cols)))
 
-	width := WIDTH / cols
-	height := HEIGHT / rows
+	width = int(videoWidth) / cols
+	height = int(videoHeight) / rows
 
-	x := (idx % cols) * width
-	y := (idx / cols) * height
+	x = (idx % cols) * width
+	y = (idx / cols) * height
+
+	return
+}
+
+func (e *LivekitCompositor) cameraPadSetPosSize(pad *gst.Pad, idx int, nTrack int) error {
+	width, height, x, y := cameraComputeSize(int(e.videoWidth), int(e.videoHeight), idx, nTrack)
 
 	err := errors.Join(
 		pad.SetProperty("xpos", x),
 		pad.SetProperty("ypos", y),
-		pad.SetProperty("width", width),
-		pad.SetProperty("height", height),
+		pad.SetProperty("width", int(width)),
+		pad.SetProperty("height", int(height)),
 	)
 
 	if err != nil {

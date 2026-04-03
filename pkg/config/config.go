@@ -56,6 +56,11 @@ type TLSConfig struct {
 	KeyLog     string    `yaml:"key_log"`
 }
 
+type VideoConfig struct {
+	Width  int `yaml:"width"`
+	Height int `yaml:"height"`
+}
+
 type Config struct {
 	Redis     *redis.RedisConfig `yaml:"redis"`      // required
 	ApiKey    string             `yaml:"api_key"`    // required (env LIVEKIT_API_KEY)
@@ -101,8 +106,9 @@ type Config struct {
 	EnableJitterBufferProb float64 `yaml:"enable_jitter_buffer_prob"`
 
 	// internal
-	ServiceName string `yaml:"-"`
-	NodeID      string // Do not provide, will be overwritten
+	ServiceName string      `yaml:"-"`
+	NodeID      string      // Do not provide, will be overwritten
+	Video       VideoConfig `yaml:"video"`
 
 	// Experimental, these option might go away without notice.
 	Experimental struct {
@@ -156,6 +162,11 @@ func (c *Config) Init() error {
 	}
 	if c.MaxCpuUtilization <= 0 || c.MaxCpuUtilization > 1 {
 		c.MaxCpuUtilization = 0.9
+	}
+
+	if c.Video.Width == 0 || c.Video.Height == 0 {
+		c.Video.Width = 1280
+		c.Video.Height = 720
 	}
 
 	if err := c.InitLogger(); err != nil {

@@ -12,9 +12,12 @@ import (
 )
 
 type IoManagerLivekit struct {
-	inMu       sync.Mutex
-	outMu      sync.Mutex
-	Compositor *gst.Element
+	inMu  sync.Mutex
+	outMu sync.Mutex
+
+	Compositor  *gst.Element
+	videoWidth  uint
+	videoHeight uint
 
 	RawIn        map[string]*RawInTranscode
 	RawInCounter uint
@@ -112,19 +115,30 @@ func (e *IoManagerLivekit) ClassInit(klass *glib.ObjectClass) {
 		gst.PadPresenceSometimes,
 		gst.NewCapsFromString("application/x-rtp"),
 	))
+
+	class.InstallProperties(properties)
+
 }
 
 func (e *IoManagerLivekit) InstanceInit(instance *glib.Object) {
-	self := gst.ToGstBin(instance)
-	eweak := weak.Make(e)
-	wself := glib.WeakRefInit(self)
-
 	e.RawIn = make(map[string]*RawInTranscode)
 	e.AudioIn = make(map[string]*AudioInTranscode)
 	e.CameraIn = make(map[string]*CameraInTranscode)
 	e.ScreenShareIn = make(map[string]*ScreenShareInTranscode)
+	e.videoWidth = 1280
+	e.videoHeight = 720
+}
+
+func (e *IoManagerLivekit) Constructed(instance *glib.Object) {
+	self := gst.ToGstBin(instance)
+	eweak := weak.Make(e)
+	wself := glib.WeakRefInit(self)
+
 	var err error
-	e.Compositor, err = gst.NewElementWithProperties("livekit_compositor", map[string]interface{}{})
+	e.Compositor, err = gst.NewElementWithProperties("livekit_compositor", map[string]interface{}{
+		"video-width":  e.videoWidth,
+		"video-height": e.videoHeight,
+	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create livekit_compositor element: %v", err))
 		self.Error("Failed to create livekit_compositor element", err)
@@ -382,7 +396,10 @@ func (e *IoManagerLivekit) requestNewPadCameraIn(self *gst.Bin, templ *gst.PadTe
 	cameraIn := &CameraInTranscode{}
 
 	var err error
-	cameraIn.VP8Video, err = gst.NewElementWithProperties("vp8-video", map[string]interface{}{})
+	cameraIn.VP8Video, err = gst.NewElementWithProperties("nv-vp8-video", map[string]interface{}{
+		"video-width":  e.videoWidth,
+		"video-height": e.videoHeight,
+	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create vp8-video element for pad %s: %v", name, err))
 		self.Error(fmt.Sprintf("Failed to create vp8-video element for pad %s", name), err)
@@ -444,7 +461,10 @@ func (e *IoManagerLivekit) requestNewPadScreenShareIn(self *gst.Bin, templ *gst.
 	screenShareIn := &ScreenShareInTranscode{}
 
 	var err error
-	screenShareIn.VP8Video, err = gst.NewElementWithProperties("vp8-video", map[string]interface{}{})
+	screenShareIn.VP8Video, err = gst.NewElementWithProperties("nv-vp8-video", map[string]interface{}{
+		"video-width":  e.videoWidth,
+		"video-height": e.videoHeight,
+	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create vp8-video element for pad %s: %v", name, err))
 		self.Error(fmt.Sprintf("Failed to create vp8-video element for pad %s", name), err)
@@ -746,7 +766,10 @@ func (e *IoManagerLivekit) padAddedCameraOut(self *gst.Bin, pad *gst.Pad, name s
 	cameraOut := &CameraOutTranscode{}
 
 	var err error
-	cameraOut.VideoH264, err = gst.NewElementWithProperties("video-h264", map[string]interface{}{}) // TODO: change back to h264 after testing
+	cameraOut.VideoH264, err = gst.NewElementWithProperties("nv-video-h264", map[string]interface{}{
+		"video-width":  e.videoWidth,
+		"video-height": e.videoHeight,
+	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create video-h264 element for camera output pad: %v", err))
 		self.Error("Failed to create video-h264 element for camera output pad", err)
@@ -804,7 +827,10 @@ func (e *IoManagerLivekit) padAddedScreenShareOut(self *gst.Bin, pad *gst.Pad, n
 	screenShareOut := &ScreenShareOutTranscode{}
 
 	var err error
-	screenShareOut.VideoH264, err = gst.NewElementWithProperties("video-h264", map[string]interface{}{}) // TODO: change back to h264 after testing
+	screenShareOut.VideoH264, err = gst.NewElementWithProperties("nv-video-h264", map[string]interface{}{
+		"video-width":  e.videoWidth,
+		"video-height": e.videoHeight,
+	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create video-h264 element for screen share output pad: %v", err))
 		self.Error("Failed to create video-h264 element for screen share output pad", err)

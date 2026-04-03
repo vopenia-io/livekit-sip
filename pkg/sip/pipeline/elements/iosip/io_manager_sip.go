@@ -55,9 +55,12 @@ type SipScreenshareOutTranscode struct {
 }
 
 type IoManagerSip struct {
-	inMu       sync.Mutex
-	outMu      sync.Mutex
-	Compositor *gst.Element
+	inMu  sync.Mutex
+	outMu sync.Mutex
+
+	Compositor  *gst.Element
+	videoWidth  uint
+	videoHeight uint
 
 	AudioIn  map[string]*SipAudioInTranscode
 	AudioOut *SipAudioOutTranscode
@@ -97,20 +100,29 @@ func (e *IoManagerSip) ClassInit(klass *glib.ObjectClass) {
 		gst.PadPresenceSometimes,
 		gst.NewCapsFromString("application/x-rtp"),
 	))
+
+	class.InstallProperties(properties)
 }
 
 func (e *IoManagerSip) InstanceInit(instance *glib.Object) {
-	self := gst.ToGstBin(instance)
-	eweak := weak.Make(e)
-	wself := glib.WeakRefInit(self)
-
 	e.AudioIn = make(map[string]*SipAudioInTranscode)
 	e.DtmfIn = make(map[string]*SipDtmfInTranscode)
 	e.CameraIn = make(map[string]*SipCameraInTranscode)
 	e.ScreenshareIn = make(map[string]*SipScreenshareInTranscode)
+	e.videoWidth = 1280
+	e.videoHeight = 720
+}
+
+func (e *IoManagerSip) Constructed(instance *glib.Object) {
+	self := gst.ToGstBin(instance)
+	eweak := weak.Make(e)
+	wself := glib.WeakRefInit(self)
 
 	var err error
-	e.Compositor, err = gst.NewElementWithProperties("sip_compositor", map[string]interface{}{})
+	e.Compositor, err = gst.NewElementWithProperties("sip_compositor", map[string]interface{}{
+		"video-width":  e.videoWidth,
+		"video-height": e.videoHeight,
+	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create sip_compositor element: %v", err))
 		self.Error("Failed to create sip_compositor element", err)
@@ -449,7 +461,10 @@ func (e *IoManagerSip) requestNewPadCameraIn(self *gst.Bin, templ *gst.PadTempla
 	cameraIn := &SipCameraInTranscode{}
 
 	var err error
-	cameraIn.H264Video, err = gst.NewElementWithProperties("h264-video", map[string]interface{}{}) // TODO: change back to h264 after testing
+	cameraIn.H264Video, err = gst.NewElementWithProperties("nv-h264-video", map[string]interface{}{
+		"video-width":  e.videoWidth,
+		"video-height": e.videoHeight,
+	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create h264-video element for pad %s: %v", name, err))
 		self.Error(fmt.Sprintf("Failed to create h264-video element for pad %s", name), err)
@@ -511,7 +526,10 @@ func (e *IoManagerSip) requestNewPadScreenshareIn(self *gst.Bin, templ *gst.PadT
 	screenshareIn := &SipScreenshareInTranscode{}
 
 	var err error
-	screenshareIn.H264Video, err = gst.NewElementWithProperties("h264-video", map[string]interface{}{}) // TODO: change back to h264 after testing
+	screenshareIn.H264Video, err = gst.NewElementWithProperties("nv-h264-video", map[string]interface{}{
+		"video-width":  e.videoWidth,
+		"video-height": e.videoHeight,
+	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create h264-video element for pad %s: %v", name, err))
 		self.Error(fmt.Sprintf("Failed to create h264-video element for pad %s", name), err)
@@ -801,7 +819,10 @@ func (e *IoManagerSip) padAddedCameraOut(self *gst.Bin, pad *gst.Pad, name strin
 	cameraOut := &SipCameraOutTranscode{}
 
 	var err error
-	cameraOut.VideoVP8, err = gst.NewElementWithProperties("video-vp8", map[string]interface{}{})
+	cameraOut.VideoVP8, err = gst.NewElementWithProperties("nv-video-vp8", map[string]interface{}{
+		"video-width":  e.videoWidth,
+		"video-height": e.videoHeight,
+	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create video-vp8 element for camera output pad: %v", err))
 		self.Error("Failed to create video-vp8 element for camera output pad", err)
@@ -859,7 +880,10 @@ func (e *IoManagerSip) padAddedScreenshareOut(self *gst.Bin, pad *gst.Pad, name 
 	screenshareOut := &SipScreenshareOutTranscode{}
 
 	var err error
-	screenshareOut.VideoVP8, err = gst.NewElementWithProperties("video-vp8", map[string]interface{}{})
+	screenshareOut.VideoVP8, err = gst.NewElementWithProperties("nv-video-vp8", map[string]interface{}{
+		"video-width":  e.videoWidth,
+		"video-height": e.videoHeight,
+	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create video-vp8 element for screenshare output pad: %v", err))
 		self.Error("Failed to create video-vp8 element for screenshare output pad", err)

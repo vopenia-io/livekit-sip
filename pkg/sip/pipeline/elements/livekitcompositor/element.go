@@ -31,6 +31,9 @@ type ParticipantInfo struct {
 type LivekitCompositor struct {
 	mu sync.Mutex
 
+	videoWidth  uint
+	videoHeight uint
+
 	*LivekitCompositorMicrophone
 	*LivekitCompositorCamera
 	*LivekitCompositorScreenshare
@@ -88,9 +91,13 @@ func (e *LivekitCompositor) ClassInit(klass *glib.ObjectClass) {
 }
 
 func (e *LivekitCompositor) InstanceInit(instance *glib.Object) {
-	self := gst.ToGstBin(instance)
-
 	e.participants = make(map[string]ParticipantInfo)
+	e.videoWidth = 1280
+	e.videoHeight = 720
+}
+
+func (e *LivekitCompositor) Constructed(instance *glib.Object) {
+	self := gst.ToGstBin(instance)
 
 	eweak := weak.Make(e)
 	if _, err := self.Connect("active-speakers-changed", func(instance *gst.Element, structure *gst.Structure) {

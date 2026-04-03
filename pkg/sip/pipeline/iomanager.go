@@ -31,12 +31,18 @@ var _ GstChain = (*IOManager)(nil)
 func (c *IOManager) Create() error {
 	var err error
 
-	c.SipController, err = gst.NewElement("io_manager_sip")
+	c.SipController, err = gst.NewElementWithProperties("io_manager_sip", map[string]interface{}{
+		"video-width":  c.pipeline.videoWidth,
+		"video-height": c.pipeline.videoHeight,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to create IO Manager SIP element: %w", err)
 	}
 
-	c.LivekitController, err = gst.NewElement("io_manager_livekit")
+	c.LivekitController, err = gst.NewElementWithProperties("io_manager_livekit", map[string]interface{}{
+		"video-width":  c.pipeline.videoWidth,
+		"video-height": c.pipeline.videoHeight,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to create IO Manager LiveKit element: %w", err)
 	}

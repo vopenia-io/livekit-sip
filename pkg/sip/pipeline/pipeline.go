@@ -27,6 +27,9 @@ type Pipeline struct {
 	dumpCH   chan bool
 	debugSrv *debug.Server
 
+	videoWidth  uint
+	videoHeight uint
+
 	*SipIo
 	*WebrtcIo
 	// *SipToWebrtc
@@ -235,12 +238,14 @@ func New(ctx context.Context, log logger.Logger, sipOpt SipOpt) (*Pipeline, erro
 	ctx, cancel := context.WithCancel(ctx)
 
 	p := &Pipeline{
-		Log:      log.WithComponent("pipeline"),
-		pipeline: pipeline,
-		ctx:      ctx,
-		cancel:   cancel,
-		dtmfCh:   make(chan int, 10),
-		dumpCH:   make(chan bool, 1024),
+		Log:         log.WithComponent("pipeline"),
+		pipeline:    pipeline,
+		ctx:         ctx,
+		cancel:      cancel,
+		dtmfCh:      make(chan int, 10),
+		dumpCH:      make(chan bool, 1024),
+		videoWidth:  sipOpt.VideoWidth,
+		videoHeight: sipOpt.VideoHeight,
 	}
 	p.cleanup = p.cleanupChains
 

@@ -1,16 +1,10 @@
-package iolivekit
+package sipcompositor
 
 import (
 	"fmt"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
-)
-
-var CAT = gst.NewDebugCategory(
-	"io_manager_livekit",
-	gst.DebugColorNone,
-	"livekit SIP pipeline LiveKit IO element",
 )
 
 var properties = []*glib.ParamSpec{
@@ -34,7 +28,7 @@ var properties = []*glib.ParamSpec{
 	),
 }
 
-func (e *IoManagerLivekit) SetProperty(instance *glib.Object, id uint, value *glib.Value) {
+func (e *SipCompositor) SetProperty(instance *glib.Object, id uint, value *glib.Value) {
 	self := gst.ToGstBin(instance)
 	param := properties[id]
 	switch param.Name() {

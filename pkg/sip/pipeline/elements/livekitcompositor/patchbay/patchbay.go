@@ -74,13 +74,16 @@ func (e *Patchbay) InstanceInit(instance *glib.Object) {
 	self := gst.ToGstBin(instance)
 
 	eweak := weak.Make(e)
-	self.Connect("activate-path", func(instance *gst.Element, sinkPad *gst.Pad, sourcePad *gst.Pad) {
+	if _, err := self.Connect("activate-path", func(instance *gst.Element, sinkPad *gst.Pad, sourcePad *gst.Pad) {
 		ptr := eweak.Value()
 		if ptr == nil {
 			return
 		}
 		ptr.onActivatePath(instance, sinkPad, sourcePad)
-	})
+	}); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to connect activate-path signal: %v", err))
+		self.Error("Failed to connect activate-path signal", err)
+	}
 }
 
 func (e *Patchbay) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {

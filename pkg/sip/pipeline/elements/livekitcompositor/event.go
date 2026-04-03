@@ -8,11 +8,6 @@ import (
 	"github.com/samber/lo"
 )
 
-const (
-	WIDTH  = 1280
-	HEIGHT = 720
-)
-
 func (e *LivekitCompositor) onActiveSpeakersChanged(instance *gst.Element, structure *gst.Structure) {
 	self := gst.ToGstBin(instance)
 
