@@ -28,7 +28,7 @@ func (e *VideoVp8) ClassInit(klass *glib.ObjectClass) {
 		"Video to VP8 Encoder",
 		"Video/Encoder",
 		"Encodes raw video to VP8 RTP",
-		"Maxime SENARD <senard.maxime@gmail.com>",
+		"Roomkit <roomkit-visio@numerique.gouv.fr>",
 	)
 
 	class.AddPadTemplate(gst.NewPadTemplate(

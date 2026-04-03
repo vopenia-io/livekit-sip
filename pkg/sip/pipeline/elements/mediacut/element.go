@@ -28,7 +28,7 @@ func (e *MediaCut) ClassInit(klass *glib.ObjectClass) {
 		"Media Cut",
 		"Generic",
 		"Cut out media streams while not playing",
-		"Maxime SENARD <senard.maxime@gmail.com>",
+		"Roomkit <roomkit-visio@numerique.gouv.fr>",
 	)
 
 	class.AddPadTemplate(gst.NewPadTemplate(

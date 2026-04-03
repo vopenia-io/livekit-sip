@@ -38,7 +38,7 @@ func (*SinkRtcp) ClassInit(klass *glib.ObjectClass) {
 		"sink_rtcp",
 		"sink/rtcp",
 		"Sends RTCP packets to a WebRTC PeerConnection",
-		"Maxime SENARD <senard.maxime@gmail.com>",
+		"Roomkit <roomkit-visio@numerique.gouv.fr>",
 	)
 
 	CAT.Log(gst.LevelDebug, "Adding pad template")

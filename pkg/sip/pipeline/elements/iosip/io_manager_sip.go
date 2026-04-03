@@ -80,7 +80,7 @@ func (e *IoManagerSip) ClassInit(klass *glib.ObjectClass) {
 		"io_manager_sip",
 		"Audio/Video/Converter",
 		"Manages the input and output of the SIP pipeline",
-		"Maxime SENARD <senard.maxime@gmail.com>",
+		"Roomkit <roomkit-visio@numerique.gouv.fr>",
 	)
 
 	class.AddPadTemplate(gst.NewPadTemplate(

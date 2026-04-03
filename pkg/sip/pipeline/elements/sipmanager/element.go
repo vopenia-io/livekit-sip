@@ -91,7 +91,7 @@ func (*SipManager) ClassInit(klass *glib.ObjectClass) {
 		"SIP Manager Element",
 		"Source/Sink",
 		"Wrapper element to handle SIP RTP/RTCP connections and SDP negotiation",
-		"Maxime SENARD <senard.maxime@gmail.com>",
+		"Roomkit <roomkit-visio@numerique.gouv.fr>",
 	)
 
 	CAT.Log(gst.LevelDebug, "Adding pad template")

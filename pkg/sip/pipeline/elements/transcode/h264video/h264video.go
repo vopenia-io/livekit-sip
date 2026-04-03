@@ -33,7 +33,7 @@ func (e *H264Video) ClassInit(klass *glib.ObjectClass) {
 		"H264 to Video Decoder",
 		"Video/Decoder",
 		"Decodes H264 RTP to raw video",
-		"Maxime SENARD <senard.maxime@gmail.com>",
+		"Roomkit <roomkit-visio@numerique.gouv.fr>",
 	)
 
 	class.AddPadTemplate(gst.NewPadTemplate(

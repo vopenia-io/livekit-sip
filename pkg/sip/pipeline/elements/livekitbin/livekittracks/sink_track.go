@@ -98,7 +98,7 @@ func (*SinkTrack) ClassInit(klass *glib.ObjectClass) {
 		"sink_track",
 		"sink",
 		"Sends packets to a WebRTC PeerConnection",
-		"Maxime SENARD <senard.maxime@gmail.com>",
+		"Roomkit <roomkit-visio@numerique.gouv.fr>",
 	)
 
 	CAT.Log(gst.LevelDebug, "Adding pad template")

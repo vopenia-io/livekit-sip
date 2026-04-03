@@ -33,7 +33,7 @@ func (e *SipCompositor) ClassInit(klass *glib.ObjectClass) {
 		"SIP Compositor",
 		"Transform",
 		"Element to composite SIP audio tracks and pass through a single video track",
-		"Maxime SENARD <senard.maxime@gmail.com>",
+		"Roomkit <roomkit-visio@numerique.gouv.fr>",
 	)
 
 	class.AddPadTemplate(gst.NewPadTemplate(

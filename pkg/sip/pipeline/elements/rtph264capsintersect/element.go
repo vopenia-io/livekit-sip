@@ -31,7 +31,7 @@ func (e *RtpH264CapsIntersect) ClassInit(klass *glib.ObjectClass) {
 		"RTP H264 Caps Intersect",
 		"Filter/Network/Video",
 		"Performs semantic H.264 profile-level-id intersection on application/x-rtp caps",
-		"Maxime SENARD <senard.maxime@gmail.com>",
+		"Roomkit <roomkit-visio@numerique.gouv.fr>",
 	)
 
 	caps := gst.NewCapsFromString(padCapsStr)

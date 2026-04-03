@@ -52,7 +52,7 @@ func (e *LivekitCompositor) ClassInit(klass *glib.ObjectClass) {
 		"LiveKit Compositor",
 		"Transform",
 		"Element to composite multiple LiveKit tracks into a single video stream",
-		"Maxime SENARD <senard.maxime@gmail.com>",
+		"Roomkit <roomkit-visio@numerique.gouv.fr>",
 	)
 
 	gst.SignalNew(

@@ -38,7 +38,7 @@ func (*SipMedia) ClassInit(klass *glib.ObjectClass) {
 		"sip_media",
 		"sink/source",
 		"Sends/receives media packets to/from a SIP PeerConnection",
-		"Maxime SENARD <senard.maxime@gmail.com>",
+		"Roomkit <roomkit-visio@numerique.gouv.fr>",
 	)
 
 	class.AddPadTemplate(gst.NewPadTemplate(

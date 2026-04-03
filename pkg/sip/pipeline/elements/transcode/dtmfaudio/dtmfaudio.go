@@ -30,7 +30,7 @@ func (e *DtmfAudio) ClassInit(klass *glib.ObjectClass) {
 		"DTMF to Audio Decoder",
 		"Audio/Decoder",
 		"Decodes DTMF RTP telephone-event to raw audio",
-		"Maxime SENARD <senard.maxime@gmail.com>",
+		"Roomkit <roomkit-visio@numerique.gouv.fr>",
 	)
 
 	class.AddPadTemplate(gst.NewPadTemplate(

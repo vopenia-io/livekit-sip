@@ -75,7 +75,7 @@ func (e *LivekitBin) ClassInit(klass *glib.ObjectClass) {
 		"LiveKit Room",
 		"Source/Sink",
 		"Element to connect to a LiveKit room",
-		"Maxime SENARD <senard.maxime@gmail.com>",
+		"Roomkit <roomkit-visio@numerique.gouv.fr>",
 	)
 
 	// signals

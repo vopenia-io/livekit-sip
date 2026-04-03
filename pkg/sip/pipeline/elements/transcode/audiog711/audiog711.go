@@ -31,7 +31,7 @@ func (e *AudioG711) ClassInit(klass *glib.ObjectClass) {
 		"Audio to G711 Encoder",
 		"Audio/Encoder",
 		"Encodes raw audio to G711 RTP",
-		"Maxime SENARD <senard.maxime@gmail.com>",
+		"Roomkit <roomkit-visio@numerique.gouv.fr>",
 	)
 
 	class.AddPadTemplate(gst.NewPadTemplate(

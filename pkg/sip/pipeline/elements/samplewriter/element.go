@@ -59,7 +59,7 @@ func (*SampleWriter) ClassInit(klass *glib.ObjectClass) {
 		"samplewriter",
 		"src",
 		"plays a sequence of PCM16 samples and then EOS",
-		"Maxime SENARD <senard.maxime@gmail.com>",
+		"Roomkit <roomkit-visio@numerique.gouv.fr>",
 	)
 
 	class.AddPadTemplate(gst.NewPadTemplate(

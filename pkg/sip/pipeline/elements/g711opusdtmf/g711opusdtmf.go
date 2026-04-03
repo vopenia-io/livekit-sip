@@ -55,7 +55,7 @@ func (e *G711OpusDtmf) ClassInit(klass *glib.ObjectClass) {
 		"G711 to Opus Transcoder with DTMF Detection",
 		"Audio/Converter",
 		"Decodes G711, resamples, and encodes to Opus",
-		"Maxime SENARD <senard.maxime@gmail.com>",
+		"Roomkit <roomkit-visio@numerique.gouv.fr>",
 	)
 
 	class.AddPadTemplate(gst.NewPadTemplate(

@@ -29,7 +29,7 @@ func (e *PCM16Audio) ClassInit(klass *glib.ObjectClass) {
 		"PCM16 to Audio Decoder",
 		"Audio/Decoder",
 		"Decodes PCM16 to raw audio",
-		"Maxime SENARD <senard.maxime@gmail.com>",
+		"Roomkit <roomkit-visio@numerique.gouv.fr>",
 	)
 
 	class.AddPadTemplate(gst.NewPadTemplate(

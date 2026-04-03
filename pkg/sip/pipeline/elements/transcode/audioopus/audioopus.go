@@ -30,7 +30,7 @@ func (e *AudioOpus) ClassInit(klass *glib.ObjectClass) {
 		"Audio to Opus Encoder",
 		"Audio/Encoder",
 		"Encodes raw audio to Opus RTP",
-		"Maxime SENARD <senard.maxime@gmail.com>",
+		"Roomkit <roomkit-visio@numerique.gouv.fr>",
 	)
 
 	class.AddPadTemplate(gst.NewPadTemplate(

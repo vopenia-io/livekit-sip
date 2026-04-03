@@ -80,7 +80,7 @@ func (e *SipBin) ClassInit(klass *glib.ObjectClass) {
 		"SipBin",
 		"Generic",
 		"SipBin Element",
-		"Maxime SENARD <senard.maxime@gmail.com>",
+		"Roomkit <roomkit-visio@numerique.gouv.fr>",
 	)
 
 	// action signals

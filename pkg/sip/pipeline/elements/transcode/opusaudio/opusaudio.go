@@ -31,7 +31,7 @@ func (e *OpusAudio) ClassInit(klass *glib.ObjectClass) {
 		"Opus to Audio Decoder",
 		"Audio/Decoder",
 		"Decodes Opus RTP to raw audio",
-		"Maxime SENARD <senard.maxime@gmail.com>",
+		"Roomkit <roomkit-visio@numerique.gouv.fr>",
 	)
 
 	class.AddPadTemplate(gst.NewPadTemplate(

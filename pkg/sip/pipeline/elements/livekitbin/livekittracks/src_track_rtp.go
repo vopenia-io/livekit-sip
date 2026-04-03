@@ -42,7 +42,7 @@ func (*SrcTrackRtp) ClassInit(klass *glib.ObjectClass) {
 		"lkroom_srctrack_rtp",
 		"src",
 		"Receives RTP packets from a WebRTC PeerConnection",
-		"Maxime SENARD <senard.maxime@gmail.com>",
+		"Roomkit <roomkit-visio@numerique.gouv.fr>",
 	)
 
 	CAT.Log(gst.LevelDebug, "Adding pad template")

@@ -81,7 +81,7 @@ func (e *IoManagerLivekit) ClassInit(klass *glib.ObjectClass) {
 		"io_manager_livekit",
 		"Audio/Video/Converter",
 		"Manages the input and output of the LiveKit pipeline",
-		"Maxime SENARD <senard.maxime@gmail.com>",
+		"Roomkit <roomkit-visio@numerique.gouv.fr>",
 	)
 
 	gst.SignalNew(

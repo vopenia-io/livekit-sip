@@ -80,7 +80,7 @@ func (*SrcTrack) ClassInit(klass *glib.ObjectClass) {
 		"livekitbin_srctrack",
 		"src",
 		"Receives packets from a WebRTC PeerConnection",
-		"Maxime SENARD <senard.maxime@gmail.com>",
+		"Roomkit <roomkit-visio@numerique.gouv.fr>",
 	)
 
 	gst.SignalNew(

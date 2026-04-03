@@ -36,7 +36,7 @@ func (e *BFCPServer) ClassInit(klass *glib.ObjectClass) {
 		"BFCPServer",
 		"Generic",
 		"BFCPServer Element",
-		"Maxime SENARD <senard.maxime@gmail.com>",
+		"Roomkit <roomkit-visio@numerique.gouv.fr>",
 	)
 
 	gst.SignalNew(

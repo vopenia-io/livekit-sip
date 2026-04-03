@@ -35,7 +35,7 @@ func (h *H264Vp8) ClassInit(klass *glib.ObjectClass) {
 		"H264 to VP8 Transcoder",
 		"Video/Converter",
 		"Decodes H264, scales, and encodes to VP8",
-		"Maxime SENARD <senard.maxime@gmail.com>",
+		"Roomkit <roomkit-visio@numerique.gouv.fr>",
 	)
 
 	// 1. Sink Pad Template (Input: H264)
