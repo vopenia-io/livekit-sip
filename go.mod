@@ -27,7 +27,7 @@ require (
 	github.com/samber/lo v1.52.0
 	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.11.1
-	github.com/vopenia-io/bfcp v0.0.0-20260224094451-fe3a4475f424
+	github.com/vopenia-io/bfcp v0.0.0-20260402090032-5d10fee8ad84
 	github.com/vopenia-io/go-pjmedia v0.0.0-20260331124148-c1f4eb8e723d
 	golang.org/x/exp v0.0.0-20251009144603-d2f985daa21b
 	google.golang.org/protobuf v1.36.10

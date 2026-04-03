@@ -252,8 +252,8 @@ github.com/twitchtv/twirp v8.1.3+incompatible h1:+F4TdErPgSUbMZMwp13Q/KgDVuI7HJX
 github.com/twitchtv/twirp v8.1.3+incompatible/go.mod h1:RRJoFSAmTEh2weEqWtpPE3vFK5YBhA6bqp2l1kfCC5A=
 github.com/urfave/cli/v3 v3.3.8 h1:BzolUExliMdet9NlJ/u4m5vHSotJ3PzEqSAZ1oPMa/E=
 github.com/urfave/cli/v3 v3.3.8/go.mod h1:FJSKtM/9AiiTOJL4fJ6TbMUkxBXn7GO9guZqoZtpYpo=
-github.com/vopenia-io/bfcp v0.0.0-20260224094451-fe3a4475f424 h1:5XPKdPYB4OZh8u47K9AdWYsiBm0qp1jVT8IqK7BEe18=
-github.com/vopenia-io/bfcp v0.0.0-20260224094451-fe3a4475f424/go.mod h1:7jnTF4sbeePMizEP59DvLPmVOtDNgYxgRjAg1cIi43s=
+github.com/vopenia-io/bfcp v0.0.0-20260402090032-5d10fee8ad84 h1:e5OMlzrrOaeZGytiayjsKyh3ReCdIRvWsJ7xiFTAUWs=
+github.com/vopenia-io/bfcp v0.0.0-20260402090032-5d10fee8ad84/go.mod h1:7jnTF4sbeePMizEP59DvLPmVOtDNgYxgRjAg1cIi43s=
 github.com/vopenia-io/go-glib v0.0.0-20260331095234-b9e9d7b98559 h1:AEA0zszOyMM5ws9o366PfH2CEKolq2lDbcbOa7Of5Qg=
 github.com/vopenia-io/go-glib v0.0.0-20260331095234-b9e9d7b98559/go.mod h1:dqdh3eCmMS9ofMtyPGoO5jeTzaoGLS+nGMdnoL33is8=
 github.com/vopenia-io/go-gst v0.0.0-20260402114712-4141765125be h1:FZp6KWhCW/hYc/tm/5Nwup8JJi1F4APy+PTn37tRzjo=
