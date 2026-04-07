@@ -64,7 +64,9 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audiopcmu"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/dtmfaudio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/h264video"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvav1video"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvh264video"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvvideoav1"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvvideoh264"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvvideovp8"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvvp8video"
@@ -180,6 +182,12 @@ func init() {
 
 	if !pcmuaudio.Register() {
 		panic("Failed to register pcmu-audio")
+	if !nvav1video.Register() {
+		panic("Failed to register nv-av1-video")
+	}
+
+	if !nvvideoav1.Register() {
+		panic("Failed to register nv-video-av1")
 	}
 
 	MainLoop = glib.NewMainLoop(glib.MainContextDefault(), false)
