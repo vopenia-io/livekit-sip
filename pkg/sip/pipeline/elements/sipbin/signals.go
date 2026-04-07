@@ -11,6 +11,8 @@ func (e *SipBin) OnAckSDP(self *gst.Bin, b []byte) error {
 	unlock := e.transaction.Ack()
 	defer unlock()
 
+	e.transactionID.Add(1)
+
 	// TODO: handle late answer here
 
 	return nil
