@@ -58,9 +58,7 @@ func (e *AudioPcmu) InstanceInit(instance *glib.Object) {
 		return
 	}
 
-	e.RtpPcmuPay, err = gst.NewElementWithProperties("rtppcmupay", map[string]interface{}{
-		"pt": 111,
-	})
+	e.RtpPcmuPay, err = gst.NewElementWithProperties("rtppcmupay", map[string]interface{}{})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create rtppcmupay element: %v", err))
 		self.Error("Failed to create rtppcmupay element", err)
