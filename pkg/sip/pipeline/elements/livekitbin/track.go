@@ -25,17 +25,25 @@ func (e *LivekitBin) PublishTrack(self *gst.Bin, pad *gst.Pad, pname string) {
 		return
 	}
 
+	var mimeType string
 	switch livekit.TrackSource(session) {
-	case livekit.TrackSource_MICROPHONE,
-		livekit.TrackSource_CAMERA,
-		livekit.TrackSource_SCREEN_SHARE,
-		livekit.TrackSource_SCREEN_SHARE_AUDIO:
+	case livekit.TrackSource_MICROPHONE:
+		mimeType = e.config.microphoneMimeType
+	case livekit.TrackSource_CAMERA:
+		mimeType = e.config.cameraMimeType
+	case livekit.TrackSource_SCREEN_SHARE:
+		mimeType = e.config.screenshareMimeType
+	case livekit.TrackSource_SCREEN_SHARE_AUDIO:
+		mimeType = e.config.screenshareAudioMimeType
 	default:
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unknown track source in pad name: %s", pname))
 		return
 	}
 
-	element, _, err := livekittracks.NewSinkTrack(e.room.LocalParticipant, livekit.TrackSource(session))
+	element, _, err := livekittracks.NewSinkTrack(e.room.LocalParticipant, livekittracks.TrackCfg{
+		Kind:     livekit.TrackSource(session),
+		MimeType: mimeType,
+	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating sink track for pad name %s: %v", pname, err))
 		return

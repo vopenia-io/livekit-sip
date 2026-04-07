@@ -12,48 +12,32 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
-type TrackCfg livekit.TrackSource
+type TrackCfg struct {
+	Kind     livekit.TrackSource
+	MimeType string
+}
 
 func (t TrackCfg) CapsString() string {
-	switch livekit.TrackSource(t) {
-	case livekit.TrackSource_CAMERA:
-		return "application/x-rtp, media=(string)video, encoding-name=(string)VP8, payload=(int)96"
-	case livekit.TrackSource_MICROPHONE:
-		return "application/x-rtp, media=(string)audio, encoding-name=(string)OPUS, payload=(int)111"
-	case livekit.TrackSource_SCREEN_SHARE:
-		return "application/x-rtp, media=(string)video, encoding-name=(string)VP8, payload=(int)96"
-	case livekit.TrackSource_SCREEN_SHARE_AUDIO:
-		return "application/x-rtp, media=(string)audio, encoding-name=(string)OPUS, payload=(int)111"
+	switch t.Kind {
+	case livekit.TrackSource_CAMERA, livekit.TrackSource_SCREEN_SHARE:
+		return "application/x-rtp, media=(string)video"
+	case livekit.TrackSource_MICROPHONE, livekit.TrackSource_SCREEN_SHARE_AUDIO:
+		return "application/x-rtp, media=(string)audio"
 	default:
 		return "application/x-rtp"
 	}
 }
 
-func (t TrackCfg) MimeType() string {
-	switch livekit.TrackSource(t) {
-	case livekit.TrackSource_CAMERA:
-		return webrtc.MimeTypeVP8
-	case livekit.TrackSource_MICROPHONE:
-		return webrtc.MimeTypeOpus
-	case livekit.TrackSource_SCREEN_SHARE:
-		return webrtc.MimeTypeVP8
-	case livekit.TrackSource_SCREEN_SHARE_AUDIO:
-		return webrtc.MimeTypeOpus
-	default:
-		return ""
-	}
-}
-
 func (t TrackCfg) Label() string {
-	return livekit.TrackSource(t).String()
+	return t.Kind.String()
 }
 
 func SinkTrackName(session int) string {
 	return fmt.Sprintf("livekitbin_sinktrack_%d", session)
 }
 
-func NewSinkTrack(participant *lksdk.LocalParticipant, kind livekit.TrackSource) (*gst.Element, *SinkTrack, error) {
-	element, err := gst.NewElementWithName("livekitbin_sinktrack", SinkTrackName(int(kind)))
+func NewSinkTrack(participant *lksdk.LocalParticipant, cfg TrackCfg) (*gst.Element, *SinkTrack, error) {
+	element, err := gst.NewElementWithName("livekitbin_sinktrack", SinkTrackName(int(cfg.Kind)))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -62,7 +46,7 @@ func NewSinkTrack(participant *lksdk.LocalParticipant, kind livekit.TrackSource)
 		return nil, nil, fmt.Errorf("failed to cast element to SinkTrack")
 	}
 	sink.Participant = participant
-	sink.TrackCfg = TrackCfg(kind)
+	sink.TrackCfg = cfg
 	return element, sink, nil
 }
 
@@ -170,7 +154,7 @@ func (s *SinkTrack) Render(self *base.GstBaseSink, buffer *gst.Buffer) gst.FlowR
 
 func (s *SinkTrack) publishTrack(self *base.GstBaseSink) bool {
 	track, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{
-		MimeType: s.MimeType(),
+		MimeType: s.MimeType,
 	}, s.Label(), "pion")
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create new local track: %v", err))

@@ -35,7 +35,7 @@ var properties = []*glib.ParamSpec{
 		"Token",
 		"LiveKit access token",
 		nil,
-		glib.ParameterReadable|glib.ParameterWritable, // TODO: should this be readable?
+		glib.ParameterWritable,
 	),
 	glib.NewStringParam(
 		"participant-identity",
@@ -74,12 +74,26 @@ var properties = []*glib.ParamSpec{
 		false,
 		glib.ParameterReadable|glib.ParameterWritable,
 	),
+	glib.NewStringParam(
+		"microphone-mime-type",
+		"Microphone MIME Type",
+		"The MIME type for publishing microphone tracks",
+		nil,
+		glib.ParameterReadable|glib.ParameterWritable|glib.ParameterConstructOnly,
+	),
 	glib.NewBoolParam(
 		"camera",
 		"Camera",
 		"Whether to subscribe to camera tracks",
 		false,
 		glib.ParameterReadable|glib.ParameterWritable,
+	),
+	glib.NewStringParam(
+		"camera-mime-type",
+		"Camera MIME Type",
+		"The MIME type for publishing camera tracks",
+		nil,
+		glib.ParameterReadable|glib.ParameterWritable|glib.ParameterConstructOnly,
 	),
 	glib.NewBoolParam(
 		"screenshare",
@@ -88,12 +102,26 @@ var properties = []*glib.ParamSpec{
 		false,
 		glib.ParameterReadable|glib.ParameterWritable,
 	),
+	glib.NewStringParam(
+		"screenshare-mime-type",
+		"Screen Share MIME Type",
+		"The MIME type for publishing screenshare tracks",
+		nil,
+		glib.ParameterReadable|glib.ParameterWritable|glib.ParameterConstructOnly,
+	),
 	glib.NewBoolParam(
 		"screenshare-audio",
 		"Screen Share Audio",
 		"Whether to subscribe to screenshare audio tracks",
 		false,
 		glib.ParameterReadable|glib.ParameterWritable,
+	),
+	glib.NewStringParam(
+		"screenshare-audio-mime-type",
+		"Screen Share Audio MIME Type",
+		"The MIME type for publishing screenshare audio tracks",
+		nil,
+		glib.ParameterReadable|glib.ParameterWritable|glib.ParameterConstructOnly,
 	),
 }
 
@@ -218,24 +246,32 @@ func (e *LivekitBin) SetProperty(instance *glib.Object, id uint, value *glib.Val
 		if old != e.microphone {
 			e.updateSubscriptions(self)
 		}
+	case "microphone-mime-type":
+		stringPropSetter(&e.microphoneMimeType)(self, param, value)
 	case "camera":
 		old := e.camera
 		boolPropSetter(&e.camera)(self, param, value)
 		if old != e.camera {
 			e.updateSubscriptions(self)
 		}
+	case "camera-mime-type":
+		stringPropSetter(&e.cameraMimeType)(self, param, value)
 	case "screenshare":
 		old := e.screenshare
 		boolPropSetter(&e.screenshare)(self, param, value)
 		if old != e.screenshare {
 			e.updateSubscriptions(self)
 		}
+	case "screenshare-mime-type":
+		stringPropSetter(&e.screenshareMimeType)(self, param, value)
 	case "screenshare-audio":
 		old := e.screenshareAudio
 		boolPropSetter(&e.screenshareAudio)(self, param, value)
 		if old != e.screenshareAudio {
 			e.updateSubscriptions(self)
 		}
+	case "screenshare-audio-mime-type":
+		stringPropSetter(&e.screenshareAudioMimeType)(self, param, value)
 	default:
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown property %s", param.Name()))
 	}
@@ -299,12 +335,20 @@ func (e *LivekitBin) GetProperty(instance *glib.Object, id uint) *glib.Value {
 		return value
 	case "microphone":
 		return boolPropGetter(&e.microphone)(self, param)
+	case "microphone-mime-type":
+		return stringPropGetter(&e.microphoneMimeType)(self, param)
 	case "camera":
 		return boolPropGetter(&e.camera)(self, param)
+	case "camera-mime-type":
+		return stringPropGetter(&e.cameraMimeType)(self, param)
 	case "screenshare":
 		return boolPropGetter(&e.screenshare)(self, param)
+	case "screenshare-mime-type":
+		return stringPropGetter(&e.screenshareMimeType)(self, param)
 	case "screenshare-audio":
 		return boolPropGetter(&e.screenshareAudio)(self, param)
+	case "screenshare-audio-mime-type":
+		return stringPropGetter(&e.screenshareAudioMimeType)(self, param)
 	default:
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown property %s", param.Name()))
 		return nil

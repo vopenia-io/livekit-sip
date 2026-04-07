@@ -10,6 +10,7 @@ import (
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin/livekittracks"
+	"github.com/pion/webrtc/v4"
 )
 
 var CAT = gst.NewDebugCategory(
@@ -32,10 +33,14 @@ type config struct {
 	defaultParticipantName       string
 	defaultParticipantAttributes map[string]string
 	maxActiveParticipants        uint
-	camera                       bool
 	microphone                   bool
+	microphoneMimeType           string
+	camera                       bool
+	cameraMimeType               string
 	screenshare                  bool
+	screenshareMimeType          string
 	screenshareAudio             bool
+	screenshareAudioMimeType     string
 }
 
 type LivekitBin struct {
@@ -152,6 +157,10 @@ func (e *LivekitBin) InstanceInit(instance *glib.Object) {
 		e.PtMap[i] = make(map[uint8]*gst.Caps)
 	}
 	e.self = glib.WeakRefInit(self)
+	e.config.microphoneMimeType = webrtc.MimeTypeOpus
+	e.config.cameraMimeType = webrtc.MimeTypeVP8
+	e.config.screenshareMimeType = webrtc.MimeTypeVP8
+	e.config.screenshareAudioMimeType = webrtc.MimeTypeOpus
 
 	var err error
 	e.RtpBin, err = gst.NewElementWithProperties("rtpbin", map[string]interface{}{
