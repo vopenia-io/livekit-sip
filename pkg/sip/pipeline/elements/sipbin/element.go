@@ -3,6 +3,7 @@ package sipbin
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 	"weak"
 
@@ -57,7 +58,8 @@ type SipBin struct {
 
 	Bfcp *BfcpTrack
 
-	transaction *SipTransaction
+	transaction   *SipTransaction
+	transactionID atomic.Uint64
 
 	wg sync.WaitGroup
 }

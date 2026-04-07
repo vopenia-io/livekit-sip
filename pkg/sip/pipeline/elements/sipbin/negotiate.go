@@ -33,6 +33,8 @@ func (e *SipBin) OnOfferSdp(self *gst.Bin, offerData []byte) ([]byte, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	e.transactionID.Add(1)
+
 	if e.ip == nil {
 		return nil, fmt.Errorf("no IP address configured for SIP media")
 	}
@@ -203,6 +205,8 @@ func (e *SipBin) OnAnswerSdp(self *gst.Bin, answerData []byte) error {
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
+
+	e.transactionID.Add(1)
 
 	if e.ip == nil {
 		return fmt.Errorf("no IP address configured for SIP media")
@@ -413,33 +417,10 @@ func (e *SipBin) earlyReinvite(self *gst.Bin) {
 		return
 	}
 
-	screenshareMedia, err := e.makeOfferMedia(self, livekit.TrackSource_SCREEN_SHARE, len(e.Medias), e.Tracks[livekit.TrackSource_CAMERA].Proto)
-	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create offer media for early reinvite: %v", err))
-		return
-	}
-
-	e.Medias = append(e.Medias, screenshareMedia)
-
-	if err := e.bfcpMediaAddStreams(e.Medias); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add BFCP streams to offer: %v", err))
-		return
-	}
-
-	offer, err := e.makeOfferSdp(self)
-	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create offer for early reinvite: %v", err))
-		return
-	}
-
-	offerData := offer.AsText()
-	if offerData == "" {
-		self.Log(CAT, gst.LevelError, "Failed to serialize offer for early reinvite")
-		return
-	}
-
 	weakself := glib.WeakRefInit(self)
 	weake := weak.Make(e)
+
+	transactionID := e.transactionID.Load() + 1
 
 	e.wg.Add(1)
 	go func() {
@@ -459,6 +440,40 @@ func (e *SipBin) earlyReinvite(self *gst.Bin) {
 			return
 		}
 		defer unlock()
+
+		e.mu.Lock()
+		defer e.mu.Unlock()
+
+		if e.transactionID.Load() != transactionID {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Not sending early reinvite offer because transaction ID has changed: current %d, expected %d", e.transactionID.Load(), transactionID))
+			return
+		}
+		e.transactionID.Add(1)
+
+		screenshareMedia, err := e.makeOfferMedia(self, livekit.TrackSource_SCREEN_SHARE, len(e.Medias), e.Tracks[livekit.TrackSource_CAMERA].Proto)
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create offer media for early reinvite: %v", err))
+			return
+		}
+
+		e.Medias = append(e.Medias, screenshareMedia)
+
+		if err := e.bfcpMediaAddStreams(e.Medias); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add BFCP streams to offer: %v", err))
+			return
+		}
+
+		offer, err := e.makeOfferSdp(self)
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create offer for early reinvite: %v", err))
+			return
+		}
+
+		offerData := offer.AsText()
+		if offerData == "" {
+			self.Log(CAT, gst.LevelError, "Failed to serialize offer for early reinvite")
+			return
+		}
 
 		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Generated offer SDP:\n%s", string(offerData)))
 
