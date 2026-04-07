@@ -22,15 +22,6 @@ var (
 	ErrWrongState = errors.New("media orchestrator in wrong state")
 )
 
-var doInitCodecs sync.Once
-
-func initCodecs() {
-	doInitCodecs.Do(func() {
-		pj.RegisterG711Codec(pj.DefaultPjEndpt())
-		pj.RegisterH264Codec(pj.DefaultPjEndpt())
-	})
-}
-
 const (
 	ScreenshareMSTreamID = 2
 )
@@ -95,7 +86,6 @@ type MediaOrchestrator struct {
 }
 
 func NewMediaOrchestrator(log logger.Logger, ctx context.Context, inbound *sipInbound, opts *MediaOptions) (*MediaOrchestrator, error) {
-	initCodecs()
 	ctx, cancel := context.WithCancel(ctx)
 	o := &MediaOrchestrator{
 		ctx:        ctx,
