@@ -1,6 +1,7 @@
 package sipbin
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -58,6 +59,8 @@ type SipBin struct {
 	Bfcp *BfcpTrack
 
 	transaction *SipTransaction
+
+	earlyReinviteCancel context.CancelFunc
 
 	wg sync.WaitGroup
 }

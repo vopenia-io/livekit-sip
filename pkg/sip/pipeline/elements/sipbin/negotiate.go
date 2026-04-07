@@ -1,6 +1,7 @@
 package sipbin
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"math/rand"
@@ -61,17 +62,47 @@ func (e *SipBin) OnOfferSdp(self *gst.Bin, offerData []byte) ([]byte, error) {
 				if e.Tracks[kind].Idx != i {
 					self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Received multiple media for track source %d, existing media index %d, new media index %d: disabling new media", kind, e.Tracks[kind].Idx, i))
 					continue
-				} else {
-					self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Received duplicate media for track source %d, media index %d", kind, i))
-					localMedia, err := e.makeTrackMedia(self, e.Tracks[kind], e.Tracks[kind].Caps)
+				}
+				if e.Tracks[kind].Caps == nil {
+					// Track was preallocated by earlyReinvite (UDP sockets opened, no Caps yet).
+					// Adopt this offer as the negotiation for the preallocated track instead of
+					// waiting for our own pending early reinvite answer.
+					self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Adopting preallocated track for media index %d, source %d", i, kind))
+					if e.earlyReinviteCancel != nil {
+						e.earlyReinviteCancel()
+						e.earlyReinviteCancel = nil
+					}
+					caps, err := e.selectCapsForMedia(self, media, kind)
 					if err != nil {
-						self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to make answer media for duplicate media index %d: %v", i, err))
+						self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to select caps for preallocated media %d: %v", i, err))
+						continue
+					}
+					if ret := media.SetProto(e.Tracks[kind].Proto); ret != gstsdp.SDPResultOk {
+						self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set proto on media %d: %v", i, ret))
+						continue
+					}
+					localMedia, err := e.makeTrackMedia(self, e.Tracks[kind], caps)
+					if err != nil {
+						self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to make answer media for preallocated media index %d: %v", i, err))
 						continue
 					}
 					medias[i] = localMedia
-					self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Reusing existing track for duplicate media index %d with caps %s", i, e.Tracks[kind].Caps.String()))
+					if err := e.Tracks[kind].Init(e, self, media, offer, caps); err != nil {
+						e.Tracks[kind] = nil
+						medias[i] = nil
+						self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to initialize preallocated track for media %d: %v", i, err))
+					}
 					continue
 				}
+				self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Received duplicate media for track source %d, media index %d", kind, i))
+				localMedia, err := e.makeTrackMedia(self, e.Tracks[kind], e.Tracks[kind].Caps)
+				if err != nil {
+					self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to make answer media for duplicate media index %d: %v", i, err))
+					continue
+				}
+				medias[i] = localMedia
+				self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Reusing existing track for duplicate media index %d with caps %s", i, e.Tracks[kind].Caps.String()))
+				continue
 			}
 			caps, err := e.selectCapsForMedia(self, media, kind)
 			if err != nil {
@@ -441,11 +472,25 @@ func (e *SipBin) earlyReinvite(self *gst.Bin) {
 	weakself := glib.WeakRefInit(self)
 	weake := weak.Make(e)
 
+	ctx, cancel := context.WithCancel(context.Background())
+	if e.earlyReinviteCancel != nil {
+		e.earlyReinviteCancel()
+	}
+	e.earlyReinviteCancel = cancel
+
 	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
+		defer cancel()
 
-		time.Sleep(500 * time.Millisecond) // give time to device for internal processing. should not be necessary but sip implementation are broken half of the time
+		// give time to device for internal processing. should not be necessary but
+		// sip implementation are broken half of the time. cancellable so that an
+		// incoming reINVITE can adopt the preallocated track instead.
+		select {
+		case <-time.After(500 * time.Millisecond):
+		case <-ctx.Done():
+			return
+		}
 
 		self := gst.ToGstBin(weakself.Get())
 		e := weake.Value()
@@ -459,6 +504,11 @@ func (e *SipBin) earlyReinvite(self *gst.Bin) {
 			return
 		}
 		defer unlock()
+
+		if ctx.Err() != nil {
+			self.Log(CAT, gst.LevelInfo, "Early reinvite cancelled before send")
+			return
+		}
 
 		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Generated offer SDP:\n%s", string(offerData)))
 
