@@ -60,14 +60,13 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipbin"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipcompositor"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipmanager"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audiog711"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audioopus"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audiopcmu"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/dtmfaudio"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/g711audio"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/g711dtmfaudio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/h264video"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/opusaudio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/pcm16audio"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/pcmuaudio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videoh264"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videovp8"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/vp8video"
@@ -104,24 +103,12 @@ func init() {
 		panic("Failed to register io_manager_sip")
 	}
 
-	if !g711audio.Register() {
-		panic("Failed to register g711-audio")
-	}
-
-	if !g711dtmfaudio.Register() {
-		panic("Failed to register g711dtmf-audio")
-	}
-
 	if !audioopus.Register() {
 		panic("Failed to register audio-opus")
 	}
 
 	if !opusaudio.Register() {
 		panic("Failed to register opus-audio")
-	}
-
-	if !audiog711.Register() {
-		panic("Failed to register audio-g711")
 	}
 
 	if !h264video.Register() {
@@ -166,6 +153,14 @@ func init() {
 
 	if !bfcpserver.Register() {
 		panic("Failed to register bfcpserver")
+	}
+
+	if !audiopcmu.Register() {
+		panic("Failed to register audio-pcmu")
+	}
+
+	if !pcmuaudio.Register() {
+		panic("Failed to register pcmu-audio")
 	}
 
 	MainLoop = glib.NewMainLoop(glib.MainContextDefault(), false)
