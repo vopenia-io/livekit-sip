@@ -137,6 +137,7 @@ func (p *Pipeline) PlayAudio(ctx context.Context, sampleDur time.Duration, rate 
 
 	select {
 	case <-done:
+		time.Sleep(100 * time.Millisecond) // give some time for the EOS to propagate and cleanup to happen
 	case <-ctx.Done():
 		return ctx.Err()
 	}

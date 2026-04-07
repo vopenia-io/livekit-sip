@@ -42,8 +42,9 @@ type SampleWriter struct {
 	frames    []msdk.PCM16Sample
 	ctx       context.Context
 	cancel    context.CancelFunc
-	ticker    *time.Ticker
 	i         int
+	ptsOffset gst.ClockTime
+	started   bool
 }
 
 func (*SampleWriter) New() glib.GoObjectSubclass {
@@ -66,7 +67,7 @@ func (*SampleWriter) ClassInit(klass *glib.ObjectClass) {
 		"src",
 		gst.PadDirectionSource,
 		gst.PadPresenceAlways,
-		gst.NewCapsFromString("audio/x-raw, format=S16LE")))
+		gst.NewCapsFromString("audio/x-raw, format=S16LE, layout=interleaved, channels=1")))
 }
 
 func (e *SampleWriter) InstanceInit(instance *glib.Object) {
@@ -75,7 +76,10 @@ func (e *SampleWriter) InstanceInit(instance *glib.Object) {
 	self.SetLive(true)
 	self.SetFormat(gst.FormatTime)
 	self.SetAsync(false)
-	self.SetDoTimestamp(true)
+	self.SetDoTimestamp(false)
+
+	blockSize := uint(int(e.sampleDur.Seconds()*float64(e.rate)) * 2)
+	self.SetBlocksize(blockSize)
 }
 
 func (e *SampleWriter) SetCaps(self *base.GstBaseSrc, caps *gst.Caps) bool {
@@ -83,7 +87,7 @@ func (e *SampleWriter) SetCaps(self *base.GstBaseSrc, caps *gst.Caps) bool {
 }
 
 func (e *SampleWriter) GetCaps(self *base.GstBaseSrc, filter *gst.Caps) *gst.Caps {
-	capsStr := fmt.Sprintf("audio/x-raw, format=S16LE, channels=1, rate=%d", e.rate)
+	capsStr := fmt.Sprintf("audio/x-raw, format=S16LE, layout=interleaved, channels=1, rate=%d", e.rate)
 
 	caps := gst.NewCapsFromString(capsStr)
 	if filter != nil && filter.Instance() != nil && !filter.IsEmpty() && !filter.IsAny() {
@@ -101,16 +105,15 @@ func (e *SampleWriter) Start(self *base.GstBaseSrc) bool {
 		e.ctx = context.Background()
 	}
 	e.ctx, e.cancel = context.WithCancel(e.ctx)
-
-	e.ticker = time.NewTicker(e.sampleDur)
+	e.i = 0
+	e.started = false
+	e.ptsOffset = 0
 
 	return true
 }
 
 func (e *SampleWriter) Stop(self *base.GstBaseSrc) bool {
 	self.Log(CAT, gst.LevelDebug, "Stopping")
-
-	e.ticker.Stop()
 
 	return true
 }
@@ -132,7 +135,7 @@ func (e *SampleWriter) Fill(self *base.GstBaseSrc, offset uint64, length uint, b
 	case <-e.ctx.Done():
 		self.Log(CAT, gst.LevelInfo, "Fill context done, returning Flushing")
 		return gst.FlowFlushing
-	case <-e.ticker.C:
+	default:
 	}
 
 	frame := e.frames[e.i]
@@ -142,6 +145,24 @@ func (e *SampleWriter) Fill(self *base.GstBaseSrc, offset uint64, length uint, b
 		self.Error("Failed to copy frame data to buffer", err)
 		return gst.FlowError
 	}
+
+	if !e.started {
+		// Live source added to a running pipeline: align PTS with the
+		// pipeline's current running time so the sink doesn't drop our
+		// initial buffers as "late".
+		if clock := self.GetClock(); clock != nil {
+			now := clock.GetTime()
+			base := self.GetBaseTime()
+			if now > base {
+				e.ptsOffset = now - base
+			}
+		}
+		e.started = true
+	}
+
+	pts := gst.ClockTime(time.Duration(e.i)*e.sampleDur) + e.ptsOffset
+	buffer.SetPresentationTimestamp(pts)
+	buffer.SetDuration(gst.ClockTime(e.sampleDur.Nanoseconds()))
 	e.i++
 
 	if uint(n) < length {

@@ -72,6 +72,10 @@ func (p *Pipeline) onMessage(msg *gst.Message) bool {
 			p.Log.Warnw("Received element message with no structure", nil)
 			return true
 		}
+		if structure.Name() == "level" {
+			// Ignore level messages to avoid log spam
+			return true
+		}
 		p.Log.Debugw("Received element message", "structure", structure.String())
 		if structure.Name() == "dtmf-event" {
 			nbVal, err := structure.GetValue("number")

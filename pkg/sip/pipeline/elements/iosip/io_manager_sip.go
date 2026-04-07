@@ -12,9 +12,10 @@ import (
 )
 
 type SipAudioInTranscode struct {
-	gpad      *gst.GhostPad
-	PcmuAudio *gst.Element
-	pad       *gst.Pad
+	gpad       *gst.GhostPad
+	PcmuAudio  *gst.Element
+	DtmfDetect *gst.Element
+	pad        *gst.Pad
 }
 
 type SipAudioOutTranscode struct {
@@ -346,8 +347,17 @@ func (e *IoManagerSip) linkNewPadAudioMicrophone(self *gst.Bin, pad *gst.Pad, na
 	if err != nil {
 		return fmt.Errorf("Failed to create pcmu-audio element for pad %s: %w", name, err)
 	}
-	if err := self.Add(audioIn.PcmuAudio); err != nil {
+	audioIn.DtmfDetect, err = gst.NewElementWithProperties("dtmfdetect", map[string]interface{}{})
+	if err != nil {
+		return fmt.Errorf("Failed to create dtmfdetect element for pad %s: %w", name, err)
+	}
+
+	if err := self.AddMany(audioIn.PcmuAudio, audioIn.DtmfDetect); err != nil {
 		return fmt.Errorf("Failed to add pcmu-audio element to SIP IO element for pad %s: %w", name, err)
+	}
+
+	if ret := audioIn.PcmuAudio.GetStaticPad("src").Link(audioIn.DtmfDetect.GetStaticPad("sink")); ret != gst.PadLinkOK {
+		return fmt.Errorf("Failed to link pcmu-audio src pad to dtmfdetect sink pad for pad %s: %v", name, ret)
 	}
 
 	audioIn.pad = e.Compositor.GetRequestPad(fmt.Sprintf("sink_%d_%d_%d", session, ssrc, pt))
@@ -355,8 +365,8 @@ func (e *IoManagerSip) linkNewPadAudioMicrophone(self *gst.Bin, pad *gst.Pad, na
 		return fmt.Errorf("Failed to get request pad from compositor for pad %s", name)
 	}
 
-	if ret := audioIn.PcmuAudio.GetStaticPad("src").Link(audioIn.pad); ret != gst.PadLinkOK {
-		return fmt.Errorf("Failed to link pcmu-audio src pad to compositor pad for pad %s: %v", name, ret)
+	if ret := audioIn.DtmfDetect.GetStaticPad("src").Link(audioIn.pad); ret != gst.PadLinkOK {
+		return fmt.Errorf("Failed to link dtmfdetect src pad to compositor pad for pad %s: %v", name, ret)
 	}
 
 	if !gpad.SetTarget(audioIn.PcmuAudio.GetStaticPad("sink")) {
@@ -365,6 +375,9 @@ func (e *IoManagerSip) linkNewPadAudioMicrophone(self *gst.Bin, pad *gst.Pad, na
 
 	if !audioIn.PcmuAudio.SyncStateWithParent() {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state of pcmu-audio element with parent for pad %s", name))
+	}
+	if !audioIn.DtmfDetect.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state of dtmfdetect element with parent for pad %s", name))
 	}
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Successfully linked audio pad %s with pcmu-audio decoder", name))

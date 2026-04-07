@@ -72,11 +72,15 @@ func (e *PCM16Audio) InstanceInit(instance *glib.Object) {
 		return
 	}
 
-	self.AddMany(
+	if err := self.AddMany(
 		e.AudioConvert,
 		e.AudioResample,
 		e.AudioRate,
-	)
+	); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add elements to bin: %v", err))
+		self.Error("Failed to add elements to bin", err)
+		return
+	}
 
 	if err := gst.ElementLinkMany(
 		e.AudioConvert,
@@ -97,18 +101,11 @@ func (e *PCM16Audio) InstanceInit(instance *glib.Object) {
 	self.AddPad(ghostSrc.Pad)
 }
 
-func (e *PCM16Audio) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
+func (e *PCM16Audio) Finalize(instance *glib.Object) {
 	self := gst.ToGstBin(instance)
+	self.Log(CAT, gst.LevelDebug, "Finalizing PCM16Audio element")
 
-	ret := self.ParentChangeState(transition)
-	if ret != gst.StateChangeSuccess {
-		return ret
-	}
-
-	if transition == gst.StateChangeReadyToNull {
-		e.AudioConvert = nil
-		e.AudioResample = nil
-		e.AudioRate = nil
-	}
-	return ret
+	e.AudioConvert = nil
+	e.AudioResample = nil
+	e.AudioRate = nil
 }
