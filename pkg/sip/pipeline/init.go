@@ -61,8 +61,10 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipcompositor"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipmanager"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audioopus"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audiopcma"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audiopcmu"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/dtmfaudio"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/factorybin"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/h264video"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvav1video"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvh264video"
@@ -72,6 +74,7 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvvp8video"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/opusaudio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/pcm16audio"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/pcmaaudio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/pcmuaudio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videoh264"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videovp8"
@@ -145,7 +148,7 @@ func init() {
 		panic("Failed to register video-h264")
 	}
 	if !nvvideoh264.Register() {
-		panic("Failed to register video-h264")
+		panic("Failed to register nv-video-h264")
 	}
 
 	if !livekitcompositor.Register() {
@@ -182,12 +185,26 @@ func init() {
 
 	if !pcmuaudio.Register() {
 		panic("Failed to register pcmu-audio")
+	}
+
+	if !audiopcma.Register() {
+		panic("Failed to register audio-pcma")
+	}
+
+	if !pcmaaudio.Register() {
+		panic("Failed to register pcma-audio")
+	}
+
 	if !nvav1video.Register() {
 		panic("Failed to register nv-av1-video")
 	}
 
 	if !nvvideoav1.Register() {
 		panic("Failed to register nv-video-av1")
+	}
+
+	if !factorybin.Register() {
+		panic("Failed to register factorybin")
 	}
 
 	MainLoop = glib.NewMainLoop(glib.MainContextDefault(), false)

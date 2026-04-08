@@ -1,0 +1,339 @@
+package factorybin
+
+import (
+	"fmt"
+	"slices"
+	"weak"
+
+	"github.com/go-gst/go-glib/glib"
+	"github.com/go-gst/go-gst/gst"
+)
+
+var CAT = gst.NewDebugCategory(
+	"factorybin",
+	gst.DebugColorNone,
+	"factorybin Element",
+)
+
+var properties = []*glib.ParamSpec{
+	glib.NewBoxedParam(
+		"factories",
+		"Factories",
+		"The list of factories to use for transcoding",
+		glib.TYPE_STRV,
+		glib.ParameterWritable|glib.ParameterReadable|glib.ParameterConstructOnly,
+	),
+}
+
+type FactoryCaps struct {
+	Factory  *gst.ElementFactory
+	SrcCaps  *gst.Caps
+	SinkCaps *gst.Caps
+}
+
+type FactoryBin struct {
+	Factories   []*gst.ElementFactory
+	FactoryCaps []FactoryCaps
+
+	SrcPad  *gst.GhostPad
+	SinkPad *gst.GhostPad
+
+	Elem *gst.Element
+}
+
+func (e *FactoryBin) New() glib.GoObjectSubclass {
+	return &FactoryBin{}
+}
+
+func (e *FactoryBin) ClassInit(klass *glib.ObjectClass) {
+	class := gst.ToElementClass(klass)
+	class.SetMetadata(
+		"Factory Bin",
+		"Factory",
+		"Creates elements from factories",
+		"Roomkit <roomkit-visio@numerique.gouv.fr>",
+	)
+
+	class.AddPadTemplate(gst.NewPadTemplate(
+		"sink",
+		gst.PadDirectionSink,
+		gst.PadPresenceAlways,
+		gst.NewAnyCaps(),
+	))
+
+	class.AddPadTemplate(gst.NewPadTemplate(
+		"src",
+		gst.PadDirectionSource,
+		gst.PadPresenceAlways,
+		gst.NewAnyCaps(),
+	))
+
+	class.InstallProperties(properties)
+}
+
+func (e *FactoryBin) computeCaps(instance *gst.Object, pad *gst.Pad, direction gst.PadDirection, filter *gst.Caps) *gst.Caps {
+	// self := gst.ToGstBin(instance)
+
+	var otherPad *gst.Pad
+	if direction == gst.PadDirectionSink {
+		otherPad = e.SrcPad.Pad
+	} else {
+		otherPad = e.SinkPad.Pad
+	}
+
+	otherCaps := otherPad.PeerQueryCaps(nil)
+	if otherCaps == nil {
+		otherCaps = gst.NewAnyCaps()
+	}
+
+	result := gst.NewEmptyCaps()
+	for _, fc := range e.FactoryCaps {
+		var tmplCaps, othertmplCaps *gst.Caps
+		if direction == gst.PadDirectionSink {
+			tmplCaps = fc.SinkCaps
+			othertmplCaps = fc.SrcCaps
+		} else {
+			tmplCaps = fc.SrcCaps
+			othertmplCaps = fc.SinkCaps
+		}
+
+		if !othertmplCaps.CanIntersect(otherCaps) {
+			continue
+		}
+		result = result.Merge(tmplCaps.Copy())
+	}
+
+	if result != nil && filter != nil {
+		result = result.IntersectFull(filter, gst.CapsIntersectFirst)
+	}
+
+	// self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Computed caps for %s pad: %q (other pad caps: %q, filter: %q)", pad.GetName(), result.String(), otherCaps.String(), filter.String()))
+
+	return result
+}
+
+func (e *FactoryBin) selectFactory(incomingCaps *gst.Caps) *FactoryCaps {
+	downstreamCaps := e.SrcPad.Pad.PeerQueryCaps(nil)
+	if downstreamCaps == nil {
+		downstreamCaps = gst.NewAnyCaps()
+	}
+	for i := range e.FactoryCaps {
+		fc := &e.FactoryCaps[i]
+		if !fc.SinkCaps.CanIntersect(incomingCaps) {
+			continue
+		}
+		if !fc.SrcCaps.CanIntersect(downstreamCaps) {
+			continue
+		}
+		return fc
+	}
+	return nil
+}
+
+func (e *FactoryBin) onCapsEvent(instance *gst.Object, pad *gst.Pad, event *gst.Event) bool {
+	self := gst.ToGstBin(instance)
+
+	if e.Elem != nil {
+		return pad.EventDefault(instance, event)
+	}
+
+	caps := event.ParseCaps()
+	fc := e.selectFactory(caps)
+	if fc == nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("No factory found for caps: %q", caps.String()))
+		return false
+	}
+
+	elem, err := gst.NewElement(fc.Factory.GetName())
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create element from factory %s: %v", fc.Factory.GetName(), err))
+		self.Error("Failed to create element from factory", err)
+		return false
+	}
+
+	if err := self.Add(elem); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add element %s to bin: %v", elem.GetName(), err))
+		self.Error("Failed to add element to bin", err)
+		return false
+	}
+
+	if !elem.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state with parent for element %s", elem.GetName()))
+	}
+
+	e.Elem = elem
+
+	e.SinkPad.SetTarget(elem.GetStaticPad("sink"))
+	e.SrcPad.SetTarget(elem.GetStaticPad("src"))
+
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Selected factory %s for caps %q", fc.Factory.GetName(), caps.String()))
+
+	return pad.EventDefault(instance, event)
+}
+
+func (e *FactoryBin) InstanceInit(instance *glib.Object) {
+	self := gst.ToGstBin(instance)
+	elemClass := gst.ToElementClass(self.Class())
+
+	eweak := weak.Make(e)
+
+	e.SinkPad = gst.NewGhostPadNoTargetFromTemplate("sink", elemClass.GetPadTemplate("sink"))
+	e.SinkPad.SetQueryFunction(func(pad *gst.Pad, instance *gst.Object, query *gst.Query) bool {
+		switch query.Type() {
+		case gst.QueryCaps:
+			e := eweak.Value()
+			if e == nil {
+				return false
+			}
+			filter := query.ParseCaps()
+			resultCaps := e.computeCaps(instance, pad, gst.PadDirectionSink, filter)
+			if resultCaps == nil {
+				return false
+			}
+			query.SetCapsResult(resultCaps)
+			return true
+		case gst.QueryAcceptCaps:
+			e := eweak.Value()
+			if e == nil {
+				return false
+			}
+			acceptCaps := query.ParseAcceptCaps()
+			resultCaps := e.computeCaps(instance, pad, gst.PadDirectionSink, acceptCaps)
+			accepted := resultCaps != nil && !resultCaps.IsEmpty()
+			query.SetAcceptCapsResult(accepted)
+			return true
+		default:
+			return pad.QueryDefault(instance, query)
+		}
+	})
+	e.SinkPad.SetEventFunction(func(pad *gst.Pad, instance *gst.Object, event *gst.Event) bool {
+		switch event.Type() {
+		case gst.EventTypeCaps:
+			e := eweak.Value()
+			if e == nil {
+				return false
+			}
+			return e.onCapsEvent(instance, pad, event)
+		default:
+			return pad.EventDefault(instance, event)
+		}
+	})
+	self.AddPad(e.SinkPad.Pad)
+
+	e.SrcPad = gst.NewGhostPadNoTargetFromTemplate("src", elemClass.GetPadTemplate("src"))
+	e.SrcPad.SetQueryFunction(func(pad *gst.Pad, instance *gst.Object, query *gst.Query) bool {
+		switch query.Type() {
+		case gst.QueryCaps:
+			e := eweak.Value()
+			if e == nil {
+				return false
+			}
+			filter := query.ParseCaps()
+			resultCaps := e.computeCaps(instance, pad, gst.PadDirectionSource, filter)
+			if resultCaps == nil {
+				return false
+			}
+			query.SetCapsResult(resultCaps)
+			return true
+		case gst.QueryAcceptCaps:
+			e := eweak.Value()
+			if e == nil {
+				return false
+			}
+			acceptCaps := query.ParseAcceptCaps()
+			resultCaps := e.computeCaps(instance, pad, gst.PadDirectionSource, acceptCaps)
+			accepted := resultCaps != nil && !resultCaps.IsEmpty()
+			query.SetAcceptCapsResult(accepted)
+			return true
+		default:
+			return pad.QueryDefault(instance, query)
+		}
+	})
+	self.AddPad(e.SrcPad.Pad)
+}
+
+func (e *FactoryBin) SetProperty(instance *glib.Object, id uint, value *glib.Value) {
+	self := gst.ToGstBin(instance)
+	param := properties[id]
+	switch param.Name() {
+	case "factories":
+		gv, err := value.GoValue()
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting factories property value: %v", err))
+			return
+		}
+		val, ok := gv.(*glib.Strv)
+		if !ok {
+			self.Log(CAT, gst.LevelError, "Invalid type for factories property")
+			return
+		}
+
+		factories := make([]*gst.ElementFactory, 0, val.Len())
+		for _, factoryName := range val.Strings() {
+			factory := gst.Find(factoryName)
+			if factory == nil {
+				self.Log(CAT, gst.LevelError, fmt.Sprintf("Factory not found: %s", factoryName))
+				continue
+			}
+			factories = append(factories, factory)
+		}
+		e.Factories = factories
+	}
+}
+
+func (e *FactoryBin) GetProperty(instance *glib.Object, id uint) *glib.Value {
+	self := gst.ToGstBin(instance)
+	param := properties[id]
+	switch param.Name() {
+	case "factories":
+		names := make([]string, 0, len(e.Factories))
+		for _, factory := range e.Factories {
+			names = append(names, factory.GetName())
+		}
+		strv := glib.NewStrv(names)
+		value, err := glib.GValue(strv)
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating GValue for factories property: %v", err))
+			return nil
+		}
+		return value
+	}
+	return nil
+}
+
+func (e *FactoryBin) Constructed(instance *glib.Object) {
+	self := gst.ToGstBin(instance)
+	e.FactoryCaps = make([]FactoryCaps, 0, len(e.Factories))
+	for _, factory := range e.Factories {
+		var srcCaps, sinkCaps *gst.Caps
+		templates := factory.GetStaticPadTemplates()
+		for _, t := range templates {
+			if t.Presence() != gst.PadPresenceAlways {
+				continue
+			}
+			switch t.Direction() {
+			case gst.PadDirectionSource:
+				srcCaps = t.Caps()
+			case gst.PadDirectionSink:
+				sinkCaps = t.Caps()
+			}
+		}
+		e.FactoryCaps = append(e.FactoryCaps, FactoryCaps{
+			Factory:  factory,
+			SrcCaps:  srcCaps,
+			SinkCaps: sinkCaps,
+		})
+	}
+
+	e.FactoryCaps = slices.DeleteFunc(e.FactoryCaps, func(c FactoryCaps) bool {
+		if c.SrcCaps == nil || c.SinkCaps == nil {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Factory %s does not have both src and sink pads with always presence, skipping", c.Factory.GetName()))
+			return true
+		}
+		return false
+	})
+
+	for _, fc := range e.FactoryCaps {
+		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Factory %s: src caps: %q, sink caps: %q", fc.Factory.GetName(), fc.SrcCaps.String(), fc.SinkCaps.String()))
+	}
+}

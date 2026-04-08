@@ -45,9 +45,9 @@ type AudioInTranscode struct {
 }
 
 type AudioOutTranscode struct {
-	gpad      *gst.GhostPad
-	AudioPCMU *gst.Element
-	pad       *gst.Pad
+	gpad     *gst.GhostPad
+	AudioRtp *gst.Element
+	pad      *gst.Pad
 }
 
 type CameraInTranscode struct {
@@ -708,15 +708,20 @@ func (e *IoManagerLivekit) padAddedAudioOut(self *gst.Bin, pad *gst.Pad, name st
 	audioOut := &AudioOutTranscode{}
 
 	var err error
-	audioOut.AudioPCMU, err = gst.NewElementWithProperties("audio-pcmu", map[string]interface{}{})
+	audioOut.AudioRtp, err = gst.NewElementWithProperties("factorybin", map[string]interface{}{
+		"factories": glib.NewStrv([]string{
+			"audio-pcmu",
+			"audio-pcma",
+		}),
+	})
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create audio-pcmu element for audio output pad: %v", err))
-		self.Error("Failed to create audio-pcmu element for audio output pad", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create factorybin element for audio output pad: %v", err))
+		self.Error("Failed to create factorybin element for audio output pad", err)
 		return
 	}
-	if err := self.Add(audioOut.AudioPCMU); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add audio-pcmu element to SIP IO element for audio output pad: %v", err))
-		self.Error("Failed to add audio-pcmu element to SIP IO element for audio output pad", err)
+	if err := self.Add(audioOut.AudioRtp); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add factorybin element to SIP IO element for audio output pad: %v", err))
+		self.Error("Failed to add factorybin element to SIP IO element for audio output pad", err)
 		return
 	}
 
@@ -724,13 +729,13 @@ func (e *IoManagerLivekit) padAddedAudioOut(self *gst.Bin, pad *gst.Pad, name st
 
 	class := gst.ToElementClass(self.Class())
 
-	if ret := audioOut.pad.Link(audioOut.AudioPCMU.GetStaticPad("sink")); ret != gst.PadLinkOK {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link audio output pad to audio-pcmu sink pad: %v", ret))
-		self.Error("Failed to link audio output pad to audio-pcmu sink pad", fmt.Errorf("failed to link pads"))
+	if ret := audioOut.pad.Link(audioOut.AudioRtp.GetStaticPad("sink")); ret != gst.PadLinkOK {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link audio output pad to factorybin sink pad: %v", ret))
+		self.Error("Failed to link audio output pad to factorybin sink pad", fmt.Errorf("failed to link pads"))
 		return
 	}
 
-	audioOut.gpad = gst.NewGhostPadFromTemplate(fmt.Sprintf("send_rtp_src_%d", livekit.TrackSource_MICROPHONE), audioOut.AudioPCMU.GetStaticPad("src"), class.GetPadTemplate("send_rtp_src_%u"))
+	audioOut.gpad = gst.NewGhostPadFromTemplate(fmt.Sprintf("send_rtp_src_%d", livekit.TrackSource_MICROPHONE), audioOut.AudioRtp.GetStaticPad("src"), class.GetPadTemplate("send_rtp_src_%u"))
 	if audioOut.gpad == nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create ghost pad for audio output pad %s", name))
 		self.Error(fmt.Sprintf("Failed to create ghost pad for audio output pad %s", name), fmt.Errorf("gst.NewGhostPadFromTemplate returned nil"))
@@ -745,8 +750,8 @@ func (e *IoManagerLivekit) padAddedAudioOut(self *gst.Bin, pad *gst.Pad, name st
 		return
 	}
 
-	if !audioOut.AudioPCMU.SyncStateWithParent() {
-		self.Log(CAT, gst.LevelWarning, "Failed to sync state of audio-pcmu element with parent")
+	if !audioOut.AudioRtp.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, "Failed to sync state of factorybin element with parent")
 	}
 
 	e.AudioOut = audioOut
@@ -910,12 +915,12 @@ func (e *IoManagerLivekit) padRemovedAudioOut(self *gst.Bin, pad *gst.Pad, name 
 		return
 	}
 
-	if err := e.AudioOut.AudioPCMU.SetState(gst.StateNull); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set audio-pcmu element to NULL state for pad %s: %v", name, err))
+	if err := e.AudioOut.AudioRtp.SetState(gst.StateNull); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set factorybin element to NULL state for pad %s: %v", name, err))
 	}
 
-	if err := self.Remove(e.AudioOut.AudioPCMU); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove audio-pcmu element from SIP IO element for pad %s: %v", name, err))
+	if err := self.Remove(e.AudioOut.AudioRtp); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove factorybin element from SIP IO element for pad %s: %v", name, err))
 	}
 
 	if !self.RemovePad(e.AudioOut.gpad.Pad) {

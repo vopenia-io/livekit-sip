@@ -13,7 +13,7 @@ import (
 
 type SipAudioInTranscode struct {
 	gpad       *gst.GhostPad
-	PcmuAudio  *gst.Element
+	RtpAudio   *gst.Element
 	DtmfDetect *gst.Element
 	pad        *gst.Pad
 }
@@ -323,19 +323,16 @@ func (e *IoManagerSip) linkNewPadAudio(pad *gst.Pad, info *gst.PadProbeInfo, nam
 	}
 
 	switch strings.ToLower(enc) {
-	case "pcmu", "pcma":
-		if err := e.linkNewPadAudioMicrophone(self, pad, name, caps, session, ssrc, pt); err != nil {
-			err = fmt.Errorf("Failed to link new audio pad for microphone input: %w", err)
-			return gst.PadProbeRemove
-		}
 	case "telephone-event":
 		if err := e.linkNewPadAudioDtmf(self, pad, name, caps, session, ssrc, pt); err != nil {
 			err = fmt.Errorf("Failed to link new audio pad for DTMF input: %w", err)
 			return gst.PadProbeRemove
 		}
 	default:
-		err = fmt.Errorf("Unsupported encoding: %s", enc)
-		return gst.PadProbeRemove
+		if err := e.linkNewPadAudioMicrophone(self, pad, name, caps, session, ssrc, pt); err != nil {
+			err = fmt.Errorf("Failed to link new audio pad for microphone input: %w", err)
+			return gst.PadProbeRemove
+		}
 	}
 	return gst.PadProbeRemove
 }
@@ -355,21 +352,26 @@ func (e *IoManagerSip) linkNewPadAudioMicrophone(self *gst.Bin, pad *gst.Pad, na
 	audioIn.gpad = gpad
 
 	var err error
-	audioIn.PcmuAudio, err = gst.NewElementWithProperties("pcmu-audio", map[string]interface{}{})
+	audioIn.RtpAudio, err = gst.NewElementWithProperties("factorybin", map[string]interface{}{
+		"factories": glib.NewStrv([]string{
+			"pcmu-audio",
+			"pcma-audio",
+		}),
+	})
 	if err != nil {
-		return fmt.Errorf("Failed to create pcmu-audio element for pad %s: %w", name, err)
+		return fmt.Errorf("Failed to create factorybin element for pad %s: %w", name, err)
 	}
 	audioIn.DtmfDetect, err = gst.NewElementWithProperties("dtmfdetect", map[string]interface{}{})
 	if err != nil {
 		return fmt.Errorf("Failed to create dtmfdetect element for pad %s: %w", name, err)
 	}
 
-	if err := self.AddMany(audioIn.PcmuAudio, audioIn.DtmfDetect); err != nil {
-		return fmt.Errorf("Failed to add pcmu-audio element to SIP IO element for pad %s: %w", name, err)
+	if err := self.AddMany(audioIn.RtpAudio, audioIn.DtmfDetect); err != nil {
+		return fmt.Errorf("Failed to add factorybin element to SIP IO element for pad %s: %w", name, err)
 	}
 
-	if ret := audioIn.PcmuAudio.GetStaticPad("src").Link(audioIn.DtmfDetect.GetStaticPad("sink")); ret != gst.PadLinkOK {
-		return fmt.Errorf("Failed to link pcmu-audio src pad to dtmfdetect sink pad for pad %s: %v", name, ret)
+	if ret := audioIn.RtpAudio.GetStaticPad("src").Link(audioIn.DtmfDetect.GetStaticPad("sink")); ret != gst.PadLinkOK {
+		return fmt.Errorf("Failed to link factorybin src pad to dtmfdetect sink pad for pad %s: %v", name, ret)
 	}
 
 	audioIn.pad = e.Compositor.GetRequestPad(fmt.Sprintf("sink_%d_%d_%d", session, ssrc, pt))
@@ -381,18 +383,18 @@ func (e *IoManagerSip) linkNewPadAudioMicrophone(self *gst.Bin, pad *gst.Pad, na
 		return fmt.Errorf("Failed to link dtmfdetect src pad to compositor pad for pad %s: %v", name, ret)
 	}
 
-	if !gpad.SetTarget(audioIn.PcmuAudio.GetStaticPad("sink")) {
+	if !gpad.SetTarget(audioIn.RtpAudio.GetStaticPad("sink")) {
 		return fmt.Errorf("Failed to set target pad for ghost pad %s", name)
 	}
 
-	if !audioIn.PcmuAudio.SyncStateWithParent() {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state of pcmu-audio element with parent for pad %s", name))
+	if !audioIn.RtpAudio.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state of factorybin element with parent for pad %s", name))
 	}
 	if !audioIn.DtmfDetect.SyncStateWithParent() {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state of dtmfdetect element with parent for pad %s", name))
 	}
 
-	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Successfully linked audio pad %s with pcmu-audio decoder", name))
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Successfully linked audio pad %s with factorybin element", name))
 
 	return nil
 }
@@ -638,8 +640,8 @@ func (e *IoManagerSip) releasePadAudioIn(self *gst.Bin, _ *gst.GhostPad, pname s
 		return
 	}
 
-	if audioIn.PcmuAudio != nil {
-		if err := audioIn.PcmuAudio.SetState(gst.StateNull); err != nil {
+	if audioIn.RtpAudio != nil {
+		if err := audioIn.RtpAudio.SetState(gst.StateNull); err != nil {
 			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set decoder element to NULL state for pad %s: %v", pname, err))
 		}
 
@@ -647,7 +649,7 @@ func (e *IoManagerSip) releasePadAudioIn(self *gst.Bin, _ *gst.GhostPad, pname s
 			e.Compositor.ReleaseRequestPad(audioIn.pad)
 		}
 
-		if err := self.Remove(audioIn.PcmuAudio); err != nil {
+		if err := self.Remove(audioIn.RtpAudio); err != nil {
 			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove decoder element from SIP IO element for pad %s: %v", pname, err))
 		}
 	}
