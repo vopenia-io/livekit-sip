@@ -9,6 +9,7 @@ import (
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
+	"github.com/pion/webrtc/v4"
 )
 
 func NewWebrtcIo(log logger.Logger, parent *Pipeline) *WebrtcIo {
@@ -34,11 +35,15 @@ var _ GstChain = (*WebrtcIo)(nil)
 func (wio *WebrtcIo) Create() error {
 	var err error
 	wio.LivekitBin, err = gst.NewElementWithProperties("livekitbin", map[string]interface{}{
-		"max-active-participants": uint(6),
-		"camera":                  false,
-		"microphone":              false,
-		"screenshare":             false,
-		"screenshare-audio":       false,
+		"max-active-participants":     uint(6),
+		"camera":                      false,
+		"camera-mime-type":            webrtc.MimeTypeVP8,
+		"microphone":                  false,
+		"microphone-mime-type":        webrtc.MimeTypeOpus,
+		"screenshare":                 false,
+		"screenshare-mime-type":       webrtc.MimeTypeVP8,
+		"screenshare-audio":           false,
+		"screenshare-audio-mime-type": webrtc.MimeTypeOpus,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create livekitbin: %w", err)
