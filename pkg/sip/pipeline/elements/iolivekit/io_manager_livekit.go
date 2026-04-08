@@ -1,6 +1,7 @@
 package iolivekit
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -399,13 +400,21 @@ func (e *IoManagerLivekit) requestNewPadCameraIn(self *gst.Bin, templ *gst.PadTe
 	cameraIn := &CameraInTranscode{}
 
 	var err error
+	properties := gst.NewStructure("properties")
+	if err := errors.Join(
+		properties.SetUint("*.video-width", e.videoWidth),
+		properties.SetUint("*.video-height", e.videoHeight),
+	); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set properties for factorybin element for camera input pad: %v", err))
+		self.Error("Failed to set properties for factorybin element for camera input pad", err)
+		return nil
+	}
 	cameraIn.RTPVideo, err = gst.NewElementWithProperties("factorybin", map[string]interface{}{
 		"factories": glib.NewStrv([]string{
 			"nv-vp8-video",
 			"vp8-video",
 		}),
-		// "video-width":  e.videoWidth, // TODO: set these back when factorybin support setting child properties
-		// "video-height": e.videoHeight,
+		"child-properties": properties,
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create factorybin element for pad %s: %v", name, err))
@@ -468,13 +477,21 @@ func (e *IoManagerLivekit) requestNewPadScreenShareIn(self *gst.Bin, templ *gst.
 	screenShareIn := &ScreenShareInTranscode{}
 
 	var err error
+	properties := gst.NewStructure("properties")
+	if err := errors.Join(
+		properties.SetUint("*.video-width", e.videoWidth),
+		properties.SetUint("*.video-height", e.videoHeight),
+	); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set properties for factorybin element for screen share input pad: %v", err))
+		self.Error("Failed to set properties for factorybin element for screen share input pad", err)
+		return nil
+	}
 	screenShareIn.RTPVideo, err = gst.NewElementWithProperties("factorybin", map[string]interface{}{
 		"factories": glib.NewStrv([]string{
 			"nv-vp8-video",
 			"vp8-video",
 		}),
-		// "video-width":  e.videoWidth,
-		// "video-height": e.videoHeight,
+		"child-properties": properties,
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create factorybin element for pad %s: %v", name, err))
@@ -782,11 +799,21 @@ func (e *IoManagerLivekit) padAddedCameraOut(self *gst.Bin, pad *gst.Pad, name s
 	cameraOut := &CameraOutTranscode{}
 
 	var err error
+	properties := gst.NewStructure("properties")
+	if err := errors.Join(
+		properties.SetUint("*.video-width", e.videoWidth),
+		properties.SetUint("*.video-height", e.videoHeight),
+	); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set properties for factorybin element for camera output pad: %v", err))
+		self.Error("Failed to set properties for factorybin element for camera output pad", err)
+		return
+	}
 	cameraOut.VideoRTP, err = gst.NewElementWithProperties("factorybin", map[string]interface{}{
 		"factories": glib.NewStrv([]string{
 			"nv-video-h264",
 			"video-h264",
 		}),
+		"child-properties": properties,
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create factorybin element for camera output pad: %v", err))
@@ -845,11 +872,21 @@ func (e *IoManagerLivekit) padAddedScreenShareOut(self *gst.Bin, pad *gst.Pad, n
 	screenShareOut := &ScreenShareOutTranscode{}
 
 	var err error
+	properties := gst.NewStructure("properties")
+	if err := errors.Join(
+		properties.SetUint("*.video-width", e.videoWidth),
+		properties.SetUint("*.video-height", e.videoHeight),
+	); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set properties for factorybin element for screen share output pad: %v", err))
+		self.Error("Failed to set properties for factorybin element for screen share output pad", err)
+		return
+	}
 	screenShareOut.VideoRTP, err = gst.NewElementWithProperties("factorybin", map[string]interface{}{
 		"factories": glib.NewStrv([]string{
 			"nv-video-h264",
 			"video-h264",
 		}),
+		"child-properties": properties,
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create factorybin element for screen share output pad: %v", err))

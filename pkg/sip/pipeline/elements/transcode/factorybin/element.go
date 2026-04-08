@@ -2,7 +2,9 @@ package factorybin
 
 import (
 	"fmt"
+	"maps"
 	"slices"
+	"strings"
 	"weak"
 
 	"github.com/go-gst/go-glib/glib"
@@ -23,6 +25,13 @@ var properties = []*glib.ParamSpec{
 		glib.TYPE_STRV,
 		glib.ParameterWritable|glib.ParameterReadable|glib.ParameterConstructOnly,
 	),
+	glib.NewBoxedParam(
+		"child-properties",
+		"Child Properties",
+		"Properties to set on the created child element, in the format factory.property=value or *.property=value to apply to all factories",
+		gst.TypeStructure,
+		glib.ParameterWritable|glib.ParameterConstructOnly,
+	),
 }
 
 type FactoryCaps struct {
@@ -38,7 +47,8 @@ type FactoryBin struct {
 	SrcPad  *gst.GhostPad
 	SinkPad *gst.GhostPad
 
-	Elem *gst.Element
+	Elem       *gst.Element
+	Properties map[string]map[string]interface{}
 }
 
 func (e *FactoryBin) New() glib.GoObjectSubclass {
@@ -144,7 +154,13 @@ func (e *FactoryBin) onCapsEvent(instance *gst.Object, pad *gst.Pad, event *gst.
 		return false
 	}
 
-	elem, err := gst.NewElement(fc.Factory.GetName())
+	properties := make(map[string]interface{})
+	maps.Copy(properties, e.Properties["*"])
+	if factoryProperties, ok := e.Properties[fc.Factory.GetName()]; ok {
+		maps.Copy(properties, factoryProperties)
+	}
+
+	elem, err := gst.NewElementWithProperties(fc.Factory.GetName(), properties)
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create element from factory %s: %v", fc.Factory.GetName(), err))
 		self.Error("Failed to create element from factory", err)
@@ -174,6 +190,9 @@ func (e *FactoryBin) onCapsEvent(instance *gst.Object, pad *gst.Pad, event *gst.
 func (e *FactoryBin) InstanceInit(instance *glib.Object) {
 	self := gst.ToGstBin(instance)
 	elemClass := gst.ToElementClass(self.Class())
+
+	e.Properties = make(map[string]map[string]interface{})
+	e.Properties["*"] = make(map[string]interface{})
 
 	eweak := weak.Make(e)
 
@@ -278,6 +297,36 @@ func (e *FactoryBin) SetProperty(instance *glib.Object, id uint, value *glib.Val
 			factories = append(factories, factory)
 		}
 		e.Factories = factories
+	case "child-properties":
+		gv, err := value.GoValue()
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting child-properties property value: %v", err))
+			return
+		}
+		if gv == nil {
+			return
+		}
+		val, ok := gv.(*gst.Structure)
+		if !ok {
+			self.Log(CAT, gst.LevelError, "Invalid type for child-properties property")
+			return
+		}
+
+		properties := val.Values()
+		for k, v := range properties {
+			parts := strings.SplitN(k, ".", 2)
+			if len(parts) != 2 {
+				self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid child property key: %s", k))
+				continue
+			}
+			factoryName := parts[0]
+			propertyName := parts[1]
+
+			if _, ok := e.Properties[factoryName]; !ok {
+				e.Properties[factoryName] = make(map[string]interface{})
+			}
+			e.Properties[factoryName][propertyName] = v
+		}
 	}
 }
 
