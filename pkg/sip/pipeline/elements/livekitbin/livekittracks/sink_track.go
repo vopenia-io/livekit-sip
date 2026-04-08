@@ -163,7 +163,8 @@ func (s *SinkTrack) publishTrack(self *base.GstBaseSink) bool {
 	}
 
 	pt, err := s.Participant.PublishTrack(track, &lksdk.TrackPublicationOptions{
-		Name: fmt.Sprintf("%s_%s", s.Participant.Identity(), s.Label()),
+		Name:   fmt.Sprintf("%s_%s", s.Participant.Identity(), s.Label()),
+		Source: s.Kind,
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to publish track: %v", err))
