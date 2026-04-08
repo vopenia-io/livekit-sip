@@ -69,7 +69,7 @@ func (e *NvVideoAV1) ClassInit(klass *glib.ObjectClass) {
 		"src",
 		gst.PadDirectionSource,
 		gst.PadPresenceAlways,
-		gst.NewCapsFromString("application/x-rtp, media=(string)video, encoding-name=(string)AV1"),
+		gst.NewCapsFromString("application/x-rtp, media=(string)video, clock-rate=(int)90000, encoding-name=(string)AV1"),
 	))
 
 	class.InstallProperties(properties)

@@ -110,13 +110,14 @@ func (e *NvAv1Video) Constructed(instance *glib.Object) {
 		return
 	}
 
-	// Workaround for av1parse bug: when converting from OBU to frame alignment,
-	// pre_push_frame sets PTS on frame->buffer but the pushed buffer is
-	// frame->out_buffer, so PTS can end up as NONE. This probe fills in
-	// missing PTS from the last valid one.
 	C.add_fix_pts_probe((*C.GstElement)(unsafe.Pointer(e.AV1Parse.Instance())))
 
-	e.NvAV1Dec, err = gst.NewElementWithProperties("nvav1dec", map[string]interface{}{})
+	e.NvAV1Dec, err = gst.NewElementWithProperties("factorybin", map[string]interface{}{
+		"factories": glib.NewStrv([]string{
+			"nvav1dec",
+			"nv-av1-high-dec",
+		}),
+	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create nvav1dec element: %v", err))
 		self.Error("Failed to create nvav1dec element", err)

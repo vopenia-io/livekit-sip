@@ -11,5 +11,11 @@ func Register() bool {
 		gst.RankNone,
 		&NvAv1Video{},
 		gst.ExtendsBin,
+	) && gst.RegisterElement(
+		nil,
+		"nv-av1-high-dec",
+		gst.RankNone,
+		&NvAv1HighDec{},
+		gst.ExtendsBin,
 	)
 }
