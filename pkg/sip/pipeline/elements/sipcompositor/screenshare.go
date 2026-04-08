@@ -8,7 +8,8 @@ import (
 )
 
 type SipCompositorScreenshare struct {
-	Itentity *gst.Element
+	Format string
+	Filter *gst.Element
 }
 
 func (e *SipCompositor) initScreenshare(self *gst.Bin) error {
@@ -18,19 +19,26 @@ func (e *SipCompositor) initScreenshare(self *gst.Bin) error {
 
 	self.Log(CAT, gst.LevelInfo, "Initializing screenshare passthrough")
 	e.SipCompositorScreenshare = &SipCompositorScreenshare{}
+	if e.nvidia {
+		e.SipCompositorScreenshare.Format = "video/x-raw(memory:CUDAMemory)"
+	} else {
+		e.SipCompositorScreenshare.Format = "video/x-raw"
+	}
 
 	var err error
-	e.SipCompositorScreenshare.Itentity, err = gst.NewElementWithProperties("identity", map[string]interface{}{})
+	e.SipCompositorScreenshare.Filter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
+		"caps": gst.NewCapsFromString(fmt.Sprintf("%s, width=(int)%d, height=(int)%d", e.SipCompositorScreenshare.Format, e.videoWidth, e.videoHeight)),
+	})
 	if err != nil {
 		return err
 	}
 
-	if err := self.Add(e.SipCompositorScreenshare.Itentity); err != nil {
-		return fmt.Errorf("failed to add identity to bin: %w", err)
+	if err := self.Add(e.SipCompositorScreenshare.Filter); err != nil {
+		return fmt.Errorf("failed to add capsfilter to bin: %w", err)
 	}
 
 	class := gst.ToElementClass(self.Class())
-	gpad := gst.NewGhostPadFromTemplate(fmt.Sprintf("src_%d", livekit.TrackSource_SCREEN_SHARE), e.SipCompositorScreenshare.Itentity.GetStaticPad("src"), class.GetPadTemplate("src_%u"))
+	gpad := gst.NewGhostPadFromTemplate(fmt.Sprintf("src_%d", livekit.TrackSource_SCREEN_SHARE), e.SipCompositorScreenshare.Filter.GetStaticPad("src"), class.GetPadTemplate("src_%u"))
 	if gpad == nil {
 		return fmt.Errorf("failed to create ghost pad for screenshare source")
 	}
@@ -41,8 +49,8 @@ func (e *SipCompositor) initScreenshare(self *gst.Bin) error {
 		return fmt.Errorf("failed to add ghost pad for screenshare source to bin")
 	}
 
-	if !e.SipCompositorScreenshare.Itentity.SyncStateWithParent() {
-		self.Log(CAT, gst.LevelWarning, "Failed to sync state of identity with parent")
+	if !e.SipCompositorScreenshare.Filter.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, "Failed to sync state of capsfilter with parent")
 	}
 
 	return nil
@@ -54,7 +62,7 @@ func (e *SipCompositor) requestNewScreenshareSinkPad(self *gst.Bin, templ *gst.P
 		return nil
 	}
 
-	gpad := gst.NewGhostPadFromTemplate(name, e.SipCompositorScreenshare.Itentity.GetStaticPad("sink"), templ)
+	gpad := gst.NewGhostPadFromTemplate(name, e.SipCompositorScreenshare.Filter.GetStaticPad("sink"), templ)
 	if gpad == nil {
 		self.Log(CAT, gst.LevelError, "Failed to create ghost pad for screenshare sink")
 		return nil

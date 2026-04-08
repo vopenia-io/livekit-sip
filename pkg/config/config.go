@@ -57,8 +57,9 @@ type TLSConfig struct {
 }
 
 type VideoConfig struct {
-	Width  int `yaml:"width"`
-	Height int `yaml:"height"`
+	Width  int  `yaml:"width"`
+	Height int  `yaml:"height"`
+	Nvidia bool `yaml:"nvidia"`
 }
 
 type Config struct {

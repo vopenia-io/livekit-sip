@@ -29,6 +29,7 @@ type Pipeline struct {
 
 	videoWidth  uint
 	videoHeight uint
+	nvidia      bool
 
 	*SipIo
 	*WebrtcIo
@@ -246,6 +247,7 @@ func New(ctx context.Context, log logger.Logger, sipOpt SipOpt) (*Pipeline, erro
 		dumpCH:      make(chan bool, 1024),
 		videoWidth:  sipOpt.VideoWidth,
 		videoHeight: sipOpt.VideoHeight,
+		nvidia:      sipOpt.Nvidia,
 	}
 	p.cleanup = p.cleanupChains
 

@@ -31,26 +31,26 @@ type SipDtmfInTranscode struct {
 }
 
 type SipCameraInTranscode struct {
-	gpad      *gst.GhostPad
-	H264Video *gst.Element
-	pad       *gst.Pad
+	gpad     *gst.GhostPad
+	RTPVideo *gst.Element
+	pad      *gst.Pad
 }
 
 type SipCameraOutTranscode struct {
 	gpad     *gst.GhostPad
-	VideoVP8 *gst.Element
+	VideoRTP *gst.Element
 	pad      *gst.Pad
 }
 
 type SipScreenshareInTranscode struct {
-	gpad      *gst.GhostPad
-	H264Video *gst.Element
-	pad       *gst.Pad
+	gpad     *gst.GhostPad
+	RTPVideo *gst.Element
+	pad      *gst.Pad
 }
 
 type SipScreenshareOutTranscode struct {
 	gpad     *gst.GhostPad
-	VideoVP8 *gst.Element
+	VideoRTP *gst.Element
 	pad      *gst.Pad
 }
 
@@ -61,6 +61,7 @@ type IoManagerSip struct {
 	Compositor  *gst.Element
 	videoWidth  uint
 	videoHeight uint
+	nvidia      bool
 
 	AudioIn  map[string]*SipAudioInTranscode
 	AudioOut *SipAudioOutTranscode
@@ -111,6 +112,7 @@ func (e *IoManagerSip) InstanceInit(instance *glib.Object) {
 	e.ScreenshareIn = make(map[string]*SipScreenshareInTranscode)
 	e.videoWidth = 1280
 	e.videoHeight = 720
+	e.nvidia = false
 }
 
 func (e *IoManagerSip) Constructed(instance *glib.Object) {
@@ -122,6 +124,7 @@ func (e *IoManagerSip) Constructed(instance *glib.Object) {
 	e.Compositor, err = gst.NewElementWithProperties("sip_compositor", map[string]interface{}{
 		"video-width":  e.videoWidth,
 		"video-height": e.videoHeight,
+		"nvidia":       e.nvidia,
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create sip_compositor element: %v", err))
@@ -181,8 +184,8 @@ func (e *IoManagerSip) ChangeState(instance *gst.Element, transition gst.StateCh
 		}
 
 		if e.CameraOut != nil {
-			e.CameraOut.VideoVP8.SetState(gst.StateNull)
-			self.Remove(e.CameraOut.VideoVP8)
+			e.CameraOut.VideoRTP.SetState(gst.StateNull)
+			self.Remove(e.CameraOut.VideoRTP)
 			self.RemovePad(e.CameraOut.gpad.Pad)
 			e.CameraOut = nil
 		}
@@ -463,18 +466,20 @@ func (e *IoManagerSip) requestNewPadCameraIn(self *gst.Bin, templ *gst.PadTempla
 	cameraIn := &SipCameraInTranscode{}
 
 	var err error
-	cameraIn.H264Video, err = gst.NewElementWithProperties("nv-h264-video", map[string]interface{}{
-		"video-width":  e.videoWidth,
-		"video-height": e.videoHeight,
+	cameraIn.RTPVideo, err = gst.NewElementWithProperties("factorybin", map[string]interface{}{
+		"factories": glib.NewStrv([]string{
+			"nv-h264-video",
+			"h264-video",
+		}),
 	})
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create h264-video element for pad %s: %v", name, err))
-		self.Error(fmt.Sprintf("Failed to create h264-video element for pad %s", name), err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create factorybin element for pad %s: %v", name, err))
+		self.Error(fmt.Sprintf("Failed to create factorybin element for pad %s", name), err)
 		return nil
 	}
-	if err := self.Add(cameraIn.H264Video); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add h264-video element to SIP IO element for pad %s: %v", name, err))
-		self.Error(fmt.Sprintf("Failed to add h264-video element to SIP IO element for pad %s", name), err)
+	if err := self.Add(cameraIn.RTPVideo); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add factorybin element to SIP IO element for pad %s: %v", name, err))
+		self.Error(fmt.Sprintf("Failed to add factorybin element to SIP IO element for pad %s", name), err)
 		return nil
 	}
 
@@ -485,13 +490,13 @@ func (e *IoManagerSip) requestNewPadCameraIn(self *gst.Bin, templ *gst.PadTempla
 		return nil
 	}
 
-	if ret := cameraIn.H264Video.GetStaticPad("src").Link(cameraIn.pad); ret != gst.PadLinkOK {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link h264-video src pad to compositor pad for pad %s: %v", name, ret))
-		self.Error(fmt.Sprintf("Failed to link h264-video src pad to compositor pad for pad %s", name), fmt.Errorf("failed to link pads"))
+	if ret := cameraIn.RTPVideo.GetStaticPad("src").Link(cameraIn.pad); ret != gst.PadLinkOK {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link factorybin src pad to compositor pad for pad %s: %v", name, ret))
+		self.Error(fmt.Sprintf("Failed to link factorybin src pad to compositor pad for pad %s", name), fmt.Errorf("failed to link pads"))
 		return nil
 	}
 
-	cameraIn.gpad = gst.NewGhostPadFromTemplate(name, cameraIn.H264Video.GetStaticPad("sink"), templ)
+	cameraIn.gpad = gst.NewGhostPadFromTemplate(name, cameraIn.RTPVideo.GetStaticPad("sink"), templ)
 	if cameraIn.gpad == nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create ghost pad for pad %s", name))
 		self.Error(fmt.Sprintf("Failed to create ghost pad for pad %s", name), fmt.Errorf("gst.NewGhostPadFromTemplate returned nil"))
@@ -506,8 +511,8 @@ func (e *IoManagerSip) requestNewPadCameraIn(self *gst.Bin, templ *gst.PadTempla
 		return nil
 	}
 
-	if !cameraIn.H264Video.SyncStateWithParent() {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state of h264-video element with parent for pad %s", name))
+	if !cameraIn.RTPVideo.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state of factorybin element with parent for pad %s", name))
 	}
 
 	e.CameraIn[name] = cameraIn
@@ -528,18 +533,20 @@ func (e *IoManagerSip) requestNewPadScreenshareIn(self *gst.Bin, templ *gst.PadT
 	screenshareIn := &SipScreenshareInTranscode{}
 
 	var err error
-	screenshareIn.H264Video, err = gst.NewElementWithProperties("nv-h264-video", map[string]interface{}{
-		"video-width":  e.videoWidth,
-		"video-height": e.videoHeight,
+	screenshareIn.RTPVideo, err = gst.NewElementWithProperties("factorybin", map[string]interface{}{
+		"factories": glib.NewStrv([]string{
+			"h264-video",
+			"nv-h264-video",
+		}),
 	})
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create h264-video element for pad %s: %v", name, err))
-		self.Error(fmt.Sprintf("Failed to create h264-video element for pad %s", name), err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create factorybin element for pad %s: %v", name, err))
+		self.Error(fmt.Sprintf("Failed to create factorybin element for pad %s", name), err)
 		return nil
 	}
-	if err := self.Add(screenshareIn.H264Video); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add h264-video element to SIP IO element for pad %s: %v", name, err))
-		self.Error(fmt.Sprintf("Failed to add h264-video element to SIP IO element for pad %s", name), err)
+	if err := self.Add(screenshareIn.RTPVideo); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add factorybin element to SIP IO element for pad %s: %v", name, err))
+		self.Error(fmt.Sprintf("Failed to add factorybin element to SIP IO element for pad %s", name), err)
 		return nil
 	}
 
@@ -550,13 +557,13 @@ func (e *IoManagerSip) requestNewPadScreenshareIn(self *gst.Bin, templ *gst.PadT
 		return nil
 	}
 
-	if ret := screenshareIn.H264Video.GetStaticPad("src").Link(screenshareIn.pad); ret != gst.PadLinkOK {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link h264-video src pad to compositor pad for pad %s: %v", name, ret))
-		self.Error(fmt.Sprintf("Failed to link h264-video src pad to compositor pad for pad %s", name), fmt.Errorf("failed to link pads"))
+	if ret := screenshareIn.RTPVideo.GetStaticPad("src").Link(screenshareIn.pad); ret != gst.PadLinkOK {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link factorybin src pad to compositor pad for pad %s: %v", name, ret))
+		self.Error(fmt.Sprintf("Failed to link factorybin src pad to compositor pad for pad %s", name), fmt.Errorf("failed to link pads"))
 		return nil
 	}
 
-	screenshareIn.gpad = gst.NewGhostPadFromTemplate(name, screenshareIn.H264Video.GetStaticPad("sink"), templ)
+	screenshareIn.gpad = gst.NewGhostPadFromTemplate(name, screenshareIn.RTPVideo.GetStaticPad("sink"), templ)
 	if screenshareIn.gpad == nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create ghost pad for pad %s", name))
 		self.Error(fmt.Sprintf("Failed to create ghost pad for pad %s", name), fmt.Errorf("gst.NewGhostPadFromTemplate returned nil"))
@@ -571,8 +578,8 @@ func (e *IoManagerSip) requestNewPadScreenshareIn(self *gst.Bin, templ *gst.PadT
 		return nil
 	}
 
-	if !screenshareIn.H264Video.SyncStateWithParent() {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state of h264-video element with parent for pad %s", name))
+	if !screenshareIn.RTPVideo.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state of factorybin element with parent for pad %s", name))
 	}
 
 	e.ScreenshareIn[name] = screenshareIn
@@ -686,14 +693,14 @@ func (e *IoManagerSip) releasePadCameraIn(self *gst.Bin, _ *gst.GhostPad, pname 
 		return
 	}
 
-	if err := cameraIn.H264Video.SetState(gst.StateNull); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set h264-video element to NULL state for pad %s: %v", pname, err))
+	if err := cameraIn.RTPVideo.SetState(gst.StateNull); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set factorybin element to NULL state for pad %s: %v", pname, err))
 	}
 
 	e.Compositor.ReleaseRequestPad(cameraIn.pad)
 
-	if err := self.Remove(cameraIn.H264Video); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove h264-video element from SIP IO element for pad %s: %v", pname, err))
+	if err := self.Remove(cameraIn.RTPVideo); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove factorybin element from SIP IO element for pad %s: %v", pname, err))
 	}
 
 	delete(e.CameraIn, pname)
@@ -711,14 +718,14 @@ func (e *IoManagerSip) releasePadScreenshareIn(self *gst.Bin, _ *gst.GhostPad, p
 		return
 	}
 
-	if err := screenshareIn.H264Video.SetState(gst.StateNull); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set h264-video element to NULL state for pad %s: %v", pname, err))
+	if err := screenshareIn.RTPVideo.SetState(gst.StateNull); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set factorybin element to NULL state for pad %s: %v", pname, err))
 	}
 
 	e.Compositor.ReleaseRequestPad(screenshareIn.pad)
 
-	if err := self.Remove(screenshareIn.H264Video); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove h264-video element from SIP IO element for pad %s: %v", pname, err))
+	if err := self.Remove(screenshareIn.RTPVideo); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove factorybin element from SIP IO element for pad %s: %v", pname, err))
 	}
 
 	delete(e.ScreenshareIn, pname)
@@ -821,18 +828,20 @@ func (e *IoManagerSip) padAddedCameraOut(self *gst.Bin, pad *gst.Pad, name strin
 	cameraOut := &SipCameraOutTranscode{}
 
 	var err error
-	cameraOut.VideoVP8, err = gst.NewElementWithProperties("nv-video-vp8", map[string]interface{}{
-		"video-width":  e.videoWidth,
-		"video-height": e.videoHeight,
+	cameraOut.VideoRTP, err = gst.NewElementWithProperties("factorybin", map[string]interface{}{
+		"factories": glib.NewStrv([]string{
+			"nv-video-vp8",
+			"video-vp8",
+		}),
 	})
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create video-vp8 element for camera output pad: %v", err))
-		self.Error("Failed to create video-vp8 element for camera output pad", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create factorybin element for camera output pad: %v", err))
+		self.Error("Failed to create factorybin element for camera output pad", err)
 		return
 	}
-	if err := self.Add(cameraOut.VideoVP8); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add video-vp8 element to SIP IO element for camera output pad: %v", err))
-		self.Error("Failed to add video-vp8 element to SIP IO element for camera output pad", err)
+	if err := self.Add(cameraOut.VideoRTP); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add factorybin element to SIP IO element for camera output pad: %v", err))
+		self.Error("Failed to add factorybin element to SIP IO element for camera output pad", err)
 		return
 	}
 
@@ -840,13 +849,13 @@ func (e *IoManagerSip) padAddedCameraOut(self *gst.Bin, pad *gst.Pad, name strin
 
 	class := gst.ToElementClass(self.Class())
 
-	if ret := cameraOut.pad.Link(cameraOut.VideoVP8.GetStaticPad("sink")); ret != gst.PadLinkOK {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link camera output pad to video-vp8 sink pad: %v", ret))
-		self.Error("Failed to link camera output pad to video-vp8 sink pad", fmt.Errorf("failed to link pads"))
+	if ret := cameraOut.pad.Link(cameraOut.VideoRTP.GetStaticPad("sink")); ret != gst.PadLinkOK {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link camera output pad to factorybin sink pad: %v", ret))
+		self.Error("Failed to link camera output pad to factorybin sink pad", fmt.Errorf("failed to link pads"))
 		return
 	}
 
-	cameraOut.gpad = gst.NewGhostPadFromTemplate(fmt.Sprintf("send_rtp_src_%d", livekit.TrackSource_CAMERA), cameraOut.VideoVP8.GetStaticPad("src"), class.GetPadTemplate("send_rtp_src_%u"))
+	cameraOut.gpad = gst.NewGhostPadFromTemplate(fmt.Sprintf("send_rtp_src_%d", livekit.TrackSource_CAMERA), cameraOut.VideoRTP.GetStaticPad("src"), class.GetPadTemplate("send_rtp_src_%u"))
 	if cameraOut.gpad == nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create ghost pad for camera output pad %s", name))
 		self.Error(fmt.Sprintf("Failed to create ghost pad for camera output pad %s", name), fmt.Errorf("gst.NewGhostPadFromTemplate returned nil"))
@@ -861,8 +870,8 @@ func (e *IoManagerSip) padAddedCameraOut(self *gst.Bin, pad *gst.Pad, name strin
 		return
 	}
 
-	if !cameraOut.VideoVP8.SyncStateWithParent() {
-		self.Log(CAT, gst.LevelWarning, "Failed to sync state of video-vp8 element with parent")
+	if !cameraOut.VideoRTP.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, "Failed to sync state of factorybin element with parent")
 	}
 
 	e.CameraOut = cameraOut
@@ -882,18 +891,20 @@ func (e *IoManagerSip) padAddedScreenshareOut(self *gst.Bin, pad *gst.Pad, name 
 	screenshareOut := &SipScreenshareOutTranscode{}
 
 	var err error
-	screenshareOut.VideoVP8, err = gst.NewElementWithProperties("nv-video-vp8", map[string]interface{}{
-		"video-width":  e.videoWidth,
-		"video-height": e.videoHeight,
+	screenshareOut.VideoRTP, err = gst.NewElementWithProperties("factorybin", map[string]interface{}{
+		"factories": glib.NewStrv([]string{
+			"nv-video-vp8",
+			"video-vp8",
+		}),
 	})
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create video-vp8 element for screenshare output pad: %v", err))
-		self.Error("Failed to create video-vp8 element for screenshare output pad", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create factorybin element for screenshare output pad: %v", err))
+		self.Error("Failed to create factorybin element for screenshare output pad", err)
 		return
 	}
-	if err := self.Add(screenshareOut.VideoVP8); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add video-vp8 element to SIP IO element for screenshare output pad: %v", err))
-		self.Error("Failed to add video-vp8 element to SIP IO element for screenshare output pad", err)
+	if err := self.Add(screenshareOut.VideoRTP); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add factorybin element to SIP IO element for screenshare output pad: %v", err))
+		self.Error("Failed to add factorybin element to SIP IO element for screenshare output pad", err)
 		return
 	}
 
@@ -901,13 +912,13 @@ func (e *IoManagerSip) padAddedScreenshareOut(self *gst.Bin, pad *gst.Pad, name 
 
 	class := gst.ToElementClass(self.Class())
 
-	if ret := screenshareOut.pad.Link(screenshareOut.VideoVP8.GetStaticPad("sink")); ret != gst.PadLinkOK {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link screenshare output pad to video-vp8 sink pad: %v", ret))
-		self.Error("Failed to link screenshare output pad to video-vp8 sink pad", fmt.Errorf("failed to link pads"))
+	if ret := screenshareOut.pad.Link(screenshareOut.VideoRTP.GetStaticPad("sink")); ret != gst.PadLinkOK {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link screenshare output pad to factorybin sink pad: %v", ret))
+		self.Error("Failed to link screenshare output pad to factorybin sink pad", fmt.Errorf("failed to link pads"))
 		return
 	}
 
-	screenshareOut.gpad = gst.NewGhostPadFromTemplate(fmt.Sprintf("send_rtp_src_%d", livekit.TrackSource_SCREEN_SHARE), screenshareOut.VideoVP8.GetStaticPad("src"), class.GetPadTemplate("send_rtp_src_%u"))
+	screenshareOut.gpad = gst.NewGhostPadFromTemplate(fmt.Sprintf("send_rtp_src_%d", livekit.TrackSource_SCREEN_SHARE), screenshareOut.VideoRTP.GetStaticPad("src"), class.GetPadTemplate("send_rtp_src_%u"))
 	if screenshareOut.gpad == nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create ghost pad for screenshare output pad %s", name))
 		self.Error(fmt.Sprintf("Failed to create ghost pad for screenshare output pad %s", name), fmt.Errorf("gst.NewGhostPadFromTemplate returned nil"))
@@ -922,8 +933,8 @@ func (e *IoManagerSip) padAddedScreenshareOut(self *gst.Bin, pad *gst.Pad, name 
 		return
 	}
 
-	if !screenshareOut.VideoVP8.SyncStateWithParent() {
-		self.Log(CAT, gst.LevelWarning, "Failed to sync state of video-vp8 element with parent")
+	if !screenshareOut.VideoRTP.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, "Failed to sync state of factorybin element with parent")
 	}
 
 	e.ScreenshareOut = screenshareOut
@@ -991,12 +1002,12 @@ func (e *IoManagerSip) padRemovedCameraOut(self *gst.Bin, pad *gst.Pad, name str
 		return
 	}
 
-	if err := e.CameraOut.VideoVP8.SetState(gst.StateNull); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set video-vp8 element to NULL state for pad %s: %v", name, err))
+	if err := e.CameraOut.VideoRTP.SetState(gst.StateNull); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set factorybin element to NULL state for pad %s: %v", name, err))
 	}
 
-	if err := self.Remove(e.CameraOut.VideoVP8); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove video-vp8 element from SIP IO element for pad %s: %v", name, err))
+	if err := self.Remove(e.CameraOut.VideoRTP); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove factorybin element from SIP IO element for pad %s: %v", name, err))
 	}
 
 	if !self.RemovePad(e.CameraOut.gpad.Pad) {
@@ -1017,12 +1028,12 @@ func (e *IoManagerSip) padRemovedScreenshareOut(self *gst.Bin, pad *gst.Pad, nam
 		return
 	}
 
-	if err := e.ScreenshareOut.VideoVP8.SetState(gst.StateNull); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set video-vp8 element to NULL state for pad %s: %v", name, err))
+	if err := e.ScreenshareOut.VideoRTP.SetState(gst.StateNull); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set factorybin element to NULL state for pad %s: %v", name, err))
 	}
 
-	if err := self.Remove(e.ScreenshareOut.VideoVP8); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove video-vp8 element from SIP IO element for pad %s: %v", name, err))
+	if err := self.Remove(e.ScreenshareOut.VideoRTP); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove factorybin element from SIP IO element for pad %s: %v", name, err))
 	}
 
 	if !self.RemovePad(e.ScreenshareOut.gpad.Pad) {

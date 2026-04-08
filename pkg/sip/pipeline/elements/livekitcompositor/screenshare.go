@@ -10,7 +10,9 @@ import (
 )
 
 type LivekitCompositorScreenshare struct {
+	Format         string
 	FallbackSwitch *gst.Element
+	Filter         *gst.Element
 	priority       atomic.Int64
 	gpad           *gst.GhostPad
 }
@@ -22,6 +24,12 @@ func (e *LivekitCompositor) initScreenshare(self *gst.Bin) error {
 
 	self.Log(CAT, gst.LevelInfo, "Initializing screenshare compositor")
 	e.LivekitCompositorScreenshare = &LivekitCompositorScreenshare{}
+	if e.nvidia {
+		e.LivekitCompositorScreenshare.Format = "video/x-raw(memory:CUDAMemory)"
+	} else {
+		e.LivekitCompositorScreenshare.Format = "video/x-raw"
+	}
+
 	e.LivekitCompositorScreenshare.priority.Store(math.MaxInt64)
 
 	var err error
@@ -30,12 +38,19 @@ func (e *LivekitCompositor) initScreenshare(self *gst.Bin) error {
 		return err
 	}
 
-	if err := self.Add(e.LivekitCompositorScreenshare.FallbackSwitch); err != nil {
-		return fmt.Errorf("failed to add fallbackswitch to bin: %w", err)
+	e.LivekitCompositorScreenshare.Filter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
+		"caps": gst.NewCapsFromString(fmt.Sprintf("%s, format=(string)I420, width=(int)%d, height=(int)%d", e.LivekitCompositorScreenshare.Format, e.videoWidth, e.videoHeight)),
+	})
+	if err != nil {
+		return err
+	}
+
+	if err := self.AddMany(e.LivekitCompositorScreenshare.FallbackSwitch, e.LivekitCompositorScreenshare.Filter); err != nil {
+		return fmt.Errorf("failed to add elements to bin: %w", err)
 	}
 
 	class := gst.ToElementClass(self.Class())
-	gpad := gst.NewGhostPadFromTemplate(fmt.Sprintf("src_%d", livekit.TrackSource_SCREEN_SHARE), e.LivekitCompositorScreenshare.FallbackSwitch.GetStaticPad("src"), class.GetPadTemplate("src_%u"))
+	gpad := gst.NewGhostPadFromTemplate(fmt.Sprintf("src_%d", livekit.TrackSource_SCREEN_SHARE), e.LivekitCompositorScreenshare.Filter.GetStaticPad("src"), class.GetPadTemplate("src_%u"))
 	if gpad == nil {
 		return fmt.Errorf("failed to create ghost pad for screenshare source")
 	}

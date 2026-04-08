@@ -33,6 +33,7 @@ type LivekitCompositor struct {
 
 	videoWidth  uint
 	videoHeight uint
+	nvidia      bool
 
 	*LivekitCompositorMicrophone
 	*LivekitCompositorCamera
@@ -94,6 +95,7 @@ func (e *LivekitCompositor) InstanceInit(instance *glib.Object) {
 	e.participants = make(map[string]ParticipantInfo)
 	e.videoWidth = 1280
 	e.videoHeight = 720
+	e.nvidia = false
 }
 
 func (e *LivekitCompositor) Constructed(instance *glib.Object) {

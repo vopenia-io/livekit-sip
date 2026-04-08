@@ -26,6 +26,13 @@ var properties = []*glib.ParamSpec{
 		720,
 		glib.ParameterWritable|glib.ParameterConstructOnly,
 	),
+	glib.NewBoolParam(
+		"nvidia",
+		"NVIDIA Hardware Acceleration",
+		"Whether to use NVIDIA hardware acceleration for video processing (crash if enabled but not available)",
+		false,
+		glib.ParameterWritable|glib.ParameterConstructOnly,
+	),
 }
 
 func (e *SipCompositor) SetProperty(instance *glib.Object, id uint, value *glib.Value) {
@@ -64,5 +71,17 @@ func (e *SipCompositor) SetProperty(instance *glib.Object, id uint, value *glib.
 			return
 		}
 		e.videoHeight = val
+	case "nvidia":
+		gv, err := value.GoValue()
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting nvidia property value: %v", err))
+			return
+		}
+		val, ok := gv.(bool)
+		if !ok {
+			self.Log(CAT, gst.LevelError, "Invalid type for nvidia property")
+			return
+		}
+		e.nvidia = val
 	}
 }

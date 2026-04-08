@@ -33,6 +33,13 @@ var properties = []*glib.ParamSpec{
 		720,
 		glib.ParameterWritable|glib.ParameterConstructOnly,
 	),
+	glib.NewBoolParam(
+		"nvidia",
+		"NVIDIA Hardware Acceleration",
+		"Whether to use NVIDIA hardware acceleration for video processing (crash if enabled but not available)",
+		false,
+		glib.ParameterReadable|glib.ParameterWritable|glib.ParameterConstructOnly,
+	),
 }
 
 func (e *LivekitCompositor) SetProperty(instance *glib.Object, id uint, value *glib.Value) {
@@ -71,6 +78,20 @@ func (e *LivekitCompositor) SetProperty(instance *glib.Object, id uint, value *g
 			return
 		}
 		e.videoHeight = val
+	case "nvidia":
+		gv, err := value.GoValue()
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting nvidia property value: %v", err))
+			return
+		}
+		val, ok := gv.(bool)
+		if !ok {
+			self.Log(CAT, gst.LevelError, "Invalid type for nvidia property")
+			return
+		}
+		e.nvidia = val
+	default:
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown property %s", param.Name()))
 	}
 }
 
@@ -84,6 +105,13 @@ func (e *LivekitCompositor) GetProperty(instance *glib.Object, id uint) *glib.Va
 		value, err := glib.GValue(glib.NewStrv(e.currentLayout))
 		if err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting current-layout property value: %v", err))
+			return nil
+		}
+		return value
+	case "nvidia":
+		value, err := glib.GValue(e.nvidia)
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting nvidia property value: %v", err))
 			return nil
 		}
 		return value

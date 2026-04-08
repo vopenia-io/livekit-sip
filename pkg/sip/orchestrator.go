@@ -123,6 +123,7 @@ func (o *MediaOrchestrator) init() error {
 		PortEnd:     uint16(o.opts.Ports.End),
 		VideoWidth:  o.opts.VideoWidth,
 		VideoHeight: o.opts.VideoHeight,
+		Nvidia:      o.opts.Nvidia,
 	})
 	if err != nil {
 		return fmt.Errorf("could not create pipeline: %w", err)

@@ -8,7 +8,8 @@ import (
 )
 
 type SipCompositorCamera struct {
-	Identity *gst.Element
+	Format string
+	Filter *gst.Element
 }
 
 func (e *SipCompositor) initCamera(self *gst.Bin) error {
@@ -18,19 +19,26 @@ func (e *SipCompositor) initCamera(self *gst.Bin) error {
 
 	self.Log(CAT, gst.LevelInfo, "Initializing camera passthrough")
 	e.SipCompositorCamera = &SipCompositorCamera{}
+	if e.nvidia {
+		e.SipCompositorCamera.Format = "video/x-raw(memory:CUDAMemory)"
+	} else {
+		e.SipCompositorCamera.Format = "video/x-raw"
+	}
 
 	var err error
-	e.SipCompositorCamera.Identity, err = gst.NewElementWithProperties("identity", map[string]interface{}{})
+	e.SipCompositorCamera.Filter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
+		"caps": gst.NewCapsFromString(fmt.Sprintf("%s, width=(int)%d, height=(int)%d", e.SipCompositorCamera.Format, e.videoWidth, e.videoHeight)),
+	})
 	if err != nil {
 		return err
 	}
 
-	if err := self.Add(e.SipCompositorCamera.Identity); err != nil {
-		return fmt.Errorf("failed to add identity to bin: %w", err)
+	if err := self.Add(e.SipCompositorCamera.Filter); err != nil {
+		return fmt.Errorf("failed to add capsfilter to bin: %w", err)
 	}
 
 	class := gst.ToElementClass(self.Class())
-	gpad := gst.NewGhostPadFromTemplate(fmt.Sprintf("src_%d", livekit.TrackSource_CAMERA), e.SipCompositorCamera.Identity.GetStaticPad("src"), class.GetPadTemplate("src_%u"))
+	gpad := gst.NewGhostPadFromTemplate(fmt.Sprintf("src_%d", livekit.TrackSource_CAMERA), e.SipCompositorCamera.Filter.GetStaticPad("src"), class.GetPadTemplate("src_%u"))
 	if gpad == nil {
 		return fmt.Errorf("failed to create ghost pad for camera source")
 	}
@@ -41,8 +49,8 @@ func (e *SipCompositor) initCamera(self *gst.Bin) error {
 		return fmt.Errorf("failed to add ghost pad for camera source to bin")
 	}
 
-	if !e.SipCompositorCamera.Identity.SyncStateWithParent() {
-		self.Log(CAT, gst.LevelWarning, "Failed to sync state of identity with parent")
+	if !e.SipCompositorCamera.Filter.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, "Failed to sync state of capsfilter with parent")
 	}
 
 	return nil
@@ -54,7 +62,7 @@ func (e *SipCompositor) requestNewCameraSinkPad(self *gst.Bin, templ *gst.PadTem
 		return nil
 	}
 
-	gpad := gst.NewGhostPadFromTemplate(name, e.SipCompositorCamera.Identity.GetStaticPad("sink"), templ)
+	gpad := gst.NewGhostPadFromTemplate(name, e.SipCompositorCamera.Filter.GetStaticPad("sink"), templ)
 	if gpad == nil {
 		self.Log(CAT, gst.LevelError, "Failed to create ghost pad for camera sink")
 		return nil

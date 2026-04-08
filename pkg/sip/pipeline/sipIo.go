@@ -27,6 +27,7 @@ type SipOpt struct {
 	PortEnd     uint16
 	VideoWidth  uint
 	VideoHeight uint
+	Nvidia      bool
 }
 
 type SipIo struct {
@@ -85,8 +86,8 @@ func (sio *SipIo) Create() error {
 	var err error
 
 	formatCaps := []*gst.Caps{
-		gst.NewCapsFromString("application/x-rtp,media=audio,encoding-name=PCMU,clock-rate=8000"),
-		// gst.NewCapsFromString("application/x-rtp,media=audio,encoding-name=PCMA,clock-rate=8000"), // TODO: fix g711-audio and then enable that back
+		// gst.NewCapsFromString("application/x-rtp,media=audio,encoding-name=PCMU,clock-rate=8000"),
+		gst.NewCapsFromString("application/x-rtp,media=audio,encoding-name=PCMA,clock-rate=8000"), // TODO: fix g711-audio and then enable that back
 		gst.NewCapsFromString("application/x-rtp,media=video,encoding-name=H264,clock-rate=90000,packetization-mode=(string)1,profile-level-id=640029"),
 		makeH264HighCaps(),
 		gst.NewCapsFromString("application/x-rtp,media=video,encoding-name=H264,clock-rate=90000,packetization-mode=(string)1,profile-level-id=4d0029"),

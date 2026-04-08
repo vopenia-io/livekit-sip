@@ -814,6 +814,7 @@ func (c *inboundCall) handleInvite(ctx context.Context, tid traceid.ID, req *sip
 		NoInputResample:     !RoomResample,
 		VideoWidth:          uint(c.s.conf.Video.Width),
 		VideoHeight:         uint(c.s.conf.Video.Height),
+		Nvidia:              c.s.conf.Video.Nvidia,
 	}
 
 	orchestrator, err := NewMediaOrchestrator(c.log(), c.ctx, c.cc, opts)

@@ -224,6 +224,7 @@ type MediaOptions struct {
 	NoInputResample     bool
 	VideoWidth          uint
 	VideoHeight         uint
+	Nvidia              bool
 }
 
 func NewMediaPort(tid traceid.ID, log logger.Logger, mon *stats.CallMonitor, opts *MediaOptions, sampleRate int) (*MediaPort, error) {

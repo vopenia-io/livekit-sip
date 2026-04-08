@@ -20,6 +20,7 @@ type SipCompositor struct {
 
 	videoWidth  uint
 	videoHeight uint
+	nvidia      bool
 
 	*SipCompositorMicrophone
 	*SipCompositorCamera
@@ -59,6 +60,7 @@ func (e *SipCompositor) ClassInit(klass *glib.ObjectClass) {
 func (e *SipCompositor) InstanceInit(instance *glib.Object) {
 	e.videoWidth = 1280
 	e.videoHeight = 720
+	e.nvidia = false
 }
 
 func (e *SipCompositor) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
