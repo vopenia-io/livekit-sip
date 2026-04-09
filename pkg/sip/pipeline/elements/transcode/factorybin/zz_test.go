@@ -259,7 +259,7 @@ func runCapsEventPipeline(t *testing.T, codec string) string {
 		case gst.MessageError:
 			gerr := msg.ParseError()
 			dotData := pipeline.DebugBinToDotData(gst.DebugGraphShowAll)
-			os.WriteFile(pipelineName+".dot", []byte(dotData), 0644)
+			os.WriteFile(pipelineName+"_test.dot", []byte(dotData), 0644)
 			t.Fatal("pipeline error:", gerr.Error())
 		}
 	}
@@ -267,7 +267,7 @@ func runCapsEventPipeline(t *testing.T, codec string) string {
 
 done:
 	dotData := pipeline.DebugBinToDotData(gst.DebugGraphShowAll)
-	if err := os.WriteFile(pipelineName+".dot", []byte(dotData), 0644); err != nil {
+	if err := os.WriteFile(pipelineName+"_test.dot", []byte(dotData), 0644); err != nil {
 		t.Logf("failed to write DOT file: %v", err)
 	}
 
@@ -378,12 +378,12 @@ func runEncodePipeline(t *testing.T, codec string) string {
 	case <-capsSeen:
 	case <-time.After(15 * time.Second):
 		dotData := pipeline.DebugBinToDotData(gst.DebugGraphShowAll)
-		os.WriteFile(pipelineName+".dot", []byte(dotData), 0644)
+		os.WriteFile(pipelineName+"_test.dot", []byte(dotData), 0644)
 		t.Fatal("timed out waiting for caps event on factorybin sink")
 	}
 
 	dotData := pipeline.DebugBinToDotData(gst.DebugGraphShowAll)
-	if err := os.WriteFile(pipelineName+".dot", []byte(dotData), 0644); err != nil {
+	if err := os.WriteFile(pipelineName+"_test.dot", []byte(dotData), 0644); err != nil {
 		t.Logf("failed to write DOT file: %v", err)
 	}
 

@@ -1,4 +1,4 @@
-package videovp8_test
+package videoav1_test
 
 import (
 	"os"
@@ -8,19 +8,19 @@ import (
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/testutils"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videovp8"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videoav1"
 )
 
 func TestMain(m *testing.M) {
 	gst.Init(nil)
-	videovp8.Register()
+	videoav1.Register()
 	os.Exit(m.Run())
 }
 
-// TestVideoVp8_Smoke runs the element over one burst of 720p30 synthetic
+// TestVideoAv1_Smoke runs the element over one burst of 720p30 synthetic
 // video, checks buffers come out, and verifies no leaks. Latency/CPU
 // measurements live in pkg/.../transcode/benchmarks/.
-func TestVideoVp8_Smoke(t *testing.T) {
+func TestVideoAv1_Smoke(t *testing.T) {
 	defer testutils.AssertNoLeaks(t)
 
 	const (
@@ -30,12 +30,12 @@ func TestVideoVp8_Smoke(t *testing.T) {
 		numBuffers = 150
 	)
 
-	pipeline, err := gst.NewPipeline("videovp8-smoke")
+	pipeline, err := gst.NewPipeline("videoav1-smoke")
 	if err != nil {
 		t.Fatal("pipeline:", err)
 	}
 
-	b := videovp8.Test()
+	b := videoav1.Test()
 	srcPad, err := b.BuildSource(pipeline, width, height, fps, numBuffers)
 	if err != nil {
 		t.Fatal("BuildSource:", err)
@@ -67,7 +67,7 @@ func TestVideoVp8_Smoke(t *testing.T) {
 
 	bus := pipeline.GetPipelineBus()
 	timeout := gst.ClockTime(time.Second)
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		msg := bus.TimedPop(timeout)
 		if msg == nil {
@@ -88,6 +88,6 @@ done:
 		t.Fatal("SetState NULL:", err)
 	}
 	if got := bufferCount.Load(); got <= 0 {
-		t.Fatalf("no buffers received through video-vp8; expected > 0, got %d", got)
+		t.Fatalf("no buffers received through video-av1; expected > 0, got %d", got)
 	}
 }

@@ -3,6 +3,7 @@ package rtph264capsintersect
 import (
 	"fmt"
 	"os"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -602,6 +603,65 @@ func runPipelineTest(t *testing.T, name, plid string, expectDownscale bool) {
 	if !expectDownscale && (w < 1280 || h < 720) {
 		t.Errorf("expected 720p passthrough, got %dx%d", w, h)
 	}
+}
+
+// TestPipeline_PreservesPTS verifies that rtph264capsintersect forwards
+// buffers through GstBaseTransform passthrough mode without altering PTS.
+// We tap the element's own sink and src pads and assert that the sequence
+// of PTS values observed on the way in matches the sequence on the way out.
+func TestPipeline_PreservesPTS(t *testing.T) {
+	defer testutils.AssertNoLeaks(t)
+
+	pipeline, intersect, scaleCapsFilter, sink := buildTestPipeline(t, "preserves_pts", "42e01f")
+
+	intersect.Connect("max-resolution", func(_ *gst.Element, w, h int) {
+		scaleCapsFilter.SetProperty("caps", gst.NewCapsFromString(
+			fmt.Sprintf("video/x-raw, width=[1,%d], height=[1,%d], pixel-aspect-ratio=1/1", w, h)))
+	})
+
+	var inPTS, outPTS []gst.ClockTime
+	var mu sync.Mutex
+
+	// Use BUFFER-only mask on both sides. GStreamer's push_list falls back to
+	// per-buffer pushes when no BUFFER_LIST probe is registered, so a pure
+	// BUFFER probe sees every buffer exactly once regardless of whether the
+	// upstream element pushes lists or individual buffers.
+	collect := func(slot *[]gst.ClockTime) func(self *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+		return func(self *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+			if buf := info.GetBuffer(); buf != nil {
+				mu.Lock()
+				*slot = append(*slot, buf.PresentationTimestamp())
+				mu.Unlock()
+			}
+			return gst.PadProbeOK
+		}
+	}
+
+	sinkPad := intersect.GetStaticPad("sink")
+	srcPad := intersect.GetStaticPad("src")
+	sinkPad.AddProbe(gst.PadProbeTypeBuffer, collect(&inPTS))
+	srcPad.AddProbe(gst.PadProbeTypeBuffer, collect(&outPTS))
+
+	count := runTestPipeline(t, pipeline, sink, "rtph264capsintersect_preserves_pts_test.dot")
+	if count <= 0 {
+		t.Fatal("no buffers received at fakesink")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(inPTS) == 0 {
+		t.Fatal("no buffers observed on intersect sink pad")
+	}
+	if len(inPTS) != len(outPTS) {
+		t.Fatalf("buffer count mismatch: in=%d out=%d", len(inPTS), len(outPTS))
+	}
+	for i := range inPTS {
+		if inPTS[i] != outPTS[i] {
+			t.Errorf("PTS[%d] mismatch: in=%v out=%v", i, inPTS[i], outPTS[i])
+		}
+	}
+	t.Logf("verified %d buffers with identical PTS across rtph264capsintersect", len(inPTS))
 }
 
 func TestPipeline_ProfileLevelID(t *testing.T) {

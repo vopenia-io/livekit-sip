@@ -1,4 +1,4 @@
-package videovp8_test
+package nvvideoh264_test
 
 import (
 	"os"
@@ -7,20 +7,22 @@ import (
 	"time"
 
 	"github.com/go-gst/go-gst/gst"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/rtph264capsintersect"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/testutils"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videovp8"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvvideoh264"
 )
 
 func TestMain(m *testing.M) {
 	gst.Init(nil)
-	videovp8.Register()
+	rtph264capsintersect.Register()
+	nvvideoh264.Register()
 	os.Exit(m.Run())
 }
 
-// TestVideoVp8_Smoke runs the element over one burst of 720p30 synthetic
-// video, checks buffers come out, and verifies no leaks. Latency/CPU
-// measurements live in pkg/.../transcode/benchmarks/.
-func TestVideoVp8_Smoke(t *testing.T) {
+// TestNvVideoH264_Smoke runs the element over one burst of 720p30
+// synthetic video, checks buffers come out, and verifies no leaks.
+// Latency/CPU measurements live in pkg/.../transcode/benchmarks/.
+func TestNvVideoH264_Smoke(t *testing.T) {
 	defer testutils.AssertNoLeaks(t)
 
 	const (
@@ -30,12 +32,12 @@ func TestVideoVp8_Smoke(t *testing.T) {
 		numBuffers = 150
 	)
 
-	pipeline, err := gst.NewPipeline("videovp8-smoke")
+	pipeline, err := gst.NewPipeline("nvvideoh264-smoke")
 	if err != nil {
 		t.Fatal("pipeline:", err)
 	}
 
-	b := videovp8.Test()
+	b := nvvideoh264.Test()
 	srcPad, err := b.BuildSource(pipeline, width, height, fps, numBuffers)
 	if err != nil {
 		t.Fatal("BuildSource:", err)
@@ -88,6 +90,6 @@ done:
 		t.Fatal("SetState NULL:", err)
 	}
 	if got := bufferCount.Load(); got <= 0 {
-		t.Fatalf("no buffers received through video-vp8; expected > 0, got %d", got)
+		t.Fatalf("no buffers received through nv-video-h264; expected > 0, got %d", got)
 	}
 }

@@ -1,4 +1,4 @@
-package videovp8_test
+package videovp9_test
 
 import (
 	"os"
@@ -8,19 +8,21 @@ import (
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/testutils"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videovp8"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videovp9"
 )
 
 func TestMain(m *testing.M) {
+	// testutils.init() sets GST_TRACERS/GST_DEBUG before gst.Init reads
+	// them, triggered automatically by importing testutils below.
 	gst.Init(nil)
-	videovp8.Register()
+	videovp9.Register()
 	os.Exit(m.Run())
 }
 
-// TestVideoVp8_Smoke runs the element over one burst of 720p30 synthetic
+// TestVideoVp9_Smoke runs the element over one burst of 720p30 synthetic
 // video, checks buffers come out, and verifies no leaks. Latency/CPU
 // measurements live in pkg/.../transcode/benchmarks/.
-func TestVideoVp8_Smoke(t *testing.T) {
+func TestVideoVp9_Smoke(t *testing.T) {
 	defer testutils.AssertNoLeaks(t)
 
 	const (
@@ -30,12 +32,12 @@ func TestVideoVp8_Smoke(t *testing.T) {
 		numBuffers = 150
 	)
 
-	pipeline, err := gst.NewPipeline("videovp8-smoke")
+	pipeline, err := gst.NewPipeline("videovp9-smoke")
 	if err != nil {
 		t.Fatal("pipeline:", err)
 	}
 
-	b := videovp8.Test()
+	b := videovp9.Test()
 	srcPad, err := b.BuildSource(pipeline, width, height, fps, numBuffers)
 	if err != nil {
 		t.Fatal("BuildSource:", err)
@@ -88,6 +90,6 @@ done:
 		t.Fatal("SetState NULL:", err)
 	}
 	if got := bufferCount.Load(); got <= 0 {
-		t.Fatalf("no buffers received through video-vp8; expected > 0, got %d", got)
+		t.Fatalf("no buffers received through video-vp9; expected > 0, got %d", got)
 	}
 }

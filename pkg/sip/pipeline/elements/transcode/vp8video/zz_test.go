@@ -1,4 +1,4 @@
-package vp8video
+package vp8video_test
 
 import (
 	"os"
@@ -6,118 +6,88 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/testutils"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/vp8video"
 )
 
 func TestMain(m *testing.M) {
-	glib.SetEnv("GST_DEBUG", glib.GetEnv("GST_DEBUG")+",vp8-video:5", true)
 	gst.Init(nil)
-	Register()
+	vp8video.Register()
 	os.Exit(m.Run())
 }
 
-func TestVp8Video_Pipeline(t *testing.T) {
+// TestVp8Video_Smoke runs the element over one burst of 720p30 synthetic
+// video, checks buffers come out, and verifies no leaks. Latency/CPU
+// measurements live in pkg/.../transcode/benchmarks/.
+func TestVp8Video_Smoke(t *testing.T) {
 	defer testutils.AssertNoLeaks(t)
 
-	pipeline, err := gst.NewPipeline("test-vp8-video")
+	const (
+		width      = 1280
+		height     = 720
+		fps        = 30
+		numBuffers = 150
+	)
+
+	pipeline, err := gst.NewPipeline("vp8video-smoke")
 	if err != nil {
-		t.Fatal("failed to create pipeline:", err)
+		t.Fatal("pipeline:", err)
 	}
 
-	videoSrc, err := gst.NewElement("videotestsrc")
+	b := vp8video.Test()
+	srcPad, err := b.BuildSource(pipeline, width, height, fps, numBuffers)
 	if err != nil {
-		t.Fatal("failed to create videotestsrc:", err)
+		t.Fatal("BuildSource:", err)
 	}
-	videoSrc.SetProperty("num-buffers", 150)
-
-	capsFilter, err := gst.NewElement("capsfilter")
+	eut, err := b.BuildElement(pipeline, width, height)
 	if err != nil {
-		t.Fatal("failed to create capsfilter:", err)
+		t.Fatal("BuildElement:", err)
 	}
-	capsFilter.SetProperty("caps", gst.NewCapsFromString("video/x-raw,width=320,height=240,framerate=15/1"))
-
-	encoder, err := gst.NewElementWithProperties("vp8enc", map[string]interface{}{
-		"deadline":  1,
-		"cpu-used":  8,
-	})
+	sinkPad, err := b.BuildSink(pipeline)
 	if err != nil {
-		t.Fatal("failed to create vp8enc:", err)
+		t.Fatal("BuildSink:", err)
 	}
-
-	payloader, err := gst.NewElement("rtpvp8pay")
-	if err != nil {
-		t.Fatal("failed to create rtpvp8pay:", err)
+	if ret := srcPad.Link(eut.GetStaticPad("sink")); ret != gst.PadLinkOK {
+		t.Fatal("link source -> eut:", ret)
 	}
-
-	transcoder, err := gst.NewElement("vp8-video")
-	if err != nil {
-		t.Fatal("failed to create vp8-video:", err)
-	}
-
-	sink, err := gst.NewElement("fakesink")
-	if err != nil {
-		t.Fatal("failed to create fakesink:", err)
-	}
-	sink.SetProperty("sync", false)
-
-	if err := pipeline.AddMany(videoSrc, capsFilter, encoder, payloader, transcoder, sink); err != nil {
-		t.Fatal("failed to add elements to pipeline:", err)
-	}
-
-	if err := gst.ElementLinkMany(videoSrc, capsFilter, encoder, payloader, transcoder, sink); err != nil {
-		t.Fatal("failed to link elements:", err)
+	if ret := eut.GetStaticPad("src").Link(sinkPad); ret != gst.PadLinkOK {
+		t.Fatal("link eut -> sink:", ret)
 	}
 
 	var bufferCount atomic.Int32
-	sinkPad := sink.GetStaticPad("sink")
-	if sinkPad == nil {
-		t.Fatal("failed to get sink pad from fakesink")
-	}
-	sinkPad.AddProbe(gst.PadProbeTypeBuffer|gst.PadProbeTypeBufferList, func(self *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+	sinkPad.AddProbe(gst.PadProbeTypeBuffer|gst.PadProbeTypeBufferList, func(_ *gst.Pad, _ *gst.PadProbeInfo) gst.PadProbeReturn {
 		bufferCount.Add(1)
 		return gst.PadProbeOK
 	})
 
 	if err := pipeline.SetState(gst.StatePlaying); err != nil {
-		t.Fatal("failed to set pipeline to PLAYING:", err)
+		t.Fatal("SetState PLAYING:", err)
 	}
 
 	bus := pipeline.GetPipelineBus()
 	timeout := gst.ClockTime(time.Second)
-	deadline := time.Now().Add(60 * time.Second)
-
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		msg := bus.TimedPop(timeout)
 		if msg == nil {
 			continue
 		}
-
 		switch msg.Type() {
 		case gst.MessageEOS:
-			t.Log("received EOS")
 			goto done
 		case gst.MessageError:
 			gerr := msg.ParseError()
 			t.Fatal("pipeline error:", gerr.Error())
 		}
 	}
-	t.Fatal("pipeline timed out waiting for EOS")
+	t.Fatal("timed out waiting for EOS")
 
 done:
-	dotData := pipeline.DebugBinToDotData(gst.DebugGraphShowAll)
-	if err := os.WriteFile("vp8_video_test.dot", []byte(dotData), 0644); err != nil {
-		t.Logf("failed to write DOT file: %v", err)
-	}
-
 	if err := pipeline.SetState(gst.StateNull); err != nil {
-		t.Fatal("failed to set pipeline to NULL:", err)
+		t.Fatal("SetState NULL:", err)
 	}
-
-	count := bufferCount.Load()
-	t.Logf("received %d buffers", count)
-	if count <= 0 {
-		t.Fatal("no buffers received through vp8-video element")
+	if got := bufferCount.Load(); got <= 0 {
+		t.Fatalf("no buffers received through vp8-video; expected > 0, got %d", got)
 	}
 }
