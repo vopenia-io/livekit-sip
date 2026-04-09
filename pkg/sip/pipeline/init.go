@@ -63,6 +63,7 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audioopus"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audiopcma"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audiopcmu"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/av1video"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/dtmfaudio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/factorybin"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/h264video"
@@ -78,6 +79,7 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/pcm16audio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/pcmaaudio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/pcmuaudio"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videoav1"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videoh264"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videovp8"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videovp9"
@@ -221,6 +223,14 @@ func init() {
 
 	if !nvvideovp9.Register() {
 		panic("Failed to register nv-video-vp9")
+	}
+
+	if !av1video.Register() {
+		panic("Failed to register av1-video")
+	}
+
+	if !videoav1.Register() {
+		panic("Failed to register video-av1")
 	}
 
 	if !factorybin.Register() {
