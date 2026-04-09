@@ -71,14 +71,18 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvvideoav1"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvvideoh264"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvvideovp8"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvvideovp9"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvvp8video"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvvp9video"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/opusaudio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/pcm16audio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/pcmaaudio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/pcmuaudio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videoh264"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videovp8"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videovp9"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/vp8video"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/vp9video"
 )
 
 const QDataPadPeerKey = "livekitsip-pad-peer"
@@ -201,6 +205,22 @@ func init() {
 
 	if !nvvideoav1.Register() {
 		panic("Failed to register nv-video-av1")
+	}
+
+	if !vp9video.Register() {
+		panic("Failed to register vp9-video")
+	}
+
+	if !videovp9.Register() {
+		panic("Failed to register video-vp9")
+	}
+
+	if !nvvp9video.Register() {
+		panic("Failed to register nv-vp9-video")
+	}
+
+	if !nvvideovp9.Register() {
+		panic("Failed to register nv-video-vp9")
 	}
 
 	if !factorybin.Register() {
