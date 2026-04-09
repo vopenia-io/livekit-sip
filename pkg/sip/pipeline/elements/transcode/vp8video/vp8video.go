@@ -13,7 +13,31 @@ var CAT = gst.NewDebugCategory(
 	"vp8-video Element",
 )
 
+var properties = []*glib.ParamSpec{
+	glib.NewUintParam(
+		"video-width",
+		"Video Width",
+		"Maximum width of the decoded video frames",
+		1,
+		8192,
+		1280,
+		glib.ParameterWritable|glib.ParameterConstructOnly,
+	),
+	glib.NewUintParam(
+		"video-height",
+		"Video Height",
+		"Maximum height of the decoded video frames",
+		1,
+		8192,
+		720,
+		glib.ParameterWritable|glib.ParameterConstructOnly,
+	),
+}
+
 type Vp8Video struct {
+	videoWidth  uint
+	videoHeight uint
+
 	Vp8Depay   *gst.Element
 	Vp8Dec     *gst.Element
 	VideoScale *gst.Element
@@ -47,9 +71,16 @@ func (e *Vp8Video) ClassInit(klass *glib.ObjectClass) {
 		gst.PadPresenceAlways,
 		gst.NewCapsFromString("video/x-raw"),
 	))
+
+	class.InstallProperties(properties)
 }
 
 func (e *Vp8Video) InstanceInit(instance *glib.Object) {
+	e.videoWidth = 1280
+	e.videoHeight = 720
+}
+
+func (e *Vp8Video) Constructed(instance *glib.Object) {
 	self := gst.ToGstBin(instance)
 	var err error
 
@@ -89,7 +120,7 @@ func (e *Vp8Video) InstanceInit(instance *glib.Object) {
 	}
 
 	e.Filter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-		"caps": gst.NewCapsFromString("video/x-raw,width=1280,height=720,pixel-aspect-ratio=1/1,framerate=24/1"),
+		"caps": gst.NewCapsFromString(fmt.Sprintf("video/x-raw,width=[1,%d],height=[1,%d],pixel-aspect-ratio=1/1", e.videoWidth, e.videoHeight)),
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create capsfilter element: %v", err))
@@ -97,13 +128,17 @@ func (e *Vp8Video) InstanceInit(instance *glib.Object) {
 		return
 	}
 
-	self.AddMany(
+	if err := self.AddMany(
 		e.Vp8Depay,
 		e.Vp8Dec,
 		e.VideoScale,
 		e.VideoRate,
 		e.Filter,
-	)
+	); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add elements to bin: %v", err))
+		self.Error("Failed to add elements to bin", err)
+		return
+	}
 
 	if err := gst.ElementLinkMany(
 		e.Vp8Depay,
@@ -126,21 +161,52 @@ func (e *Vp8Video) InstanceInit(instance *glib.Object) {
 	self.AddPad(ghostSrc.Pad)
 }
 
-func (e *Vp8Video) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
+func (e *Vp8Video) SetProperty(instance *glib.Object, id uint, value *glib.Value) {
 	self := gst.ToGstBin(instance)
-
-	ret := self.ParentChangeState(transition)
-	if ret != gst.StateChangeSuccess {
-		return ret
+	param := properties[id]
+	switch param.Name() {
+	case "video-width":
+		gv, err := value.GoValue()
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting video-width property value: %v", err))
+			return
+		}
+		val, ok := gv.(uint)
+		if !ok {
+			self.Log(CAT, gst.LevelError, "Invalid type for video-width property")
+			return
+		}
+		if val > 0xFFFF {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid value for video-width property: %d", val))
+			return
+		}
+		e.videoWidth = val
+	case "video-height":
+		gv, err := value.GoValue()
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting video-height property value: %v", err))
+			return
+		}
+		val, ok := gv.(uint)
+		if !ok {
+			self.Log(CAT, gst.LevelError, "Invalid type for video-height property")
+			return
+		}
+		if val > 0xFFFF {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid value for video-height property: %d", val))
+			return
+		}
+		e.videoHeight = val
 	}
+}
 
-	if transition == gst.StateChangeReadyToNull {
-		e.Vp8Depay = nil
-		e.Vp8Dec = nil
-		e.VideoScale = nil
-		e.VideoRate = nil
-		e.Filter = nil
-	}
+func (e *Vp8Video) Finalize(instance *glib.Object) {
+	self := gst.ToGstBin(instance)
+	self.Log(CAT, gst.LevelDebug, "Finalizing Vp8Video element")
 
-	return ret
+	e.Vp8Depay = nil
+	e.Vp8Dec = nil
+	e.VideoScale = nil
+	e.VideoRate = nil
+	e.Filter = nil
 }

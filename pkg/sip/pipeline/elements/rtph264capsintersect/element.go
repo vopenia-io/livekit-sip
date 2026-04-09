@@ -61,7 +61,7 @@ func (e *RtpH264CapsIntersect) ClassInit(klass *glib.ObjectClass) {
 
 func (e *RtpH264CapsIntersect) InstanceInit(instance *glib.Object) {
 	self := base.ToGstBaseTransform(instance)
-	self.SetInPlace(true)
+	self.SetPassthrough(true)
 }
 
 // sdpFmtpFields are SDP-specific fmtp fields that have no meaning to upstream
@@ -153,10 +153,6 @@ func (e *RtpH264CapsIntersect) emitMaxResolution(self *base.GstBaseTransform) {
 	if _, err := self.Element.Emit("max-resolution", maxW, maxH); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to emit max-resolution signal: %v", err))
 	}
-}
-
-func (e *RtpH264CapsIntersect) TransformIP(self *base.GstBaseTransform, buf *gst.Buffer) gst.FlowReturn {
-	return gst.FlowOK
 }
 
 func getProfileLevelID(st *gst.Structure) string {

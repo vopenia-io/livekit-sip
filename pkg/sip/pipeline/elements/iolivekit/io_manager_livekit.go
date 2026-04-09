@@ -411,6 +411,7 @@ func (e *IoManagerLivekit) requestNewPadCameraIn(self *gst.Bin, templ *gst.PadTe
 	}
 	cameraIn.RTPVideo, err = gst.NewElementWithProperties("factorybin", map[string]interface{}{
 		"factories": glib.NewStrv([]string{
+			"nv-av1-video",
 			"nv-vp8-video",
 			"vp8-video",
 		}),

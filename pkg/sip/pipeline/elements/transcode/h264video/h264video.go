@@ -13,7 +13,31 @@ var CAT = gst.NewDebugCategory(
 	"h264-video Element",
 )
 
+var properties = []*glib.ParamSpec{
+	glib.NewUintParam(
+		"video-width",
+		"Video Width",
+		"Maximum width of the decoded video frames",
+		1,
+		8192,
+		1280,
+		glib.ParameterWritable|glib.ParameterConstructOnly,
+	),
+	glib.NewUintParam(
+		"video-height",
+		"Video Height",
+		"Maximum height of the decoded video frames",
+		1,
+		8192,
+		720,
+		glib.ParameterWritable|glib.ParameterConstructOnly,
+	),
+}
+
 type H264Video struct {
+	videoWidth  uint
+	videoHeight uint
+
 	H264Depay    *gst.Element
 	H264Parse    *gst.Element
 	H264Dec      *gst.Element
@@ -49,9 +73,16 @@ func (e *H264Video) ClassInit(klass *glib.ObjectClass) {
 		gst.PadPresenceAlways,
 		gst.NewCapsFromString("video/x-raw"),
 	))
+
+	class.InstallProperties(properties)
 }
 
 func (e *H264Video) InstanceInit(instance *glib.Object) {
+	e.videoWidth = 1280
+	e.videoHeight = 720
+}
+
+func (e *H264Video) Constructed(instance *glib.Object) {
 	self := gst.ToGstBin(instance)
 	var err error
 
@@ -60,8 +91,8 @@ func (e *H264Video) InstanceInit(instance *glib.Object) {
 		"wait-for-keyframe": false,
 	})
 	if err != nil {
-		self.Error("Failed to create rtph264depay element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create rtph264depay element: %v", err))
+		self.Error("Failed to create rtph264depay element", err)
 		return
 	}
 
@@ -69,8 +100,8 @@ func (e *H264Video) InstanceInit(instance *glib.Object) {
 		"config-interval": int(1),
 	})
 	if err != nil {
-		self.Error("Failed to create h264parse element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create h264parse element: %v", err))
+		self.Error("Failed to create h264parse element", err)
 		return
 	}
 
@@ -78,15 +109,15 @@ func (e *H264Video) InstanceInit(instance *glib.Object) {
 		"max-threads": int(4),
 	})
 	if err != nil {
-		self.Error("Failed to create avdec_h264 element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create avdec_h264 element: %v", err))
+		self.Error("Failed to create avdec_h264 element", err)
 		return
 	}
 
 	e.VideoConvert, err = gst.NewElementWithProperties("videoconvert", map[string]interface{}{})
 	if err != nil {
-		self.Error("Failed to create videoconvert element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create videoconvert element: %v", err))
+		self.Error("Failed to create videoconvert element", err)
 		return
 	}
 
@@ -94,8 +125,8 @@ func (e *H264Video) InstanceInit(instance *glib.Object) {
 		"add-borders": true,
 	})
 	if err != nil {
-		self.Error("Failed to create videoscale element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create videoscale element: %v", err))
+		self.Error("Failed to create videoscale element", err)
 		return
 	}
 
@@ -104,17 +135,17 @@ func (e *H264Video) InstanceInit(instance *glib.Object) {
 		"skip-to-first": true,
 	})
 	if err != nil {
-		self.Error("Failed to create videorate element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create videorate element: %v", err))
+		self.Error("Failed to create videorate element", err)
 		return
 	}
 
 	e.Filter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-		"caps": gst.NewCapsFromString("video/x-raw,width=1280,height=720,pixel-aspect-ratio=1/1,framerate=24/1"),
+		"caps": gst.NewCapsFromString(fmt.Sprintf("video/x-raw,width=[1,%d],height=[1,%d],pixel-aspect-ratio=1/1", e.videoWidth, e.videoHeight)),
 	})
 	if err != nil {
-		self.Error("Failed to create capsfilter element", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create capsfilter element: %v", err))
+		self.Error("Failed to create capsfilter element", err)
 		return
 	}
 
@@ -127,8 +158,8 @@ func (e *H264Video) InstanceInit(instance *glib.Object) {
 		e.VideoRate,
 		e.Filter,
 	); err != nil {
-		self.Error("Failed to add elements to bin", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add elements to bin: %v", err))
+		self.Error("Failed to add elements to bin", err)
 		return
 	}
 
@@ -141,8 +172,8 @@ func (e *H264Video) InstanceInit(instance *glib.Object) {
 		e.VideoRate,
 		e.Filter,
 	); err != nil {
-		self.Error("Failed to link elements", err)
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link elements: %v", err))
+		self.Error("Failed to link elements", err)
 		return
 	}
 
@@ -155,23 +186,54 @@ func (e *H264Video) InstanceInit(instance *glib.Object) {
 	self.AddPad(ghostSrc.Pad)
 }
 
-func (e *H264Video) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
+func (e *H264Video) SetProperty(instance *glib.Object, id uint, value *glib.Value) {
 	self := gst.ToGstBin(instance)
-
-	ret := self.ParentChangeState(transition)
-	if ret != gst.StateChangeSuccess {
-		return ret
+	param := properties[id]
+	switch param.Name() {
+	case "video-width":
+		gv, err := value.GoValue()
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting video-width property value: %v", err))
+			return
+		}
+		val, ok := gv.(uint)
+		if !ok {
+			self.Log(CAT, gst.LevelError, "Invalid type for video-width property")
+			return
+		}
+		if val > 0xFFFF {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid value for video-width property: %d", val))
+			return
+		}
+		e.videoWidth = val
+	case "video-height":
+		gv, err := value.GoValue()
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting video-height property value: %v", err))
+			return
+		}
+		val, ok := gv.(uint)
+		if !ok {
+			self.Log(CAT, gst.LevelError, "Invalid type for video-height property")
+			return
+		}
+		if val > 0xFFFF {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid value for video-height property: %d", val))
+			return
+		}
+		e.videoHeight = val
 	}
+}
 
-	if transition == gst.StateChangeReadyToNull {
-		e.H264Depay = nil
-		e.H264Parse = nil
-		e.H264Dec = nil
-		e.VideoConvert = nil
-		e.VideoScale = nil
-		e.VideoRate = nil
-		e.Filter = nil
-	}
+func (e *H264Video) Finalize(instance *glib.Object) {
+	self := gst.ToGstBin(instance)
+	self.Log(CAT, gst.LevelDebug, "Finalizing H264Video element")
 
-	return ret
+	e.H264Depay = nil
+	e.H264Parse = nil
+	e.H264Dec = nil
+	e.VideoConvert = nil
+	e.VideoScale = nil
+	e.VideoRate = nil
+	e.Filter = nil
 }

@@ -132,7 +132,7 @@ func (e *NvAv1Video) Constructed(instance *glib.Object) {
 	}
 
 	e.Filter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-		"caps": gst.NewCapsFromString(fmt.Sprintf("video/x-raw(memory:CUDAMemory),pixel-aspect-ratio=1/1,width=%d,height=%d", e.videoWidth, e.videoHeight)),
+		"caps": gst.NewCapsFromString(fmt.Sprintf("video/x-raw(memory:CUDAMemory),width=[1,%d],height=[1,%d],pixel-aspect-ratio=1/1", e.videoWidth, e.videoHeight)),
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create capsfilter element: %v", err))

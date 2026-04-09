@@ -93,18 +93,11 @@ func (e *NvVideoH264) Constructed(instance *glib.Object) {
 	}
 
 	e.Filter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-		"caps": gst.NewCapsFromString(fmt.Sprintf("video/x-raw(memory:CUDAMemory), width=[1,%d], height=[1,%d], pixel-aspect-ratio=1/1", e.videoWidth, e.videoHeight)),
+		"caps": gst.NewCapsFromString(fmt.Sprintf("video/x-raw(memory:CUDAMemory),width=[1,%d],height=[1,%d]", e.videoWidth, e.videoHeight)),
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create scale capsfilter: %v", err))
 		self.Error("Failed to create scale capsfilter", err)
-		return
-	}
-
-	e.CudaConvertScale, err = gst.NewElementWithProperties("cudaconvertscale", map[string]interface{}{})
-	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create cudaconvertscale element: %v", err))
-		self.Error("Failed to create cudaconvertscale element", err)
 		return
 	}
 
@@ -122,7 +115,9 @@ func (e *NvVideoH264) Constructed(instance *glib.Object) {
 		return
 	}
 
-	e.H264Parse, err = gst.NewElementWithProperties("h264parse", map[string]interface{}{})
+	e.H264Parse, err = gst.NewElementWithProperties("h264parse", map[string]interface{}{
+		"config-interval": int(-1),
+	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create h264parse element: %v", err))
 		self.Error("Failed to create h264parse element", err)

@@ -103,7 +103,13 @@ func (e *NvH264Video) Constructed(instance *glib.Object) {
 		return
 	}
 
-	e.NvH264Dec, err = gst.NewElementWithProperties("nvh264dec", map[string]interface{}{})
+	e.NvH264Dec, err = gst.NewElementWithProperties("nvh264dec", map[string]interface{}{
+		// Disable display-pipelining delay. Default is auto (-1) which
+		// introduces a buffering delay for downstream display; for a
+		// realtime SIP path we want each frame out as soon as it's
+		// decoded.
+		"max-display-delay": int(0),
+	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create nvh264dec element: %v", err))
 		self.Error("Failed to create nvh264dec element", err)
@@ -118,7 +124,7 @@ func (e *NvH264Video) Constructed(instance *glib.Object) {
 	}
 
 	e.Filter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-		"caps": gst.NewCapsFromString(fmt.Sprintf("video/x-raw(memory:CUDAMemory),pixel-aspect-ratio=1/1,width=%d,height=%d", e.videoWidth, e.videoHeight)),
+		"caps": gst.NewCapsFromString(fmt.Sprintf("video/x-raw(memory:CUDAMemory),width=[1,%d],height=[1,%d],pixel-aspect-ratio=1/1", e.videoWidth, e.videoHeight)),
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create capsfilter element: %v", err))

@@ -100,20 +100,14 @@ func (e *NvVideoAV1) Constructed(instance *glib.Object) {
 		return
 	}
 
-	e.CudaConvertScale, err = gst.NewElementWithProperties("cudaconvertscale", map[string]interface{}{})
-	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create cudaconvertscale element: %v", err))
-		self.Error("Failed to create cudaconvertscale element", err)
-		return
-	}
-
 	e.NvAV1Enc, err = gst.NewElementWithProperties("nvav1enc", map[string]interface{}{
-		// "zerolatency":  true,
-		// "preset":       int(5), // low-latency-hp
-		// "rc-mode":      int(5), // cbr-ld-hq
-		// "rc-lookahead": uint(0),
-		// "bframes":      uint(0),
-		// "gop-size":     int(-1), // infinite
+		"zerolatency":  true,
+		"preset":       int(8), // p1, fastest
+		"rc-mode":      int(3), // vbr
+		"rc-lookahead": uint(0),
+		"bframes":      uint(0),
+		"gop-size":     int(-1), // infinite
+		"tune":         int(3),  // ultra-low-latency
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create nvav1enc element: %v", err))
