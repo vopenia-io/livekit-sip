@@ -110,18 +110,19 @@ func (e *VideoAv1) Constructed(instance *glib.Object) {
 		return
 	}
 
-	e.AV1Enc, err = gst.NewElementWithProperties("svtav1enc", map[string]interface{}{
-		// Live-streaming tuning. Defaults (preset=10, 33-frame
-		// lookahead) hold 30+ frames internally which adds more
-		// than a second of latency at 24fps.
-		//   preset=12                 fastest SVT-AV1 tradeoff
-		//   lookahead=0               no lookahead buffer
-		"preset":            int(12),
-		"parameters-string": "lookahead=0",
+	e.AV1Enc, err = gst.NewElementWithProperties("av1enc", map[string]interface{}{
+		"cpu-used":      int(10),
+		"threads":       uint(10),
+		"usage-profile": int(1), // realtime
+		"row-mt":        true,
+		"tile-columns":  uint(3),
+		"tile-rows":     uint(2),
+		"end-usage":     int(1), // cbr
+		"target-bitrate": uint(2000),
 	})
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create svtav1enc element: %v", err))
-		self.Error("Failed to create svtav1enc element", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create av1enc element: %v", err))
+		self.Error("Failed to create av1enc element", err)
 		return
 	}
 
