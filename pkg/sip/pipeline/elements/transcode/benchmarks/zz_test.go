@@ -3,6 +3,8 @@ package benchmarks
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/go-gst/go-glib/glib"
@@ -27,17 +29,12 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/vp9video"
 )
 
-func TestMain(m *testing.M) {
-	// Leaks tracer is deliberately off: this package is for latency +
-	// CPU comparisons, leak detection is covered by the per-element
-	// smoke tests.
-	if err := os.MkdirAll("testdata", 0755); err != nil {
-		panic(err)
-	}
-	_ = os.Remove(TraceLogPath)
-	glib.SetEnv("GST_TRACERS", "latency(flags=element);rusage", true)
-	glib.SetEnv("GST_DEBUG", "GST_TRACER:7", true)
-	glib.SetEnv("GST_DEBUG_FILE", TraceLogPath, true)
+// initGStreamer initialises GStreamer and registers all custom elements.
+// Called by the runner and child processes but NOT by the orchestrator
+// (which must never touch GStreamer/CUDA so re-exec'd children start
+// with a clean CUDA context).
+func initGStreamer() {
+	glib.SetEnv("GST_DEBUG_DUMP_DOT_DIR", DotDir, true)
 	gst.Init(nil)
 	rtph264capsintersect.Register()
 	factorybin.Register()
@@ -57,7 +54,40 @@ func TestMain(m *testing.M) {
 	videoav1.Register()
 	nvav1video.Register()
 	nvvideoav1.Register()
-	os.Exit(m.Run())
+}
+
+func TestMain(m *testing.M) {
+	// 3-process architecture: the test process (orchestrator) never
+	// calls gst.Init or touches CUDA. It re-execs itself as "runner"
+	// (main pipeline + residency probes + CPU sampler) and "child"
+	// (EUT pipeline). Both children call initGStreamer() themselves,
+	// so each gets a fresh CUDA context with no inherited driver
+	// state. This is required for cudaipc mmap mode — see
+	// experiments/exp_3proc and experiments/exp_reexec.
+	switch os.Getenv("GSTBENCH_ROLE") {
+	case "runner":
+		runtime.LockOSThread()
+		initGStreamer()
+		runRunner() // never returns
+	case "child":
+		runtime.LockOSThread()
+		initGStreamer()
+		runChild() // never returns
+	default:
+		// Orchestrator: NO GStreamer, NO CUDA.
+		if err := os.MkdirAll("testdata", 0755); err != nil {
+			panic(err)
+		}
+		if err := os.MkdirAll(DotDir, 0755); err != nil {
+			panic(err)
+		}
+		if entries, err := os.ReadDir(DotDir); err == nil {
+			for _, e := range entries {
+				_ = os.Remove(filepath.Join(DotDir, e.Name()))
+			}
+		}
+		os.Exit(m.Run())
+	}
 }
 
 // 16:9 widescreen resolution matrix, no upscaling.
@@ -96,7 +126,7 @@ var elementsUnderTest = []Element{
 func TestAllElements(t *testing.T) {
 	const (
 		fps        = 24
-		numBuffers = 120 // 5 seconds at 24fps
+		numBuffers = 240
 	)
 
 	var allResults []Result
@@ -133,4 +163,3 @@ func TestAllElements(t *testing.T) {
 		t.Logf("write results.csv: %v", err)
 	}
 }
-

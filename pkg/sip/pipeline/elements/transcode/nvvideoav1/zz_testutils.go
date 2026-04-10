@@ -20,17 +20,17 @@ func (TestElement) Name() string { return "nv-video-av1" }
 // cudaupload. The raw video is generated on the CPU and only crosses
 // to the GPU at the element-under-test boundary, so the source chain
 // doesn't share any GPU compute with the element we're measuring.
-func (TestElement) BuildSource(p *gst.Pipeline, width, height, fps, numBuffers int) (*gst.Pad, error) {
+func (TestElement) BuildSource(p *gst.Pipeline, width, height, fps, numBuffers int) (*gst.Pad, int, error) {
 	src, err := gst.NewElementWithName("videotestsrc", "src")
 	if err != nil {
-		return nil, fmt.Errorf("videotestsrc: %w", err)
+		return nil, 0, fmt.Errorf("videotestsrc: %w", err)
 	}
 	src.SetProperty("num-buffers", numBuffers)
 	src.SetProperty("is-live", true)
 
 	caps, err := gst.NewElementWithName("capsfilter", "src_caps")
 	if err != nil {
-		return nil, fmt.Errorf("src capsfilter: %w", err)
+		return nil, 0, fmt.Errorf("src capsfilter: %w", err)
 	}
 	caps.SetProperty("caps", gst.NewCapsFromString(
 		fmt.Sprintf("video/x-raw,width=%d,height=%d,framerate=%d/1,format=I420", width, height, fps),
@@ -38,16 +38,16 @@ func (TestElement) BuildSource(p *gst.Pipeline, width, height, fps, numBuffers i
 
 	up, err := gst.NewElementWithName("cudaupload", "src_upload")
 	if err != nil {
-		return nil, fmt.Errorf("cudaupload: %w", err)
+		return nil, 0, fmt.Errorf("cudaupload: %w", err)
 	}
 
 	if err := p.AddMany(src, caps, up); err != nil {
-		return nil, fmt.Errorf("add source chain: %w", err)
+		return nil, 0, fmt.Errorf("add source chain: %w", err)
 	}
 	if err := gst.ElementLinkMany(src, caps, up); err != nil {
-		return nil, fmt.Errorf("link source chain: %w", err)
+		return nil, 0, fmt.Errorf("link source chain: %w", err)
 	}
-	return up.GetStaticPad("src"), nil
+	return up.GetStaticPad("src"), 1, nil
 }
 
 func (TestElement) BuildElement(p *gst.Pipeline, targetWidth, targetHeight int) (*gst.Element, error) {
@@ -64,14 +64,15 @@ func (TestElement) BuildElement(p *gst.Pipeline, targetWidth, targetHeight int) 
 	return e, nil
 }
 
-func (TestElement) BuildSink(p *gst.Pipeline) (*gst.Pad, error) {
+func (TestElement) BuildSink(p *gst.Pipeline) (*gst.Pad, int, error) {
 	sink, err := gst.NewElementWithName("fakesink", "sink")
 	if err != nil {
-		return nil, fmt.Errorf("fakesink: %w", err)
+		return nil, 0, fmt.Errorf("fakesink: %w", err)
 	}
 	sink.SetProperty("sync", false)
+	sink.SetProperty("async", false)
 	if err := p.Add(sink); err != nil {
-		return nil, fmt.Errorf("add sink: %w", err)
+		return nil, 0, fmt.Errorf("add sink: %w", err)
 	}
-	return sink.GetStaticPad("sink"), nil
+	return sink.GetStaticPad("sink"), 0, nil
 }

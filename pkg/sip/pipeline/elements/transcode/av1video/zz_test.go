@@ -36,7 +36,7 @@ func TestAv1Video_Smoke(t *testing.T) {
 	}
 
 	b := av1video.Test()
-	srcPad, err := b.BuildSource(pipeline, width, height, fps, numBuffers)
+	srcPad, _, err := b.BuildSource(pipeline, width, height, fps, numBuffers)
 	if err != nil {
 		t.Fatal("BuildSource:", err)
 	}
@@ -44,7 +44,7 @@ func TestAv1Video_Smoke(t *testing.T) {
 	if err != nil {
 		t.Fatal("BuildElement:", err)
 	}
-	sinkPad, err := b.BuildSink(pipeline)
+	sinkPad, _, err := b.BuildSink(pipeline)
 	if err != nil {
 		t.Fatal("BuildSink:", err)
 	}
