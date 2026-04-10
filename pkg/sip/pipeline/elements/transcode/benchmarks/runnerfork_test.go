@@ -35,6 +35,7 @@ type runnerEnv struct {
 	tmpDir     string
 	resultPath string
 	tracePath  string
+	cprobePath string
 	childPID   int
 }
 
@@ -48,6 +49,7 @@ func parseRunnerEnv() (*runnerEnv, error) {
 		resultPath: os.Getenv("GSTBENCH_RESULT_PATH"),
 	}
 	e.tracePath = os.Getenv("GSTBENCH_TRACE_PATH")
+	e.cprobePath = os.Getenv("GSTBENCH_CPROBE_PATH")
 	if e.elemName == "" || e.sockIn == "" || e.sockOut == "" || e.resultPath == "" {
 		return nil, fmt.Errorf("missing required env (ELEMENT/SOCK_IN/SOCK_OUT/RESULT_PATH)")
 	}
@@ -76,14 +78,10 @@ func parseRunnerEnv() (*runnerEnv, error) {
 	return e, nil
 }
 
-// runnerLogf writes diagnostic lines to stderr. Used as the logf
-// callback for childHandle and for general runner diagnostics.
 func runnerLogf(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "gstbench runner: "+format+"\n", args...)
 }
 
-// runRunner is the entry point for the runner process. Called from
-// TestMain when GSTBENCH_ROLE=runner. Never returns.
 func runRunner() {
 	fmt.Fprintf(os.Stderr, "gstbench runner: started (pid %d)\n", os.Getpid())
 	env, err := parseRunnerEnv()
@@ -180,10 +178,14 @@ func runRunnerImpl(elem Element, cfg Config, env *runnerEnv) (Result, error) {
 		return Result{}, bailOut("%v", err)
 	}
 
-	// ---- 7. Start CPU sampler, main -> PLAYING ----
-	cpuP := newCPUProbe(env.childPID, cpuProbeInterval, mp.probe.firstExitCh)
+	// ---- 7. Start CPU + GPU samplers, main -> PLAYING ----
+	cpuP := newCPUProbe(env.childPID, cpuProbeInterval, mp.firstExitCh)
 	cpuP.start()
 	defer cpuP.stop()
+
+	gpuP := newGPUProbe(cpuProbeInterval, mp.firstExitCh)
+	gpuP.start()
+	defer gpuP.stop()
 
 	if err := mp.pipeline.SetState(gst.StatePlaying); err != nil {
 		dumpPipeline(mp.pipeline, env.dotDir, dotBase+"_playing_fail")
@@ -228,11 +230,11 @@ func runRunnerImpl(elem Element, cfg Config, env *runnerEnv) (Result, error) {
 		}
 	}
 
-	// Wait for first exit-probe buffer before dumping _playing dot.
+	// Wait for first exit buffer before dumping _playing dot.
 	select {
-	case <-mp.probe.firstExitCh:
+	case <-mp.firstExitCh:
 	case <-time.After(2 * time.Second):
-		runnerLogf("WARN: no exit-probe buffer within 2s")
+		runnerLogf("WARN: no exit buffer within 2s")
 	}
 	dumpPipeline(mp.pipeline, env.dotDir, dotBase+"_playing")
 
@@ -240,6 +242,7 @@ func runRunnerImpl(elem Element, cfg Config, env *runnerEnv) (Result, error) {
 	if err := runBusLoopRunner(mp.pipeline, child); err != nil {
 		return Result{}, bailOut("%v", err)
 	}
+	eosTime := time.Now()
 	cpuP.stop()
 
 	// ---- 9. Teardown ----
@@ -249,7 +252,9 @@ func runRunnerImpl(elem Element, cfg Config, env *runnerEnv) (Result, error) {
 	time.Sleep(100 * time.Millisecond)
 
 	// ---- 10. Compose result ----
-	result, err := composeResult(elem, cfg, mp.probe, env.tracePath, child.eutChildren, cpuP.loadStats(mp.probe.lastExit()))
+	gpuP.stop()
+	smStats, encStats, decStats := gpuP.loadStats(eosTime)
+	result, err := composeResult(elem, cfg, env.cprobePath, env.tracePath, child.eutChildren, cpuP.loadStats(eosTime), smStats, encStats, decStats)
 	if err != nil {
 		return Result{}, fmt.Errorf("composeResult: %v", err)
 	}
@@ -354,3 +359,4 @@ func lookupElement(name string) (Element, error) {
 	}
 	return nil, fmt.Errorf("element %q not found in elementsUnderTest", name)
 }
+

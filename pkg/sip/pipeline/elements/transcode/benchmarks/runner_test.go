@@ -46,8 +46,6 @@ import (
 // DotDir is where per-cell pipeline dot graphs are written.
 const DotDir = "testdata/dot"
 
-// dumpPipeline writes a dot graph of a pipeline. Used by the runner
-// process (not the orchestrator).
 func dumpPipeline(pipe *gst.Pipeline, dir, basename string) {
 	if pipe == nil || dir == "" {
 		return
@@ -56,10 +54,6 @@ func dumpPipeline(pipe *gst.Pipeline, dir, basename string) {
 	_ = os.WriteFile(filepath.Join(dir, basename+".dot"), []byte(data), 0644)
 }
 
-// Run executes one benchmark cell. It spawns BOTH the runner and
-// child processes from the orchestrator (which has no CUDA state),
-// so neither child inherits CUDA driver state. The runner and child
-// communicate via IPC pipes created here.
 func Run(t *testing.T, elem Element, cfg Config) Result {
 	t.Helper()
 
@@ -73,6 +67,7 @@ func Run(t *testing.T, elem Element, cfg Config) Result {
 	resultPath := filepath.Join(tmp, "result.json")
 	absDotDir, _ := filepath.Abs(DotDir)
 	tracePath := filepath.Join(tmp, "child_trace.log")
+	cprobePath := filepath.Join(tmp, "child_cprobe.bin")
 
 	// Create IPC pipes: child→runner (fd 3 in child, fd 3 in runner)
 	// and runner→child (fd 4 in child, fd 4 in runner).
@@ -101,6 +96,8 @@ func Run(t *testing.T, elem Element, cfg Config) Result {
 	childCmd := exec.Command("/proc/self/exe")
 	childCmd.Env = append(append([]string{}, commonEnv...),
 		"GSTBENCH_ROLE=child",
+		fmt.Sprintf("GSTBENCH_NUM_BUFFERS=%d", cfg.NumBuffers),
+		"GSTBENCH_CPROBE_PATH="+cprobePath,
 		"GST_TRACERS=latency(flags=element)",
 		"GST_DEBUG_FILE="+tracePath,
 	)
@@ -130,7 +127,7 @@ func Run(t *testing.T, elem Element, cfg Config) Result {
 		"GSTBENCH_TMP_DIR="+tmp,
 		"GSTBENCH_RESULT_PATH="+resultPath,
 		"GSTBENCH_TRACE_PATH="+tracePath,
-		fmt.Sprintf("GSTBENCH_CHILD_PID_PLACEHOLDER=1"), // will be replaced after child starts
+		"GSTBENCH_CPROBE_PATH="+cprobePath,
 	)
 	// Runner gets: fd 3 = c2rR (read from child), fd 4 = r2cW (write to child)
 	runnerCmd.ExtraFiles = []*os.File{c2rR, r2cW}
@@ -141,15 +138,12 @@ func Run(t *testing.T, elem Element, cfg Config) Result {
 		Pdeathsig: syscall.SIGKILL,
 	}
 
-	// Start child first (so runner can read its PID from env).
 	if err := childCmd.Start(); err != nil {
 		t.Fatalf("spawn child: %v", err)
 	}
-	// Close our copies of the pipe ends the child owns.
 	c2rW.Close()
 	r2cR.Close()
 
-	// Pass child PID to runner via env so it can sample /proc/<pid>/stat.
 	runnerCmd.Env = append(runnerCmd.Env,
 		fmt.Sprintf("GSTBENCH_CHILD_PID=%d", childCmd.Process.Pid),
 	)
@@ -159,13 +153,14 @@ func Run(t *testing.T, elem Element, cfg Config) Result {
 		childCmd.Wait()
 		t.Fatalf("spawn runner: %v", err)
 	}
-	// Close our copies of the pipe ends the runner owns.
 	c2rR.Close()
 	r2cW.Close()
 
-	// Wait for runner (it drives the benchmark and exits when done).
 	runnerDone := make(chan error, 1)
 	go func() { runnerDone <- runnerCmd.Wait() }()
+
+	childDone := make(chan error, 1)
+	go func() { childDone <- childCmd.Wait() }()
 
 	select {
 	case err := <-runnerDone:
@@ -184,9 +179,6 @@ func Run(t *testing.T, elem Element, cfg Config) Result {
 			runnerStderr.String(), childStderr.String())
 	}
 
-	// Runner done — child should have exited too. Wait with short timeout.
-	childDone := make(chan error, 1)
-	go func() { childDone <- childCmd.Wait() }()
 	select {
 	case <-childDone:
 	case <-time.After(5 * time.Second):
@@ -206,17 +198,22 @@ func Run(t *testing.T, elem Element, cfg Config) Result {
 	return result
 }
 
-// composeResult assembles a Result from the residency probe data,
-// the CPU sampler stats, and the child's latency-tracer log.
-func composeResult(elem Element, cfg Config, probe *residencyProbe, tracePath string, eutChildren []string, cpuStats cpuLoadStats) (Result, error) {
-	resCopy := probe.snapshot()
+// composeResult assembles a Result from the C probe latency file
+// (written by the child), the CPU sampler stats, and the child's
+// latency-tracer log.
+func composeResult(elem Element, cfg Config, cprobePath, tracePath string, eutChildren []string, cpuStats cpuLoadStats, gpuSM, gpuEnc, gpuDec gpuLoadStats) (Result, error) {
+	resCopy, err := readCProbeFile(cprobePath)
+	if err != nil {
+		return Result{}, fmt.Errorf("%s %dx%d->%dx%d: read cprobe: %w",
+			elem.Name(), cfg.SourceWidth, cfg.SourceHeight, cfg.TargetWidth, cfg.TargetHeight, err)
+	}
 	if len(resCopy) == 0 {
-		return Result{}, fmt.Errorf("%s %dx%d->%dx%d: no residency samples",
+		return Result{}, fmt.Errorf("%s %dx%d->%dx%d: no latency samples from C probe",
 			elem.Name(), cfg.SourceWidth, cfg.SourceHeight, cfg.TargetWidth, cfg.TargetHeight)
 	}
 	minSamples := int(float64(cfg.NumBuffers) * minResidencyRatio)
 	if len(resCopy) < minSamples {
-		return Result{}, fmt.Errorf("%s %dx%d->%dx%d: only %d residency samples for %d buffers (< %.0f%%)",
+		return Result{}, fmt.Errorf("%s %dx%d->%dx%d: only %d C probe samples for %d buffers (< %.0f%%)",
 			elem.Name(), cfg.SourceWidth, cfg.SourceHeight, cfg.TargetWidth, cfg.TargetHeight,
 			len(resCopy), cfg.NumBuffers, minResidencyRatio*100)
 	}
@@ -268,5 +265,27 @@ func composeResult(elem Element, cfg Config, probe *residencyProbe, tracePath st
 	result.CPULoadMean = cpuStats.Mean
 	result.CPULoadP50 = cpuStats.P50
 	result.CPULoadP90 = cpuStats.P90
+
+	result.GPUSMSamples = gpuSM.Samples
+	result.GPUSMMin = gpuSM.Min
+	result.GPUSMMax = gpuSM.Max
+	result.GPUSMMean = gpuSM.Mean
+	result.GPUSMP50 = gpuSM.P50
+	result.GPUSMP90 = gpuSM.P90
+
+	result.GPUEncSamples = gpuEnc.Samples
+	result.GPUEncMin = gpuEnc.Min
+	result.GPUEncMax = gpuEnc.Max
+	result.GPUEncMean = gpuEnc.Mean
+	result.GPUEncP50 = gpuEnc.P50
+	result.GPUEncP90 = gpuEnc.P90
+
+	result.GPUDecSamples = gpuDec.Samples
+	result.GPUDecMin = gpuDec.Min
+	result.GPUDecMax = gpuDec.Max
+	result.GPUDecMean = gpuDec.Mean
+	result.GPUDecP50 = gpuDec.P50
+	result.GPUDecP90 = gpuDec.P90
+
 	return result, nil
 }

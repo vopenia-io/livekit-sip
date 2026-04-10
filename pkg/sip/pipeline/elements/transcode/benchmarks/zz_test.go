@@ -57,24 +57,16 @@ func initGStreamer() {
 }
 
 func TestMain(m *testing.M) {
-	// 3-process architecture: the test process (orchestrator) never
-	// calls gst.Init or touches CUDA. It re-execs itself as "runner"
-	// (main pipeline + residency probes + CPU sampler) and "child"
-	// (EUT pipeline). Both children call initGStreamer() themselves,
-	// so each gets a fresh CUDA context with no inherited driver
-	// state. This is required for cudaipc mmap mode — see
-	// experiments/exp_3proc and experiments/exp_reexec.
 	switch os.Getenv("GSTBENCH_ROLE") {
 	case "runner":
 		runtime.LockOSThread()
 		initGStreamer()
-		runRunner() // never returns
+		runRunner()
 	case "child":
 		runtime.LockOSThread()
 		initGStreamer()
-		runChild() // never returns
+		runChild()
 	default:
-		// Orchestrator: NO GStreamer, NO CUDA.
 		if err := os.MkdirAll("testdata", 0755); err != nil {
 			panic(err)
 		}
@@ -90,7 +82,6 @@ func TestMain(m *testing.M) {
 	}
 }
 
-// 16:9 widescreen resolution matrix, no upscaling.
 var resolutionPairs = []struct {
 	srcW, srcH int
 	dstW, dstH int
@@ -103,7 +94,6 @@ var resolutionPairs = []struct {
 	{1920, 1080, 1920, 1080},
 }
 
-// Adding a new element is: import the package, add an entry here.
 var elementsUnderTest = []Element{
 	vp9video.Test(),
 	videovp9.Test(),

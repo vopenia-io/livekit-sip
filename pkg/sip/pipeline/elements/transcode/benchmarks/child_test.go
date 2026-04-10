@@ -5,19 +5,16 @@ package benchmarks
 // which causes TestMain to hand off to runChild before ever entering
 // the testing framework.
 //
-// The child does as little as possible: build a pipeline containing
-// only the element-under-test (plus unixfdsrc/unixfdsink adapters),
-// run it, signal state transitions over fd 3, exit. No GStreamer
-// tracers, no debug-log I/O, no trace parsing, no result JSON.
-// All measurement is done by main:
-//   * residency      — pad probes on the unixfd boundaries
-//   * CPU load       — /proc/<child-pid>/stat from the parent side
-//   * wall clock     — main's PLAYING -> bus EOS window
+// The child builds a pipeline containing only the element-under-test
+// (plus unixfdsrc/unixfdsink adapters), installs pure-C latency pad
+// probes on the EUT's ghost pads (see cprobe.c), runs the pipeline,
+// writes the latency data to a binary file, signals state transitions
+// over fd 3, and exits.
 //
-// Keeping the child this lean means:
-//   * CPU numbers reflect the EUT's actual cost, not tracer overhead
-//   * overhead is consistent across elements (no conditional tracing)
-//   * the "happy path" is short enough to audit in one read
+// Measurement split:
+//   * EUT latency    — C pad probes in this process (no CGo per buffer)
+//   * CPU load       — /proc/<child-pid>/stat from the runner side
+//   * per-element    — GST latency tracer (configured via env by runner)
 //
 // IPC with main uses two newline-delimited pipes:
 //
@@ -96,6 +93,12 @@ type childEnv struct {
 	// peers speak different IPC protocols and handshake fails.
 	srcMem  int
 	sinkMem int
+	// numBuffers is the number of buffers the source will produce.
+	// Used to pre-allocate the C probe arrays.
+	numBuffers int
+	// cprobePath is the temp file where the child writes its C probe
+	// latency data after EOS, for the runner to read post-exit.
+	cprobePath string
 }
 
 func parseChildEnv() (*childEnv, error) {
@@ -117,6 +120,10 @@ func parseChildEnv() (*childEnv, error) {
 	}
 	e.sourceW, _ = strconv.Atoi(os.Getenv("GSTBENCH_SOURCE_W"))
 	e.sourceH, _ = strconv.Atoi(os.Getenv("GSTBENCH_SOURCE_H"))
+	if e.numBuffers, err = strconv.Atoi(os.Getenv("GSTBENCH_NUM_BUFFERS")); err != nil {
+		return nil, fmt.Errorf("GSTBENCH_NUM_BUFFERS: %w", err)
+	}
+	e.cprobePath = os.Getenv("GSTBENCH_CPROBE_PATH")
 	// srcMem/sinkMem are sent by the runner via IPC ("mem:src,sink")
 	// after it builds its pipeline and knows the memory types. They
 	// are set later by runChildImpl before buildChildPipeline.
@@ -212,17 +219,18 @@ func runChildImpl(sendIPC func(string), fromMain <-chan string) error {
 		return fmt.Errorf("timeout waiting for mem config from runner")
 	}
 
-	pipeline, eutChildren, lockedSrc, sinkHasDataCh, err := buildChildPipeline(elem, env)
+	pipeline, eutChildren, lockedSrc, sinkHasDataCh, probe, err := buildChildPipeline(elem, env)
 	if err != nil {
 		return err
 	}
+	defer probe.free()
 	// Tell main which element names belong to the EUT bin so its
 	// trace-log parser can filter infrastructure elements
 	// (unixfdsrc, unixfdsink, cudaupload/download) out of the
 	// per-child latency report.
 	sendIPC("children:" + strings.Join(eutChildren, ","))
 	dotBase := fmt.Sprintf("%s_%dx%d_to_%dx%d_C", env.elemName, env.sourceW, env.sourceH, env.targetW, env.targetH)
-	return runChildPipeline(pipeline, lockedSrc, sinkHasDataCh, sendIPC, fromMain, env.dotDir, dotBase, env.elemName)
+	return runChildPipeline(pipeline, lockedSrc, sinkHasDataCh, probe, env.cprobePath, sendIPC, fromMain, env.dotDir, dotBase, env.elemName)
 }
 
 // buildChildPipeline assembles the child's single-chain pipeline:
@@ -242,9 +250,9 @@ func runChildImpl(sendIPC func(string), fromMain <-chan string) error {
 // sinkHasDataCh is non-nil when the return IPC is cudaipc; it is
 // closed by a one-shot probe when the child's cudaipcsink receives
 // its first buffer.
-func buildChildPipeline(elem Element, env *childEnv) (*gst.Pipeline, []string, *gst.Element, <-chan struct{}, error) {
-	fail := func(err error) (*gst.Pipeline, []string, *gst.Element, <-chan struct{}, error) {
-		return nil, nil, nil, nil, err
+func buildChildPipeline(elem Element, env *childEnv) (*gst.Pipeline, []string, *gst.Element, <-chan struct{}, *cProbe, error) {
+	fail := func(err error) (*gst.Pipeline, []string, *gst.Element, <-chan struct{}, *cProbe, error) {
+		return nil, nil, nil, nil, nil, err
 	}
 
 	pipeline, err := gst.NewPipeline("bench-child-" + env.elemName)
@@ -316,7 +324,21 @@ func buildChildPipeline(elem Element, env *childEnv) (*gst.Pipeline, []string, *
 	for _, c := range childElems {
 		eutChildren = append(eutChildren, c.GetName())
 	}
-	return pipeline, eutChildren, locked, sinkHasDataCh, nil
+
+	// Install pure-C latency probes on the EUT's ghost pads.
+	probe := newCProbe(env.numBuffers)
+	eutSinkPad := eut.GetStaticPad("sink")
+	if eutSinkPad == nil {
+		return fail(fmt.Errorf("EUT sink pad missing"))
+	}
+	probe.installEntry(eutSinkPad)
+	eutSrcPad := eut.GetStaticPad("src")
+	if eutSrcPad == nil {
+		return fail(fmt.Errorf("EUT src pad missing"))
+	}
+	probe.installExit(eutSrcPad)
+
+	return pipeline, eutChildren, locked, sinkHasDataCh, probe, nil
 }
 
 // runChildPipeline runs the PAUSED -> PLAYING -> bus-loop -> NULL
@@ -330,7 +352,7 @@ func buildChildPipeline(elem Element, env *childEnv) (*gst.Pipeline, []string, *
 // sinkHasDataCh is non-nil when the return IPC is cudaipc. When
 // closed (by the one-shot probe on the child's cudaipcsink), the
 // child sends "sink-has-data" so main can unlock its cudaipcsrc.
-func runChildPipeline(pipeline *gst.Pipeline, lockedSrc *gst.Element, sinkHasDataCh <-chan struct{}, sendIPC func(string), fromMain <-chan string, dotDir, dotBase, elemName string) error {
+func runChildPipeline(pipeline *gst.Pipeline, lockedSrc *gst.Element, sinkHasDataCh <-chan struct{}, probe *cProbe, cprobePath string, sendIPC func(string), fromMain <-chan string, dotDir, dotBase, elemName string) error {
 	// PAUSED first; WAIT for completion so unixfdsrc has actually
 	// connected to main's sockIn and unixfdsink is bound/listening
 	// on main's sockOut (both happen in READY->PAUSED start()).
@@ -441,6 +463,13 @@ func runChildPipeline(pipeline *gst.Pipeline, lockedSrc *gst.Element, sinkHasDat
 		return fmt.Errorf("child timed out waiting for EOS (90s child deadline)")
 	}
 	fmt.Fprintf(os.Stderr, "gstbench child[%s]: EOS, tearing down\n", elemName)
+
+	if cprobePath != "" && probe != nil {
+		if err := probe.writeTo(cprobePath); err != nil {
+			fmt.Fprintf(os.Stderr, "gstbench child[%s]: cprobe write: %v\n", elemName, err)
+		}
+	}
+
 	sendIPC("eos")
 
 	if err := pipeline.SetState(gst.StateNull); err != nil {

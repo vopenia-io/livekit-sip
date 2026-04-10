@@ -1,6 +1,6 @@
 package benchmarks
 
-// Main-process pipeline construction and residency measurement.
+// Main-process pipeline construction.
 //
 // The main pipeline has two disjoint chains sharing a single
 // GstPipeline:
@@ -12,6 +12,12 @@ package benchmarks
 // pipeline goes PAUSED) so its start() vfunc does not try to connect
 // to sockOut before the child has bound it. The runner unlocks it
 // after the child signals "ready".
+//
+// Latency measurement has moved to the child process via pure-C pad
+// probes (see cprobe.c / cprobe.go). The runner side only retains a
+// lightweight one-shot probe on the return-path IPC source to detect
+// when the first buffer arrives back — used to start the CPU sampler
+// and to time the dot-graph dump.
 
 import (
 	"fmt"
@@ -20,131 +26,6 @@ import (
 
 	"github.com/go-gst/go-gst/gst"
 )
-
-// residencyProbe tracks per-frame residency across the two unixfd
-// hops. Entry probe fires on unixfdsink_out.sink, exit probe fires on
-// unixfdsrc_in.src. See probeRationale below.
-//
-// probeRationale (why this is not just a map[PTS]time.Time):
-//
-//  1. unixfdsink rewrites PTS through to_monotonic() before sending
-//     over the socket, so the PTS observed at the exit probe is
-//     unrelated to the PTS at the entry probe. Direct PTS matching
-//     across the IPC is impossible.
-//
-//  2. RTP payloaders emit N packets per encoded frame for frames
-//     larger than the MTU (true at 720p+ for vp9/h264), while the
-//     decoder emits one raw frame per encoded frame. Counting probe
-//     callbacks would drift the index.
-//
-// The fix: dedupe entries by the entry-side PTS (all packets of a
-// frame share the same PTS), giving exactly one entry time per frame,
-// then FIFO-pair with exit buffers. FIFO is correct because no
-// element in the chain reorders frames. Trailing dropped frames are
-// caught by the minResidencyRatio check in the runner.
-type residencyProbe struct {
-	mu         sync.Mutex
-	entryTimes []time.Time
-	lastPTS    gst.ClockTime
-	latencies  []time.Duration
-	exitCount  int
-
-	// lastExitTime is the wall time of the most recent recordExit
-	// call. After the run, this is the "last frame returned from
-	// the child" timestamp, which the cpuProbe uses as its
-	// post-processing cutoff.
-	lastExitTime time.Time
-
-	// firstExitCh is closed by the first exit-probe callback. The
-	// runner waits on this (with a short timeout) before dumping the
-	// "_playing" dot graph so caps events have time to propagate
-	// through unixfdsrc_in -> queue -> fakesink — otherwise the dump
-	// captures NULL caps on the return chain. It also doubles as the
-	// start signal for the cpuProbe.
-	firstExitCh   chan struct{}
-	firstExitOnce sync.Once
-}
-
-func newResidencyProbe() *residencyProbe {
-	return &residencyProbe{
-		lastPTS:     gst.ClockTimeNone,
-		firstExitCh: make(chan struct{}),
-	}
-}
-
-func (r *residencyProbe) recordEntry(buf *gst.Buffer) {
-	if buf == nil {
-		return
-	}
-	pts := buf.PresentationTimestamp()
-	if pts == gst.ClockTimeNone {
-		return
-	}
-	r.mu.Lock()
-	if pts != r.lastPTS {
-		r.lastPTS = pts
-		r.entryTimes = append(r.entryTimes, time.Now())
-	}
-	r.mu.Unlock()
-}
-
-func (r *residencyProbe) recordExit(buf *gst.Buffer) {
-	if buf == nil {
-		return
-	}
-	r.firstExitOnce.Do(func() { close(r.firstExitCh) })
-	now := time.Now()
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.lastExitTime = now
-	if r.exitCount >= len(r.entryTimes) {
-		// Exit strictly follows entry, so this only trips if the
-		// decoder emitted an extra buffer (rare) — ignore.
-		return
-	}
-	start := r.entryTimes[r.exitCount]
-	r.latencies = append(r.latencies, now.Sub(start))
-	r.exitCount++
-}
-
-// lastExit returns the wall timestamp of the most recent exit-probe
-// callback (zero if none yet). Used by the cpuProbe as the "stop
-// measuring" marker so samples taken after the last frame returned
-// are excluded from the load distribution.
-func (r *residencyProbe) lastExit() time.Time {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.lastExitTime
-}
-
-// snapshot returns a copy of the current latencies slice under the
-// lock so the caller can compute percentiles without the probes
-// mutating the slice underneath them.
-func (r *residencyProbe) snapshot() []time.Duration {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	out := make([]time.Duration, len(r.latencies))
-	copy(out, r.latencies)
-	return out
-}
-
-// probeFn wraps a record callback into a pad probe callback that
-// handles both Buffer and BufferList probes.
-func probeFn(rec func(*gst.Buffer)) func(*gst.Pad, *gst.PadProbeInfo) gst.PadProbeReturn {
-	return func(_ *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
-		if info.Type()&gst.PadProbeTypeBufferList != 0 {
-			if list := info.GetBufferList(); list != nil {
-				list.ForEach(func(b *gst.Buffer, _ uint) bool {
-					rec(b)
-					return true
-				})
-			}
-			return gst.PadProbeOK
-		}
-		rec(info.GetBuffer())
-		return gst.PadProbeOK
-	}
-}
 
 // mainPipeline holds the assembled main-side pipeline plus the
 // handles the runner needs to drive state transitions and read
@@ -165,19 +46,24 @@ func probeFn(rec func(*gst.Buffer)) func(*gst.Pad, *gst.PadProbeInfo) gst.PadPro
 // send "sink-has-data" to the child so it can unlock its cudaipcsrc.
 type mainPipeline struct {
 	pipeline      *gst.Pipeline
-	probe         *residencyProbe
 	srcMem        int
 	sinkMem       int
 	readyClients  []*gst.Element // unlock after "ready" (unixfdsrc)
 	cudaReturnSrc *gst.Element   // unlock after child "sink-has-data" (cudaipcsrc)
 	sinkHasDataCh <-chan struct{} // closed when main's cudaipcsink gets first buffer
 	fwdEOSCh      <-chan struct{} // closed when EOS reaches the forward-path IPC sink
+
+	// firstExitCh is closed by a one-shot probe on the return-path
+	// IPC source when the first buffer arrives back from the child.
+	// Used to start the CPU sampler and to delay the _playing dot
+	// dump until caps have propagated.
+	firstExitCh chan struct{}
 }
 
 // buildMainPipeline assembles the producer + receiver chains into one
-// GstPipeline, installs residency pad probes, and sets the return-
-// path IPC source to locked state. It picks unixfd or cudaipc per
-// direction based on the memory types declared by the element's
+// GstPipeline, installs a one-shot first-exit probe, and sets the
+// return-path IPC source to locked state. It picks unixfd or cudaipc
+// per direction based on the memory types declared by the element's
 // BuildSource and BuildSink. It does NOT change the pipeline state.
 func buildMainPipeline(elem Element, cfg Config, sockIn, sockOut string) (*mainPipeline, error) {
 	pipeline, err := gst.NewPipeline(fmt.Sprintf("bench-%s-%dx%d-%dx%d",
@@ -256,28 +142,31 @@ func buildMainPipeline(elem Element, cfg Config, sockIn, sockOut string) (*mainP
 		cudaReturnSrc = srcIn
 	}
 
-	// ---- Residency probes ----
-	probe := newResidencyProbe()
-	entryPad := sinkOut.GetStaticPad("sink")
-	if entryPad == nil {
-		return nil, fmt.Errorf("ipc sink (out) sink pad missing")
-	}
-	entryPad.AddProbe(gst.PadProbeTypeBuffer|gst.PadProbeTypeBufferList, probeFn(probe.recordEntry))
+	// ---- First-exit one-shot probe ----
+	// Closes firstExitCh when the first buffer arrives on the
+	// return path. Used to start the CPU sampler and delay the
+	// _playing dot dump. Self-removes after firing.
+	firstExitCh := make(chan struct{})
+	var firstExitOnce sync.Once
 	exitPad := srcIn.GetStaticPad("src")
 	if exitPad == nil {
 		return nil, fmt.Errorf("ipc src (in) src pad missing")
 	}
-	exitPad.AddProbe(gst.PadProbeTypeBuffer|gst.PadProbeTypeBufferList, probeFn(probe.recordExit))
+	exitPad.AddProbe(gst.PadProbeTypeBuffer|gst.PadProbeTypeBufferList,
+		func(_ *gst.Pad, _ *gst.PadProbeInfo) gst.PadProbeReturn {
+			firstExitOnce.Do(func() { close(firstExitCh) })
+			return gst.PadProbeRemove
+		})
 
 	return &mainPipeline{
 		pipeline:      pipeline,
-		probe:         probe,
 		srcMem:        srcMem,
 		sinkMem:       sinkMem,
 		readyClients:  readyClients,
 		cudaReturnSrc: cudaReturnSrc,
 		sinkHasDataCh: sinkHasDataCh,
 		fwdEOSCh:      fwdEOSCh,
+		firstExitCh:   firstExitCh,
 	}, nil
 }
 
