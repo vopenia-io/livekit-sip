@@ -192,18 +192,23 @@ func (e *SipBin) selectCapsForMedia(self *gst.Bin, media *gstsdp.Media, kind liv
 		return nil, fmt.Errorf("no caps found for media %s", media.GetMedia())
 	}
 
+	res := gst.NewEmptyCaps()
 	for _, formatCaps := range e.formats {
 		for _, caps := range mediaCaps {
 			self.Log(CAT, gst.LevelTrace, fmt.Sprintf("Intersecting media caps %s with format caps %s", caps.String(), formatCaps.String()))
 			icaps := caps.IntersectFull(formatCaps, gst.CapsIntersectFirst)
 			if icaps != nil && !icaps.IsEmpty() {
 				self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Found compatible caps for media %s: %s", kind.String(), icaps.String()))
-				return icaps, nil
+				res = res.Merge(icaps)
 			}
 		}
 	}
 
-	return nil, fmt.Errorf("no compatible caps found for media %s: %s", media.GetMedia(), media.AsText())
+	if res.IsEmpty() {
+		return nil, fmt.Errorf("no compatible caps found for media %s: %s", media.GetMedia(), media.AsText())
+	}
+
+	return res, nil
 }
 
 func (e *SipBin) makeTrackMedia(self *gst.Bin, track *SipTrack, caps *gst.Caps) (*gstsdp.Media, error) {

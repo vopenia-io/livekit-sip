@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -641,6 +642,110 @@ func TestNegotiate_DuplicateMediaKind(t *testing.T) {
 	}
 	if msg.Media(1).GetPort() != 0 {
 		t.Errorf("expected second audio disabled (port 0), got port %d", msg.Media(1).GetPort())
+	}
+
+	f.close()
+}
+
+func TestNegotiate_TelephoneEvent(t *testing.T) {
+	defer testutils.AssertNoLeaks(t)
+
+	f := newFixture(t, []*gst.Caps{pcmuAnyCaps(), telephoneEventAnyCaps()})
+
+	offer := makeSDP("192.168.1.1",
+		"m=audio 5000 RTP/AVP 0 101\r\na=rtpmap:0 PCMU/8000\r\na=rtpmap:101 telephone-event/8000\r\na=fmtp:101 0-15",
+	)
+	answer := f.emitOffer(t, offer)
+	if answer == "" {
+		t.Fatal("expected non-empty answer")
+	}
+	f.emitAck(t)
+
+	msg := parseAnswer(t, answer)
+	if msg.MediasLen() != 1 {
+		t.Fatalf("expected 1 media in answer, got %d", msg.MediasLen())
+	}
+
+	audio := msg.Media(0)
+	if audio.GetMedia() != "audio" {
+		t.Errorf("expected media type 'audio', got '%s'", audio.GetMedia())
+	}
+	if audio.GetPort() == 0 {
+		t.Error("expected audio port > 0, got 0")
+	}
+
+	// The merged caps selection should include both PCMU and telephone-event
+	// formats in the answer, not just the first compatible format.
+	hasPCMU := false
+	hasTelephoneEvent := false
+	for _, format := range audio.Formats() {
+		pt, err := strconv.Atoi(format)
+		if err != nil {
+			continue
+		}
+		caps, err := audio.GetCaps(pt)
+		if err != nil || caps.GetSize() == 0 {
+			continue
+		}
+		encoding, err := caps.GetStructureAt(0).GetString("encoding-name")
+		if err != nil {
+			continue
+		}
+		switch encoding {
+		case "PCMU":
+			hasPCMU = true
+		case "TELEPHONE-EVENT":
+			hasTelephoneEvent = true
+		}
+	}
+	if !hasPCMU {
+		t.Error("expected PCMU in answer formats")
+	}
+	if !hasTelephoneEvent {
+		t.Error("expected TELEPHONE-EVENT in answer formats")
+	}
+
+	f.close()
+}
+
+func TestNegotiate_TelephoneEvent_NoMatchWithoutFormat(t *testing.T) {
+	defer testutils.AssertNoLeaks(t)
+
+	// Only PCMU configured, no telephone-event format — telephone-event
+	// should NOT appear in the answer.
+	f := newFixture(t, []*gst.Caps{pcmuAnyCaps()})
+
+	offer := makeSDP("192.168.1.1",
+		"m=audio 5000 RTP/AVP 0 101\r\na=rtpmap:0 PCMU/8000\r\na=rtpmap:101 telephone-event/8000\r\na=fmtp:101 0-15",
+	)
+	answer := f.emitOffer(t, offer)
+	if answer == "" {
+		t.Fatal("expected non-empty answer")
+	}
+	f.emitAck(t)
+
+	msg := parseAnswer(t, answer)
+	if msg.MediasLen() != 1 {
+		t.Fatalf("expected 1 media in answer, got %d", msg.MediasLen())
+	}
+
+	audio := msg.Media(0)
+	for _, format := range audio.Formats() {
+		pt, err := strconv.Atoi(format)
+		if err != nil {
+			continue
+		}
+		caps, err := audio.GetCaps(pt)
+		if err != nil || caps.GetSize() == 0 {
+			continue
+		}
+		encoding, err := caps.GetStructureAt(0).GetString("encoding-name")
+		if err != nil {
+			continue
+		}
+		if encoding == "TELEPHONE-EVENT" {
+			t.Error("telephone-event should not be in answer when not in configured formats")
+		}
 	}
 
 	f.close()
