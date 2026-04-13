@@ -5,6 +5,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"weak"
 
 	"github.com/go-gst/go-glib/glib"
@@ -41,6 +42,8 @@ type FactoryCaps struct {
 }
 
 type FactoryBin struct {
+	mu sync.Mutex
+
 	Factories   []*gst.ElementFactory
 	FactoryCaps []FactoryCaps
 
@@ -82,6 +85,9 @@ func (e *FactoryBin) ClassInit(klass *glib.ObjectClass) {
 }
 
 func (e *FactoryBin) computeCaps(instance *gst.Object, pad *gst.Pad, direction gst.PadDirection, filter *gst.Caps) *gst.Caps {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	// self := gst.ToGstBin(instance)
 
 	var otherPad *gst.Pad
@@ -141,6 +147,9 @@ func (e *FactoryBin) selectFactory(incomingCaps *gst.Caps) *FactoryCaps {
 }
 
 func (e *FactoryBin) onCapsEvent(instance *gst.Object, pad *gst.Pad, event *gst.Event) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	self := gst.ToGstBin(instance)
 
 	if e.Elem != nil {
@@ -188,6 +197,9 @@ func (e *FactoryBin) onCapsEvent(instance *gst.Object, pad *gst.Pad, event *gst.
 }
 
 func (e *FactoryBin) InstanceInit(instance *glib.Object) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	self := gst.ToGstBin(instance)
 	elemClass := gst.ToElementClass(self.Class())
 
@@ -272,6 +284,9 @@ func (e *FactoryBin) InstanceInit(instance *glib.Object) {
 }
 
 func (e *FactoryBin) SetProperty(instance *glib.Object, id uint, value *glib.Value) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	self := gst.ToGstBin(instance)
 	param := properties[id]
 	switch param.Name() {
@@ -331,6 +346,9 @@ func (e *FactoryBin) SetProperty(instance *glib.Object, id uint, value *glib.Val
 }
 
 func (e *FactoryBin) GetProperty(instance *glib.Object, id uint) *glib.Value {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	self := gst.ToGstBin(instance)
 	param := properties[id]
 	switch param.Name() {
@@ -351,7 +369,11 @@ func (e *FactoryBin) GetProperty(instance *glib.Object, id uint) *glib.Value {
 }
 
 func (e *FactoryBin) Constructed(instance *glib.Object) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	self := gst.ToGstBin(instance)
+
 	e.FactoryCaps = make([]FactoryCaps, 0, len(e.Factories))
 	for _, factory := range e.Factories {
 		var srcCaps, sinkCaps *gst.Caps
