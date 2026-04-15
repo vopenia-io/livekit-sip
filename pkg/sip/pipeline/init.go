@@ -50,11 +50,13 @@ import (
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/bfcpserver"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/h264rtppaybin"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/iolivekit"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/iosip"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitcompositor"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/mediacut"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/rtpcapscodecfilter"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/rtph264capsintersect"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/samplewriter"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipbin"
@@ -179,6 +181,14 @@ func init() {
 
 	if !rtph264capsintersect.Register() {
 		panic("Failed to register rtph264capsintersect")
+	}
+
+	if !rtpcapscodecfilter.Register() {
+		panic("Failed to register rtpcapscodecfilter")
+	}
+
+	if !h264rtppaybin.Register() {
+		panic("Failed to register h264rtppaybin")
 	}
 
 	if !bfcpserver.Register() {
