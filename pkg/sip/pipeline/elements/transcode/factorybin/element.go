@@ -148,11 +148,11 @@ func (e *FactoryBin) selectFactory(incomingCaps *gst.Caps) *FactoryCaps {
 
 func (e *FactoryBin) onCapsEvent(instance *gst.Object, pad *gst.Pad, event *gst.Event) bool {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 
 	self := gst.ToGstBin(instance)
 
 	if e.Elem != nil {
+		e.mu.Unlock()
 		return pad.EventDefault(instance, event)
 	}
 
@@ -160,6 +160,7 @@ func (e *FactoryBin) onCapsEvent(instance *gst.Object, pad *gst.Pad, event *gst.
 	fc := e.selectFactory(caps)
 	if fc == nil {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("No factory found for caps: %q", caps.String()))
+		e.mu.Unlock()
 		return false
 	}
 
@@ -173,25 +174,29 @@ func (e *FactoryBin) onCapsEvent(instance *gst.Object, pad *gst.Pad, event *gst.
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create element from factory %s: %v", fc.Factory.GetName(), err))
 		self.Error("Failed to create element from factory", err)
+		e.mu.Unlock()
 		return false
 	}
 
 	if err := self.Add(elem); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add element %s to bin: %v", elem.GetName(), err))
 		self.Error("Failed to add element to bin", err)
+		e.mu.Unlock()
 		return false
-	}
-
-	if !elem.SyncStateWithParent() {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state with parent for element %s", elem.GetName()))
 	}
 
 	e.Elem = elem
 
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Selected factory %s for caps %q", fc.Factory.GetName(), caps.String()))
+
+	e.mu.Unlock()
+
 	e.SinkPad.SetTarget(elem.GetStaticPad("sink"))
 	e.SrcPad.SetTarget(elem.GetStaticPad("src"))
 
-	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Selected factory %s for caps %q", fc.Factory.GetName(), caps.String()))
+	if !elem.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state with parent for element %s", elem.GetName()))
+	}
 
 	return pad.EventDefault(instance, event)
 }
