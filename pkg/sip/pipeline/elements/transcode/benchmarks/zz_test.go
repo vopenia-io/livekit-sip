@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/h264rtppaybin"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/rtph264capsintersect"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/av1video"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/factorybin"
@@ -37,6 +38,7 @@ func initGStreamer() {
 	glib.SetEnv("GST_DEBUG_DUMP_DOT_DIR", DotDir, true)
 	gst.Init(nil)
 	rtph264capsintersect.Register()
+	h264rtppaybin.Register()
 	factorybin.Register()
 	vp9video.Register()
 	videovp9.Register()
