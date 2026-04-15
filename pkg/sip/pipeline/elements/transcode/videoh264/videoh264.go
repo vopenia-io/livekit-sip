@@ -38,13 +38,12 @@ type VideoH264 struct {
 	videoWidth  uint
 	videoHeight uint
 
-	VideoConvert         *gst.Element
-	VideoScale           *gst.Element
-	ScaleFilter          *gst.Element
-	X264Enc              *gst.Element
-	H264Parse            *gst.Element
-	RtpH264Pay           *gst.Element
-	RtpH264CapsIntersect *gst.Element
+	VideoConvert   *gst.Element
+	VideoScale     *gst.Element
+	ScaleFilter    *gst.Element
+	X264Enc        *gst.Element
+	H264RtpPayBin  *gst.Element
+	RtpCodecFilter *gst.Element
 }
 
 func (e *VideoH264) New() glib.GoObjectSubclass {
@@ -117,7 +116,7 @@ func (e *VideoH264) Constructed(instance *glib.Object) {
 	}
 
 	e.X264Enc, err = gst.NewElementWithProperties("x264enc", map[string]interface{}{
-		"speed-preset":     int(1), // ultrafast
+		"speed-preset":     int(1),  // ultrafast
 		"tune":             uint(4), // zerolatency
 		"key-int-max":      uint(12),
 		"bframes":          uint(0),
@@ -129,40 +128,20 @@ func (e *VideoH264) Constructed(instance *glib.Object) {
 		return
 	}
 
-	e.H264Parse, err = gst.NewElementWithProperties("h264parse", map[string]interface{}{
-		"config-interval": int(-1),
-	})
+	e.H264RtpPayBin, err = gst.NewElementWithProperties("h264rtppaybin", map[string]interface{}{})
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create h264parse element: %v", err))
-		self.Error("Failed to create h264parse element", err)
-		return
-	}
-
-	e.RtpH264Pay, err = gst.NewElementWithProperties("rtph264pay", map[string]interface{}{
-		"mtu":             int(1200),
-		"config-interval": int(1),
-		"aggregate-mode":  int(1),
-	})
-	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create rtph264pay element: %v", err))
-		self.Error("Failed to create rtph264pay element", err)
-		return
-	}
-
-	e.RtpH264CapsIntersect, err = gst.NewElementWithProperties("rtph264capsintersect", map[string]interface{}{})
-	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create rtph264capsintersect element: %v", err))
-		self.Error("Failed to create rtph264capsintersect element", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create h264rtppaybin element: %v", err))
+		self.Error("Failed to create h264rtppaybin element", err)
 		return
 	}
 
 	// x264enc enforces profile-level limits and refuses impossible
 	// resolutions. When downstream advertises a max via
-	// rtph264capsintersect, we have to tighten the scale capsfilter
+	// h264rtppaybin, we have to tighten the scale capsfilter
 	// dynamically so the encoder sees something it can handle.
 	wscaleFilter := glib.WeakRefInit(e.ScaleFilter)
 	wself := glib.WeakRefInit(self)
-	if _, err := e.RtpH264CapsIntersect.Connect("max-resolution", func(_ *gst.Element, w, h int) {
+	if _, err := e.H264RtpPayBin.Connect("max-resolution", func(_ *gst.Element, w, h int) {
 		self := gst.ToGstBin(wself.Get())
 		if self == nil {
 			return
@@ -180,14 +159,22 @@ func (e *VideoH264) Constructed(instance *glib.Object) {
 		self.Error("Failed to connect max-resolution signal", err)
 	}
 
+	e.RtpCodecFilter, err = gst.NewElementWithProperties("rtpcapscodecfilter", map[string]interface{}{
+		"caps": gst.NewCapsFromString("application/x-rtp, media=(string)video, encoding-name=(string)H264"),
+	})
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create RTP codec filter element: %v", err))
+		self.Error("Failed to create RTP codec filter element", err)
+		return
+	}
+
 	if err := self.AddMany(
 		e.VideoConvert,
 		e.VideoScale,
 		e.ScaleFilter,
 		e.X264Enc,
-		e.H264Parse,
-		e.RtpH264Pay,
-		e.RtpH264CapsIntersect,
+		e.H264RtpPayBin,
+		e.RtpCodecFilter,
 	); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add elements to bin: %v", err))
 		self.Error("Failed to add elements to bin", err)
@@ -199,9 +186,8 @@ func (e *VideoH264) Constructed(instance *glib.Object) {
 		e.VideoScale,
 		e.ScaleFilter,
 		e.X264Enc,
-		e.H264Parse,
-		e.RtpH264Pay,
-		e.RtpH264CapsIntersect,
+		e.H264RtpPayBin,
+		e.RtpCodecFilter,
 	); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link elements: %v", err))
 		self.Error("Failed to link elements", err)
@@ -213,7 +199,7 @@ func (e *VideoH264) Constructed(instance *glib.Object) {
 	ghostSink := gst.NewGhostPadFromTemplate("sink", e.VideoConvert.GetStaticPad("sink"), elemClass.GetPadTemplate("sink"))
 	self.AddPad(ghostSink.Pad)
 
-	ghostSrc := gst.NewGhostPadFromTemplate("src", e.RtpH264CapsIntersect.GetStaticPad("src"), elemClass.GetPadTemplate("src"))
+	ghostSrc := gst.NewGhostPadFromTemplate("src", e.RtpCodecFilter.GetStaticPad("src"), elemClass.GetPadTemplate("src"))
 	self.AddPad(ghostSrc.Pad)
 }
 
@@ -264,7 +250,6 @@ func (e *VideoH264) Finalize(instance *glib.Object) {
 	e.VideoScale = nil
 	e.ScaleFilter = nil
 	e.X264Enc = nil
-	e.H264Parse = nil
-	e.RtpH264Pay = nil
-	e.RtpH264CapsIntersect = nil
+	e.H264RtpPayBin = nil
+	e.RtpCodecFilter = nil
 }

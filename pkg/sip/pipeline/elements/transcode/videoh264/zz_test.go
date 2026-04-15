@@ -7,14 +7,14 @@ import (
 	"time"
 
 	"github.com/go-gst/go-gst/gst"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/rtph264capsintersect"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/h264rtppaybin"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/testutils"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videoh264"
 )
 
 func TestMain(m *testing.M) {
 	gst.Init(nil)
-	rtph264capsintersect.Register()
+	h264rtppaybin.Register()
 	videoh264.Register()
 	os.Exit(m.Run())
 }
