@@ -194,14 +194,18 @@ func (e *SipBin) selectCapsForMedia(self *gst.Bin, media *gstsdp.Media, kind liv
 
 	res := gst.NewEmptyCaps()
 	for _, formatCaps := range e.formats {
+		leftover := make([]*gst.Caps, 0, len(mediaCaps))
 		for _, caps := range mediaCaps {
 			self.Log(CAT, gst.LevelTrace, fmt.Sprintf("Intersecting media caps %s with format caps %s", caps.String(), formatCaps.String()))
 			icaps := caps.IntersectFull(formatCaps, gst.CapsIntersectFirst)
 			if icaps != nil && !icaps.IsEmpty() {
 				self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Found compatible caps for media %s: %s", kind.String(), icaps.String()))
-				res = res.Merge(icaps)
+				res.Append(caps.Copy())
+			} else {
+				leftover = append(leftover, caps)
 			}
 		}
+		mediaCaps = leftover
 	}
 
 	if res.IsEmpty() {
@@ -243,6 +247,16 @@ func (e *SipBin) makeTrackMedia(self *gst.Bin, track *SipTrack, caps *gst.Caps) 
 	if track.Label != "" {
 		if ret := media.AddAttribute("label", track.Label); ret != gstsdp.SDPResultOk {
 			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to add label attribute to media: %v", ret))
+		}
+	}
+
+	switch track.Kind {
+	case livekit.TrackSource_CAMERA, livekit.TrackSource_SCREEN_SHARE:
+		if ret := media.AddAttribute("rtcp-fb", "* nack pli"); ret != gstsdp.SDPResultOk {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to add rtcp-fb attribute to media: %v", ret))
+		}
+		if ret := media.AddAttribute("rtcp-fb", "* ccm fir"); ret != gstsdp.SDPResultOk {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to add rtcp-fb attribute to media: %v", ret))
 		}
 	}
 
