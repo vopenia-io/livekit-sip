@@ -1,7 +1,16 @@
 package vp9video
 
+/*
+#cgo pkg-config: gstreamer-1.0
+#include <gst/gst.h>
+
+extern void vp9_add_fix_pts_probe(GstElement *element);
+*/
+import "C"
+
 import (
 	"fmt"
+	"unsafe"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
@@ -98,6 +107,8 @@ func (e *Vp9Video) Constructed(instance *glib.Object) {
 		self.Error("Failed to create vp9parse element", err)
 		return
 	}
+
+	C.vp9_add_fix_pts_probe((*C.GstElement)(unsafe.Pointer(e.Vp9Parse.Instance())))
 
 	e.Vp9Dec, err = gst.NewElementWithProperties("vp9dec", map[string]interface{}{})
 	if err != nil {
