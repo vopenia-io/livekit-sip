@@ -328,13 +328,6 @@ func (o *MediaOrchestrator) sendOfferLoop() {
 }
 
 func (o *MediaOrchestrator) handleSendOffer(offer string) error {
-	// Release the pending SipTransaction from earlyReinvite
-	if err := o.pipeline.EmitAckSDP(""); err != nil {
-		o.log.Errorw("failed to emit ack-sdp before re-INVITE", err)
-		return err
-	}
-
-	// Send SIP re-INVITE with the offer, get 200 OK with answer
 	resp, err := o.inbound.sendReInvite(o.ctx, []byte(offer))
 	if err != nil {
 		o.log.Errorw("re-INVITE failed", err)
@@ -352,15 +345,8 @@ func (o *MediaOrchestrator) handleSendOffer(offer string) error {
 		return fmt.Errorf("re-INVITE 200 OK has no SDP body")
 	}
 
-	// Feed answer back to sipbin
 	if err := o.pipeline.EmitAnswerSDP(answerSDP); err != nil {
 		o.log.Errorw("failed to emit answer-sdp after re-INVITE", err)
-		return err
-	}
-
-	// Finalize the transaction
-	if err := o.pipeline.EmitAckSDP(""); err != nil {
-		o.log.Errorw("failed to emit final ack-sdp after re-INVITE", err)
 		return err
 	}
 
