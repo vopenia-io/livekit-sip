@@ -184,7 +184,7 @@ func (e *SipBin) OnOfferSdp(self *gst.Bin, offerData []byte) ([]byte, error) {
 
 	e.Medias = medias
 
-	e.transaction.SetPending()
+	e.transaction.SetPending(TransactionPendingKindAck)
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Generated answer SDP:\n%s", answerData))
 
@@ -196,10 +196,10 @@ func (e *SipBin) OnOfferSdp(self *gst.Bin, offerData []byte) ([]byte, error) {
 }
 
 func (e *SipBin) OnAnswerSdp(self *gst.Bin, answerData []byte) error {
-	unlock, err := e.transaction.WaitReady()
+	unlock, err := e.transaction.Ack(TransactionPendingKindAnswer)
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to wait for transaction to be ready: %v", err))
-		return fmt.Errorf("transaction is not ready: %w", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to acknowledge transaction: %v", err))
+		return fmt.Errorf("failed to acknowledge transaction: %w", err)
 	}
 	defer unlock()
 
@@ -299,8 +299,6 @@ func (e *SipBin) OnAnswerSdp(self *gst.Bin, answerData []byte) error {
 	}
 
 	e.Medias = medias
-
-	e.transaction.SetPending()
 
 	self.Log(CAT, gst.LevelInfo, "Answer SDP processed successfully")
 
@@ -481,7 +479,7 @@ func (e *SipBin) earlyReinvite(self *gst.Bin) {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to emit send-offer-sdp signal: %v", err))
 			return
 		}
-		e.transaction.SetPending()
+		e.transaction.SetPending(TransactionPendingKindAnswer)
 		self.Log(CAT, gst.LevelInfo, "Early reinvite offer sent successfully")
 	}()
 }

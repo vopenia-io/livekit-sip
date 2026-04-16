@@ -7,10 +7,18 @@ import (
 
 var ErrTransactionClosed = fmt.Errorf("transaction closed")
 
+type TransactionPendingKind int
+
+const (
+	TransactionPendingKindNone TransactionPendingKind = iota
+	TransactionPendingKindAck
+	TransactionPendingKindAnswer
+)
+
 func NewSipTransaction() *SipTransaction {
 	t := &SipTransaction{}
 	t.cond = sync.NewCond(&t.mu)
-	t.pending = true
+	t.pending = TransactionPendingKindNone
 	return t
 }
 
@@ -18,7 +26,7 @@ type SipTransaction struct {
 	mu      sync.Mutex
 	cond    *sync.Cond
 	active  bool
-	pending bool
+	pending TransactionPendingKind
 	closed  bool
 }
 
@@ -36,9 +44,9 @@ func (t *SipTransaction) WaitReady() (unlock func(), err error) {
 		}
 	}
 	t.active = true
-	t.pending = false
+	t.pending = TransactionPendingKindNone
 	return func() {
-		if !t.pending {
+		if t.pending == TransactionPendingKindNone {
 			t.active = false
 			t.cond.Broadcast()
 		}
@@ -46,23 +54,33 @@ func (t *SipTransaction) WaitReady() (unlock func(), err error) {
 	}, nil
 }
 
-func (t *SipTransaction) SetPending() {
+func (t *SipTransaction) SetPending(kind TransactionPendingKind) {
 	// do we need to handle ack timeout here?
-	t.pending = true
+	t.pending = kind
 }
 
-func (t *SipTransaction) Ack() (unlock func()) {
+func (t *SipTransaction) Ack(kind TransactionPendingKind) (unlock func(), err error) {
 	t.mu.Lock()
-	return func() {
-		t.active = false
-		t.cond.Broadcast()
+
+	if t.pending != kind {
 		t.mu.Unlock()
+		return nil, fmt.Errorf("transaction pending kind mismatch: got %v, expected %v", t.pending, kind)
 	}
+
+	t.active = true
+	t.pending = TransactionPendingKindNone
+	return func() {
+		if t.pending == TransactionPendingKindNone {
+			t.active = false
+			t.cond.Broadcast()
+		}
+		t.mu.Unlock()
+	}, nil
 }
 
-func (t *SipTransaction) IsPending() (pending bool, unlock func()) {
+func (t *SipTransaction) GetPending() (pending TransactionPendingKind, unlock func()) {
 	t.mu.Lock()
-	pending = t.active
+	pending = t.pending
 	return pending, func() {
 		t.mu.Unlock()
 	}

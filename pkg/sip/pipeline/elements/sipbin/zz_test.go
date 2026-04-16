@@ -570,9 +570,6 @@ func TestNegotiate_NoIP(t *testing.T) {
 	if answer != "" {
 		t.Errorf("expected empty answer when no IP is configured, got: %s", answer)
 	}
-	if _, err := sipbin.Emit("ack-sdp", ""); err != nil {
-		t.Fatalf("failed to emit ack-sdp signal: %v", err)
-	}
 
 	dumpDot(t, pipeline, "before_cleanup")
 	if err := pipeline.SetState(gst.StateNull); err != nil {
@@ -1650,7 +1647,6 @@ func TestEarlyReinvite_Triggered(t *testing.T) {
 
 	// Wait for the early re-INVITE offer
 	reInviteOffer := waitForOffer(t, ch, 5500*time.Millisecond)
-	f.emitAck(t)
 	msg := parseAnswer(t, reInviteOffer)
 
 	// Should have 4 mlines: audio + video(main) + BFCP + video(screenshare)
@@ -1771,7 +1767,6 @@ func TestEarlyReinvite_OfferContent(t *testing.T) {
 	bfcpPort := answerMsg.Media(2).GetPort()
 
 	reInviteOffer := waitForOffer(t, ch, 5500*time.Millisecond)
-	f.emitAck(t)
 	msg := parseAnswer(t, reInviteOffer)
 
 	if msg.MediasLen() != 4 {
@@ -1825,7 +1820,6 @@ func TestEarlyReinvite_FullFlow(t *testing.T) {
 
 	// Step 2: wait for re-INVITE offer
 	reInviteOffer := waitForOffer(t, ch, 5500*time.Millisecond)
-	f.emitAck(t)
 	reInviteMsg := parseAnswer(t, reInviteOffer)
 	if reInviteMsg.MediasLen() != 4 {
 		t.Fatalf("expected 4 medias in re-INVITE offer, got %d", reInviteMsg.MediasLen())
@@ -1841,7 +1835,6 @@ func TestEarlyReinvite_FullFlow(t *testing.T) {
 
 	// Step 4: emit answer — should process without error
 	f.emitAnswer(t, reInviteAnswer)
-	f.emitAck(t)
 	dumpDot(t, f.pipeline, "after_reinvite_answer")
 
 	f.close()
@@ -1913,7 +1906,6 @@ func TestEarlyReinvite_PolycomX30_UnsupportedCodecInAnswer(t *testing.T) {
 
 	// Step 2: wait for the early re-INVITE offer (earlyReinvite adds screenshare)
 	reInviteOffer := waitForOffer(t, ch, 5500*time.Millisecond)
-	f.emitAck(t)
 	reInviteMsg := parseAnswer(t, reInviteOffer)
 	t.Logf("Re-INVITE offer has %d media lines", reInviteMsg.MediasLen())
 
@@ -1962,7 +1954,6 @@ func TestEarlyReinvite_PolycomX30_UnsupportedCodecInAnswer(t *testing.T) {
 
 	// Step 4: emit Polycom's answer — should not crash or select unsupported codecs
 	f.emitAnswer(t, polyAnswer)
-	f.emitAck(t)
 	dumpDot(t, f.pipeline, "after_poly_reinvite_answer")
 
 	// Step 5: request the screenshare send pad — its capsfilter should have H264 caps,

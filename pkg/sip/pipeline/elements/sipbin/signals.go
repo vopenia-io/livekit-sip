@@ -8,7 +8,11 @@ import (
 )
 
 func (e *SipBin) OnAckSDP(self *gst.Bin, b []byte) error {
-	unlock := e.transaction.Ack()
+	unlock, err := e.transaction.Ack(TransactionPendingKindAck)
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to ack transaction: %v", err))
+		return err
+	}
 	defer unlock()
 
 	e.transactionID.Add(1)
