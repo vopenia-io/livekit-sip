@@ -7,11 +7,11 @@ import (
 
 func TestParseProfileLevelID(t *testing.T) {
 	tests := []struct {
-		plid       string
-		wantProf   profile
-		wantLevel  uint8
-		want1b     bool
-		wantErr    bool
+		plid      string
+		wantProf  profile
+		wantLevel uint8
+		want1b    bool
+		wantErr   bool
 	}{
 		// Constrained Baseline 3.1 — common WebRTC baseline
 		{"42e01f", profileConstrainedBaseline, 31, false, false},
@@ -74,7 +74,11 @@ func TestH264CapsStringForPLID(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.plid, func(t *testing.T) {
-			s := h264CapsStringForPLID(tc.plid)
+			parsed, err := parseProfileLevelID(tc.plid)
+			if err != nil {
+				t.Fatalf("failed to parse plid %q: %v", tc.plid, err)
+			}
+			s := h264CapsStringForPLID(parsed)
 			if s == "" {
 				t.Fatalf("got empty caps string for plid=%s", tc.plid)
 			}
@@ -95,8 +99,13 @@ func TestH264CapsStringForPLID(t *testing.T) {
 }
 
 func TestH264CapsStringForPLID_Invalid(t *testing.T) {
-	for _, plid := range []string{"", "xx", "000000", "ff00ff"} {
-		if got := h264CapsStringForPLID(plid); got != "" {
+	// Unknown profile/level combinations should yield empty caps.
+	for _, plid := range []string{"000000", "ff00ff"} {
+		parsed, err := parseProfileLevelID(plid)
+		if err != nil {
+			continue // parse failure is fine too
+		}
+		if got := h264CapsStringForPLID(parsed); got != "" {
 			t.Errorf("plid=%q: expected empty, got %q", plid, got)
 		}
 	}
@@ -104,12 +113,12 @@ func TestH264CapsStringForPLID_Invalid(t *testing.T) {
 
 func TestMaxResolutionForLevel(t *testing.T) {
 	tests := []struct {
-		plid      string
-		fps       int
-		wantMinW  int // minimum expected width (at 16:9)
-		wantMinH  int
+		plid     string
+		fps      int
+		wantMinW int
+		wantMinH int
 	}{
-		// Level 3.1: maxFS=3600 MBs. 16:9 -> 960x544 region. 16 * MB
+		// Level 3.1: maxFS=3600 MBs. 16:9 -> ~1280x720 region.
 		{"640c1f", 30, 900, 500},
 		// Level 4.2: much higher, 1920x1088+ at 30fps
 		{"64002a", 30, 1900, 1080},
@@ -118,7 +127,11 @@ func TestMaxResolutionForLevel(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.plid, func(t *testing.T) {
-			w, h, ok := maxResolutionForLevel(tc.plid, tc.fps)
+			parsed, err := parseProfileLevelID(tc.plid)
+			if err != nil {
+				t.Fatalf("failed to parse plid %q: %v", tc.plid, err)
+			}
+			w, h, ok := maxResolutionForLevel(parsed, tc.fps)
 			if !ok {
 				t.Fatalf("plid=%s: not ok", tc.plid)
 			}
@@ -130,7 +143,49 @@ func TestMaxResolutionForLevel(t *testing.T) {
 }
 
 func TestMaxResolutionForLevel_Invalid(t *testing.T) {
-	if _, _, ok := maxResolutionForLevel("not-hex", 30); ok {
-		t.Errorf("expected !ok for malformed plid")
+	// A plid whose level has no entry in h264Levels should return !ok.
+	parsed, err := parseProfileLevelID("42e0ff")
+	if err != nil {
+		t.Skip("parse error, skipping")
+	}
+	if _, _, ok := maxResolutionForLevel(parsed, 30); ok {
+		t.Errorf("expected !ok for unknown level")
+	}
+}
+
+func TestPatchProfileLevelID(t *testing.T) {
+	tests := []struct {
+		name      string
+		plid      string
+		maxFs     int
+		maxMbps   int
+		wantLevel uint8
+	}{
+		// No patching when maxFs/maxMbps are zero.
+		{"no_patch_zero", "42e01f", 0, 0, 31},
+		// No patching when constraints are negative.
+		{"no_patch_negative", "42e01f", -1, -1, 31},
+		// Constraints that match level 5.1 should upgrade from 3.1.
+		{"upgrade_to_51", "42e01f", 36864, 983040, 51},
+		// Constraints matching level 4.2 (with 95% tolerance).
+		{"upgrade_to_42", "42e01f", 8270, 496328, 42},
+		// Constraints already at level — no upgrade needed.
+		{"no_upgrade_at_level", "64002a", 3600, 108000, 42},
+		// Constraints that fit level 3.0 thresholds should upgrade from
+		// a lower starting level.
+		{"upgrade_to_30", "42e00a", 1620, 40500, 30},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			parsed, err := parseProfileLevelID(tc.plid)
+			if err != nil {
+				t.Fatalf("failed to parse plid %q: %v", tc.plid, err)
+			}
+			result := patchProfileLevelID(parsed, tc.maxFs, tc.maxMbps)
+			if result.levelIDC != tc.wantLevel {
+				t.Errorf("levelIDC: got %d, want %d", result.levelIDC, tc.wantLevel)
+			}
+		})
 	}
 }

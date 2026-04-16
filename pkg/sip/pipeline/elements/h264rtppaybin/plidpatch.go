@@ -1,6 +1,8 @@
 package h264rtppaybin
 
 import (
+	"fmt"
+	"strconv"
 	"sync/atomic"
 
 	"github.com/go-gst/go-glib/glib"
@@ -27,6 +29,7 @@ import (
 //     element only massages the RTP-side strings around it.
 type plidPatch struct {
 	plidResolved atomic.Bool
+	plid         profileLevelID
 }
 
 func (e *plidPatch) New() glib.GoObjectSubclass { return &plidPatch{} }
@@ -56,21 +59,14 @@ func (e *plidPatch) ClassInit(klass *glib.ObjectClass) {
 		gst.SignalRunLast,
 		glib.TYPE_NONE,
 		glib.TYPE_STRING,
+		glib.TYPE_INT,
+		glib.TYPE_INT,
 	)
 }
 
 func (e *plidPatch) InstanceInit(instance *glib.Object) {
 	self := base.ToGstBaseTransform(instance)
 	self.SetPassthrough(true)
-}
-
-// sdpFmtpFields are SDP-specific fmtp fields that have no meaning to
-// upstream GStreamer elements (x264enc, rtph264pay) and should be
-// stripped alongside profile-level-id.
-var sdpFmtpFields = []string{
-	"profile-level-id",
-	"max-fs", "max-mbps", "max-br", "max-dpb", "max-smbps", "max-fps",
-	"packetization-mode",
 }
 
 func (e *plidPatch) TransformCaps(self *base.GstBaseTransform, direction gst.PadDirection, caps, filter *gst.Caps) *gst.Caps {
@@ -80,15 +76,13 @@ func (e *plidPatch) TransformCaps(self *base.GstBaseTransform, direction gst.Pad
 	// which is the earliest moment ghost pad targets are guaranteed to be
 	// wired through in a factorybin pipeline.
 	if direction == gst.PadDirectionSource && !e.plidResolved.Load() {
-		e.tryEmitPlidResolved(self)
+		e.resolvePlid(self)
 	}
 
 	result := caps.Copy()
 	for i := 0; i < result.GetSize(); i++ {
 		st := result.GetStructureAt(i)
-		for _, f := range sdpFmtpFields {
-			st.RemoveValue(f)
-		}
+		st.RemoveValue("profile-level-id")
 	}
 	if filter != nil {
 		result = result.Intersect(filter)
@@ -96,19 +90,61 @@ func (e *plidPatch) TransformCaps(self *base.GstBaseTransform, direction gst.Pad
 	return result.Ref()
 }
 
-func (e *plidPatch) tryEmitPlidResolved(self *base.GstBaseTransform) {
+func (e *plidPatch) resolvePlid(self *base.GstBaseTransform) {
 	downstream := self.SrcPad().PeerQueryCaps(nil)
 	if downstream == nil || downstream.IsEmpty() || downstream.IsAny() || downstream.GetSize() == 0 {
 		return
 	}
-	plid := getProfileLevelID(downstream.GetStructureAt(0))
-	if plid == "" {
+	st := downstream.GetStructureAt(0)
+	plid, err := st.GetString("profile-level-id")
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("resolvePlid: downstream caps missing profile-level-id: %v", err))
 		return
 	}
+
+	parsed, err := parseProfileLevelID(plid)
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("resolvePlid: failed to parse profile-level-id %q: %v", plid, err))
+		return
+	}
+
+	var maxFs, maxMbps int
+
+	maxFsStr, err := st.GetString("max-fs")
+	if err == nil {
+		maxFs, err = strconv.Atoi(maxFsStr)
+		if err != nil {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Invalid max-fs value in downstream caps: %v", err))
+			maxFs = 0
+		}
+	}
+
+	maxMbpsStr, err := st.GetString("max-mbps")
+	if err == nil {
+		maxMbps, err = strconv.Atoi(maxMbpsStr)
+		if err != nil {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Invalid max-mbps value in downstream caps: %v", err))
+			maxMbps = 0
+		}
+	}
+
+	patched := patchProfileLevelID(parsed, maxFs, maxMbps)
+	e.plid = patched
+
+	w, h, ok := maxResolutionForLevel(patched, 24)
+	if !ok {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown profile-level-id %q; cannot determine max resolution", patched))
+		w = -1
+		h = -1
+	}
+
 	if !e.plidResolved.CompareAndSwap(false, true) {
 		return
 	}
-	if _, err := self.Element.Emit("plid-resolved", plid); err != nil {
+
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Profile-level-id resolved: %s level %d (max resolution: %dx%d)", patched, patched.levelIDC, w, h))
+
+	if _, err := self.Element.Emit("plid-resolved", patched.String(), w, h); err != nil {
 		self.Log(CAT, gst.LevelError, "failed to emit plid-resolved: "+err.Error())
 	}
 }

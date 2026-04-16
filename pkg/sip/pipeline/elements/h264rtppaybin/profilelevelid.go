@@ -7,6 +7,13 @@ import (
 	"strings"
 )
 
+type profileCase int
+
+const (
+	lowerCase profileCase = iota
+	upperCase
+)
+
 type profile int
 
 const (
@@ -18,32 +25,49 @@ const (
 	profileConstrainedHigh
 )
 
-type parsedProfileLevelID struct {
-	profile    profile
-	profileIDC uint8
-	profileIOP uint8
-	levelIDC   uint8
-	isLevel1b  bool
+type profileLevelID struct {
+	profileCase profileCase
+	profile     profile
+	profileIDC  uint8
+	profileIOP  uint8
+	levelIDC    uint8
+	isLevel1b   bool
 }
 
-func parseProfileLevelID(s string) (parsedProfileLevelID, error) {
+func parseProfileLevelID(s string) (profileLevelID, error) {
 	s = strings.ToLower(strings.TrimSpace(s))
 	if len(s) != 6 {
-		return parsedProfileLevelID{}, fmt.Errorf("profile-level-id must be 6 hex chars, got %q", s)
-	}
-	b, err := hex.DecodeString(s)
-	if err != nil {
-		return parsedProfileLevelID{}, fmt.Errorf("invalid hex in profile-level-id %q: %w", s, err)
+		return profileLevelID{}, fmt.Errorf("profile-level-id must be 6 hex chars, got %q", s)
 	}
 
-	p := parsedProfileLevelID{
-		profileIDC: b[0],
-		profileIOP: b[1],
-		levelIDC:   b[2],
+	var profileCase profileCase
+	if s != strings.ToLower(s) {
+		profileCase = upperCase
+	} else {
+		profileCase = lowerCase
+	}
+
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		return profileLevelID{}, fmt.Errorf("invalid hex in profile-level-id %q: %w", s, err)
+	}
+
+	p := profileLevelID{
+		profileCase: profileCase,
+		profileIDC:  b[0],
+		profileIOP:  b[1],
+		levelIDC:    b[2],
 	}
 	p.profile = identifyProfile(p.profileIDC, p.profileIOP)
 	p.isLevel1b = isLevel1b(p.profileIDC, p.profileIOP, p.levelIDC)
 	return p, nil
+}
+
+func (p profileLevelID) String() string {
+	if p.profileCase == upperCase {
+		return fmt.Sprintf("%02X%02X%02X", p.profileIDC, p.profileIOP, p.levelIDC)
+	}
+	return fmt.Sprintf("%02x%02x%02x", p.profileIDC, p.profileIOP, p.levelIDC)
 }
 
 func identifyProfile(idc, iop uint8) profile {
@@ -156,13 +180,9 @@ func gstH264LevelName(levelIDC uint8, is1b bool) string {
 // h264CapsStringForPLID returns a GStreamer caps string describing the
 // H.264-domain constraint implied by the given profile-level-id. Empty
 // string if plid cannot be parsed to a known profile/level.
-func h264CapsStringForPLID(plid string) string {
-	p, err := parseProfileLevelID(plid)
-	if err != nil {
-		return ""
-	}
-	profName := gstH264ProfileName(p.profile)
-	levelName := gstH264LevelName(p.levelIDC, p.isLevel1b)
+func h264CapsStringForPLID(plid profileLevelID) string {
+	profName := gstH264ProfileName(plid.profile)
+	levelName := gstH264LevelName(plid.levelIDC, plid.isLevel1b)
 	if profName == "" || levelName == "" {
 		return ""
 	}
@@ -211,13 +231,8 @@ func limitsForLevel(levelIDC uint8, isLevel1b bool) *h264LevelLimits {
 // maxResolutionForLevel computes the maximum width and height (assuming
 // 16:9 aspect ratio) that fit within the given profile-level-id's
 // constraints at the specified framerate.
-func maxResolutionForLevel(plid string, fps int) (maxWidth, maxHeight int, ok bool) {
-	parsed, err := parseProfileLevelID(plid)
-	if err != nil {
-		return 0, 0, false
-	}
-
-	limits := limitsForLevel(parsed.levelIDC, parsed.isLevel1b)
+func maxResolutionForLevel(plid profileLevelID, fps int) (maxWidth, maxHeight int, ok bool) {
+	limits := limitsForLevel(plid.levelIDC, plid.isLevel1b)
 	if limits == nil {
 		return 0, 0, false
 	}
@@ -239,4 +254,34 @@ func maxResolutionForLevel(plid string, fps int) (maxWidth, maxHeight int, ok bo
 	widthMBs := int(effectiveFS) / heightMBs
 
 	return widthMBs * 16, heightMBs * 16, true
+}
+
+var levelThresholds = []struct {
+	maxFS    int
+	maxMBPS  int
+	levelIDC uint8
+}{
+	{36864, 983040, 51},
+	{22080, 589824, 50},
+	{8704, 522240, 42},
+	{8192, 245760, 41},
+	{8192, 245760, 40},
+	{5120, 216000, 32},
+	{3600, 108000, 31},
+	{1620, 40500, 30},
+}
+
+func patchProfileLevelID(parsed profileLevelID, maxFs, maxMbps int) profileLevelID {
+	if maxFs <= 0 || maxMbps <= 0 {
+		return parsed
+	}
+
+	for _, t := range levelThresholds {
+		if maxFs*100 >= t.maxFS*95 && maxMbps*100 >= t.maxMBPS*95 && parsed.levelIDC < t.levelIDC {
+			parsed.levelIDC = t.levelIDC
+			return parsed
+		}
+	}
+
+	return parsed
 }

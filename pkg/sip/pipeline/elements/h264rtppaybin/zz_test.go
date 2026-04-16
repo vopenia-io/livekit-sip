@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/h264rtppaybin"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/testutils"
 )
 
 func TestMain(m *testing.M) {
@@ -19,8 +20,6 @@ func TestMain(m *testing.M) {
 
 // buildPipeline constructs: videotestsrc → capsfilter(raw) → x264enc →
 // h264rtppaybin → capsfilter(rtp with profile-level-id) → fakesink.
-// Matches the encoding chain used in videoh264 so the bin sees real
-// x264-produced H.264.
 func buildPipeline(t *testing.T, downPLID string, numBuffers int) (*gst.Pipeline, *gst.Element, *gst.Pad) {
 	t.Helper()
 
@@ -52,11 +51,6 @@ func buildPipeline(t *testing.T, downPLID string, numBuffers int) (*gst.Pipeline
 		t.Fatal("raw capsfilter:", err)
 	}
 
-	// Keep x264enc config minimal so the profile_capsfilter downstream is
-	// the only constraint deciding which H.264 profile gets produced. The
-	// production videoh264 element sets tune=zerolatency and other flags,
-	// but those interact with profile selection and are orthogonal to what
-	// this test exercises.
 	enc, err := gst.NewElementWithProperties("x264enc", map[string]interface{}{
 		"speed-preset": int(1),
 		"key-int-max":  uint(12),
@@ -140,11 +134,10 @@ func runPipeline(t *testing.T, p *gst.Pipeline, sinkPad *gst.Pad) int32 {
 }
 
 // TestProfileNegotiation exercises the bin end-to-end against a range of
-// downstream profile-level-id values, verifying that buffers flow (i.e.
-// the profile_capsfilter didn't over-constrain x264enc out of a valid
-// configuration) and that the negotiated caps on the sink side carry
-// the payload type / media fields intact.
+// downstream profile-level-id values, verifying that buffers flow.
 func TestProfileNegotiation(t *testing.T) {
+	defer testutils.AssertNoLeaks(t)
+
 	cases := []struct {
 		name string
 		plid string
@@ -168,9 +161,11 @@ func TestProfileNegotiation(t *testing.T) {
 }
 
 // TestMaxResolutionSignal verifies the bin emits max-resolution once
-// during state-up with values consistent with the downstream plid's
-// level.
+// during caps negotiation with values consistent with the downstream
+// plid's level.
 func TestMaxResolutionSignal(t *testing.T) {
+	defer testutils.AssertNoLeaks(t)
+
 	cases := []struct {
 		name     string
 		plid     string
@@ -179,11 +174,11 @@ func TestMaxResolutionSignal(t *testing.T) {
 		wantMaxW int
 		wantMaxH int
 	}{
-		// Level 3.1 @ 30fps: maxFS=3600 MBs → 1280x720 at 16:9.
+		// Level 3.1 @ 24fps (resolvePlid uses fps=24): maxFS=3600 MBs → ~1280x720
 		{"high_3_1", "640c1f", 1200, 700, 1400, 800},
-		// Level 4.2 @ 30fps: maxFS=8704 MBs → ~1920x1088.
+		// Level 4.2 @ 24fps: maxFS=8704 MBs → ~1920x1088
 		{"high_4_2", "64002a", 1800, 1000, 2100, 1200},
-		// Level 1.3 @ 30fps: 396 MBs → ~448x224 at 16:9.
+		// Level 1.3 @ 24fps: 396 MBs → ~448x256
 		{"baseline_1_3", "42c00d", 400, 200, 500, 300},
 	}
 
@@ -220,6 +215,8 @@ func TestMaxResolutionSignal(t *testing.T) {
 // capsfilter without profile-level-id: profile_capsfilter stays empty
 // (x264enc picks its own default) and no max-resolution fires.
 func TestMissingProfileLevelID(t *testing.T) {
+	defer testutils.AssertNoLeaks(t)
+
 	p, err := gst.NewPipeline("h264rtppaybin-no-plid")
 	if err != nil {
 		t.Fatal(err)

@@ -10,7 +10,7 @@ import (
 
 var CAT = gst.NewDebugCategory(
 	"h264rtppaybin",
-	gst.DebugColorNone,
+	gst.DebugColorFgCyan,
 	"H264 to RTP payloader bin with profile-level-id aware negotiation",
 )
 
@@ -102,8 +102,6 @@ func (e *H264RtpPayBin) Constructed(instance *glib.Object) {
 		return
 	}
 
-	// profile_capsfilter starts empty; populated in ChangeState once we can
-	// peer-query downstream for the negotiated profile-level-id.
 	e.ProfileCapsFilter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create profile capsfilter: %v", err))
@@ -130,12 +128,14 @@ func (e *H264RtpPayBin) Constructed(instance *glib.Object) {
 	}
 
 	wself := glib.WeakRefInit(self)
-	if _, err := e.PlidPatch.Connect("plid-resolved", func(_ *gst.Element, plid string) {
+	wProfileCapsFilter := glib.WeakRefInit(e.ProfileCapsFilter)
+	if _, err := e.PlidPatch.Connect("plid-resolved", func(_ *gst.Element, plid string, maxWidth, maxHeight int) {
 		self := gst.ToGstBin(wself.Get())
-		if self == nil {
+		profileCapsFilter := gst.ToElement(wProfileCapsFilter.Get())
+		if self == nil || profileCapsFilter == nil {
 			return
 		}
-		e.onPlidResolved(self, plid)
+		onPlidResolved(self, profileCapsFilter, plid, maxWidth, maxHeight)
 	}); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to connect plid-resolved: %v", err))
 		self.Error("Failed to connect plid-resolved", err)
@@ -163,48 +163,22 @@ func (e *H264RtpPayBin) Constructed(instance *glib.Object) {
 	self.AddPad(ghostSrc.Pad)
 }
 
-// onPlidResolved is invoked (at most once) by plidPatch when it first
-// observes the downstream profile-level-id during caps negotiation.
-// It programs profile_capsfilter with the matching H.264 caps, sends a
-// reconfigure event upstream so x264enc re-negotiates against the new
-// constraint, and re-emits max-resolution for the scale filter.
-func (e *H264RtpPayBin) onPlidResolved(self *gst.Bin, plid string) {
-	if !e.profileApplied.CompareAndSwap(false, true) {
+func onPlidResolved(self *gst.Bin, profileCapsFilter *gst.Element, plid string, maxWidth, maxHeight int) {
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Profile-level-id resolved: %s (max resolution: %dx%d)", plid, maxWidth, maxHeight))
+
+	parsed, err := parseProfileLevelID(plid)
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to parse profile-level-id %q: %v", plid, err))
 		return
 	}
 
-	capsStr := h264CapsStringForPLID(plid)
-	if capsStr == "" {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("onPlidResolved: could not map plid=%s to H.264 caps", plid))
-		return
+	caps := gst.NewCapsFromString(h264CapsStringForPLID(parsed))
+	if err := profileCapsFilter.SetProperty("caps", caps); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set caps on profile capsfilter: %v", err))
 	}
 
-	if err := e.ProfileCapsFilter.SetProperty("caps", gst.NewCapsFromString(capsStr)); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("onPlidResolved: failed to set profile capsfilter caps: %v", err))
-		return
-	}
-	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("onPlidResolved: plid=%s → %s", plid, capsStr))
-	if _, err := self.Emit("caps-changed", capsStr); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("onPlidResolved: failed to emit caps-changed: %v", err))
-	} else {
-		self.Log(CAT, gst.LevelInfo, "onPlidResolved: emitted caps-changed")
-	}
-
-	// // Force upstream (x264enc) to re-negotiate now that profile_capsfilter
-	// // carries a real constraint; without this, the in-flight negotiation
-	// // that revealed the plid has already passed through an empty
-	// // profile_capsfilter.
-	// if sinkPad := e.ProfileCapsFilter.GetStaticPad("sink"); sinkPad != nil {
-	// 	if !sinkPad.PushEvent(gst.NewReconfigureEvent()) {
-	// 		self.Log(CAT, gst.LevelWarning, "onPlidResolved: reconfigure event not handled upstream")
-	// 	}
-	// }
-
-	if w, h, ok := maxResolutionForLevel(plid, 24); ok {
-		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("emitting max-resolution: %dx%d for plid=%s", w, h, plid))
-		if _, err := self.Element.Emit("max-resolution", w, h); err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to emit max-resolution: %v", err))
-		}
+	if _, err := self.Emit("max-resolution", maxWidth, maxHeight); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to emit max-resolution: %v", err))
 	}
 }
 

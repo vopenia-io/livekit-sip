@@ -55,6 +55,8 @@ func (e *RtpCapsCodecFilter) ClassInit(klass *glib.ObjectClass) {
 		gst.PadPresenceAlways,
 		gst.NewCapsFromString("application/x-rtp"),
 	))
+
+	class.InstallProperties(properties)
 }
 
 func (e *RtpCapsCodecFilter) InstanceInit(instance *glib.Object) {

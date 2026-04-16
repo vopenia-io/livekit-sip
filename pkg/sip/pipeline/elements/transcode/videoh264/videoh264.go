@@ -2,6 +2,8 @@ package videoh264
 
 import (
 	"fmt"
+	"strconv"
+	"weak"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
@@ -85,6 +87,9 @@ func (e *VideoH264) Constructed(instance *glib.Object) {
 	self := gst.ToGstBin(instance)
 	var err error
 
+	wself := glib.WeakRefInit(self)
+	eweak := weak.Make(e)
+
 	e.VideoConvert, err = gst.NewElementWithProperties("videoconvert", map[string]interface{}{})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create videoconvert element: %v", err))
@@ -115,12 +120,20 @@ func (e *VideoH264) Constructed(instance *glib.Object) {
 		return
 	}
 
+	defaultBitrate := uint(2048)
+	if e.videoHeight*e.videoWidth >= 1920*1080 {
+		defaultBitrate = 8192
+	} else if e.videoHeight*e.videoWidth >= 1280*720 {
+		defaultBitrate = 4096
+	}
+
 	e.X264Enc, err = gst.NewElementWithProperties("x264enc", map[string]interface{}{
 		"speed-preset":     int(1),  // ultrafast
 		"tune":             uint(4), // zerolatency
 		"key-int-max":      uint(12),
 		"bframes":          uint(0),
 		"vbv-buf-capacity": uint(2000),
+		"bitrate":          uint(defaultBitrate),
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create x264enc element: %v", err))
@@ -134,23 +147,18 @@ func (e *VideoH264) Constructed(instance *glib.Object) {
 		self.Error("Failed to create h264rtppaybin element", err)
 		return
 	}
-
-	// x264enc enforces profile-level limits and refuses impossible
-	// resolutions. When downstream advertises a max via
-	// h264rtppaybin, we have to tighten the scale capsfilter
-	// dynamically so the encoder sees something it can handle.
-	wscaleFilter := glib.WeakRefInit(e.ScaleFilter)
-	wself := glib.WeakRefInit(self)
 	if _, err := e.H264RtpPayBin.Connect("max-resolution", func(_ *gst.Element, w, h int) {
 		self := gst.ToGstBin(wself.Get())
 		if self == nil {
 			return
 		}
-		scaleFilter := gst.ToElement(wscaleFilter.Get())
-		if scaleFilter == nil {
+		e := eweak.Value()
+		if e == nil {
 			return
 		}
-		if err := scaleFilter.SetProperty("caps", gst.NewCapsFromString(fmt.Sprintf("video/x-raw,width=[1,%d],height=[1,%d]", w, h))); err != nil {
+		w = max(1, min(w, int(e.videoWidth)))
+		h = max(1, min(h, int(e.videoHeight)))
+		if err := e.ScaleFilter.SetProperty("caps", gst.NewCapsFromString(fmt.Sprintf("video/x-raw,width=[1,%d],height=[1,%d]", w, h))); err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set scale filter caps: %v", err))
 			self.Error("Failed to set scale filter caps", err)
 		}
@@ -166,6 +174,42 @@ func (e *VideoH264) Constructed(instance *glib.Object) {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create RTP codec filter element: %v", err))
 		self.Error("Failed to create RTP codec filter element", err)
 		return
+	}
+	if _, err := e.RtpCodecFilter.GetStaticPad("sink").Connect("notify::caps", func(pad *gst.Pad, _ *glib.ParamSpec) {
+		self := gst.ToGstBin(wself.Get())
+		if self == nil {
+			return
+		}
+		e := eweak.Value()
+		if e == nil {
+			return
+		}
+		caps := pad.CurrentCaps()
+		if caps == nil || caps.IsEmpty() {
+			self.Log(CAT, gst.LevelWarning, "RTP codec filter sink caps are empty")
+			return
+		}
+		bitrateStr, err := caps.GetStructureAt(0).GetString("max-br")
+		if err != nil {
+			self.Log(CAT, gst.LevelWarning, "RTP codec filter sink caps missing max-br")
+			return
+		}
+		bitrate, err := strconv.Atoi(bitrateStr)
+		if err != nil {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Invalid max-br value in RTP codec filter sink caps: %v", err))
+			return
+		}
+		if bitrate > 0 {
+			if err := e.X264Enc.SetProperty("bitrate", uint(bitrate)); err != nil {
+				self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set x264enc bitrate: %v", err))
+				self.Error("Failed to set x264enc bitrate", err)
+			} else {
+				self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Updated x264enc bitrate to %d", bitrate))
+			}
+		}
+	}); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to connect notify::caps signal: %v", err))
+		self.Error("Failed to connect notify::caps signal", err)
 	}
 
 	if err := self.AddMany(
