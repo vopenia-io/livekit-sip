@@ -544,7 +544,7 @@ func (s *Server) onAck(log *slog.Logger, req *sip.Request, tx sip.ServerTransact
 		return
 	}
 	c.log().Infow("ACK from remote")
-	c.cc.AcceptAck(req, tx)
+	// c.cc.AcceptAck(req, tx) // moved to c.AcceptAck
 	c.AcceptAck(req, tx)
 }
 
@@ -901,6 +901,18 @@ func (c *inboundCall) handleInvite(ctx context.Context, tid traceid.ID, req *sip
 			c.log().Errorw("Cannot accept the call", err)
 			c.close(true, callAcceptFailed, "accept-failed")
 			return false, err
+		}
+		// For late offer calls (empty INVITE body), the ACK contains the answer SDP.
+		// We must wait for it before proceeding (e.g. pin prompt needs media to be ready).
+		// The ACK arrives via Server.onAck() which forwards it to the pipeline.
+		if len(req.Body()) == 0 {
+			select {
+			case <-c.cc.InviteACK():
+			case <-time.After(inviteOkAckLateTimeout):
+				c.log().Warnw("Late offer: no ACK received", nil)
+			case <-ctx.Done():
+				return false, ctx.Err()
+			}
 		}
 		if !c.s.conf.Experimental.InboundWaitACK {
 			ackReceived = c.cc.InviteACK()
@@ -1373,10 +1385,12 @@ func (c *inboundCall) Bye(reason ReasonHeader) {
 
 func (c *inboundCall) AcceptAck(req *sip.Request, tx sip.ServerTransaction) {
 	if c.medias != nil {
+		c.log().Infow("Forwarding ACK SDP to media orchestrator")
 		if err := c.medias.AckSDP(req, tx); err != nil {
 			c.log().Errorw("failed to forward ACK SDP", err)
 		}
 	}
+	c.cc.AcceptAck(req, tx)
 }
 
 func (c *inboundCall) Close() error {
@@ -1857,20 +1871,20 @@ func (c *sipInbound) Accept(ctx context.Context, sdpData []byte, headers map[str
 		retryAfter = inviteOkRetryIntervalMax
 	}
 	var acceptErr error
+	c.log.Infow("Sending 200 OK", "sdpLen", len(sdpData), "to", r.To().String(), "from", r.From().String())
 retries:
 	for try := 1; ; try++ {
 		if err := c.inviteTx.Respond(r); err != nil {
+			c.log.Errorw("Failed to send 200 OK via inviteTx.Respond", err, "try", try)
 			return err
 		}
+		c.log.Infow("200 OK sent", "try", try)
 		if c.legTr != TransportUDP && !c.s.conf.Experimental.InboundWaitACK {
 			// Reliable transport and we are not waiting for ACK - return immediately.
 			break retries
 		}
 		t := time.NewTimer(retryAfter)
 		select {
-		case <-c.inviteTx.Acks():
-			t.Stop()
-			break retries
 		case <-c.acked.Watch():
 			t.Stop()
 			break retries
@@ -1895,6 +1909,7 @@ retries:
 func (c *sipInbound) AcceptAck(req *sip.Request, tx sip.ServerTransaction) {
 	c.acked.Break()
 }
+
 
 func (c *sipInbound) AcceptBye(req *sip.Request, tx sip.ServerTransaction) {
 	_ = tx.Respond(sip.NewResponseFromRequest(req, 200, "OK", nil))
