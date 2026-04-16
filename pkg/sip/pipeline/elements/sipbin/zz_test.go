@@ -144,6 +144,14 @@ func (f *sipBinFixture) emitAck(t *testing.T) {
 	}
 }
 
+func (f *sipBinFixture) emitAckWithSDP(t *testing.T, sdp string) {
+	t.Helper()
+	t.Logf("ACK SDP:\n%s", sdp)
+	if _, err := f.sipbin.Emit("ack-sdp", sdp); err != nil {
+		t.Fatalf("failed to emit ack-sdp signal with SDP: %v", err)
+	}
+}
+
 func (f *sipBinFixture) close() {
 	dumpDot(f.t, f.pipeline, "before_cleanup")
 	// READY → NULL
@@ -2705,4 +2713,295 @@ func TestMediaFlow_FullDuplex(t *testing.T) {
 
 	f.pipeline = nil
 	f.sipbin = nil
+}
+
+// --- Late Offer Tests ---
+// Late offer: INVITE with no SDP body → sipbin generates the offer (200 OK),
+// remote sends answer in ACK.
+
+func TestLateOffer_Basic(t *testing.T) {
+	defer testutils.AssertNoLeaks(t)
+
+	f := newFixture(t, []*gst.Caps{pcmuCaps(), h264Caps()})
+
+	// Empty offer triggers buildOfferSdp
+	offer := f.emitOffer(t, "")
+	if offer == "" {
+		t.Fatal("expected non-empty offer from late offer path")
+	}
+
+	msg := parseAnswer(t, offer)
+
+	// Should have audio + video(main) + video(slides) + BFCP
+	if msg.MediasLen() != 4 {
+		t.Fatalf("expected 4 medias in late offer, got %d", msg.MediasLen())
+	}
+
+	// Verify media types
+	if msg.Media(0).GetMedia() != "audio" {
+		t.Errorf("media 0: expected 'audio', got '%s'", msg.Media(0).GetMedia())
+	}
+	if msg.Media(0).GetPort() == 0 {
+		t.Error("media 0 (audio): expected port > 0")
+	}
+	if msg.Media(1).GetMedia() != "video" {
+		t.Errorf("media 1: expected 'video', got '%s'", msg.Media(1).GetMedia())
+	}
+	if msg.Media(1).GetPort() == 0 {
+		t.Error("media 1 (video main): expected port > 0")
+	}
+	if msg.Media(2).GetMedia() != "video" {
+		t.Errorf("media 2: expected 'video', got '%s'", msg.Media(2).GetMedia())
+	}
+	if msg.Media(2).GetPort() == 0 {
+		t.Error("media 2 (video slides): expected port > 0")
+	}
+	if msg.Media(3).GetMedia() != "application" {
+		t.Errorf("media 3: expected 'application', got '%s'", msg.Media(3).GetMedia())
+	}
+	if msg.Media(3).GetPort() == 0 {
+		t.Error("media 3 (BFCP): expected port > 0")
+	}
+
+	// Send answer in ACK — accept audio + video main, reject the rest
+	answer := makeSDP("192.168.1.1",
+		"m=audio 6000 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000",
+		"m=video 6002 RTP/AVP 120\r\na=rtpmap:120 H264/90000\r\na=content:main",
+		"m=video 0 RTP/AVP 120\r\na=rtpmap:120 H264/90000\r\na=content:slides",
+		"m=application 0 UDP/BFCP *",
+	)
+	f.emitAckWithSDP(t, answer)
+	dumpDot(t, f.pipeline, "after_late_offer_ack")
+
+	f.close()
+}
+
+func TestLateOffer_FullAccept(t *testing.T) {
+	defer testutils.AssertNoLeaks(t)
+
+	f := newFixture(t, []*gst.Caps{pcmuCaps(), h264Caps()})
+
+	offer := f.emitOffer(t, "")
+	if offer == "" {
+		t.Fatal("expected non-empty offer")
+	}
+
+	msg := parseAnswer(t, offer)
+	if msg.MediasLen() != 4 {
+		t.Fatalf("expected 4 medias, got %d", msg.MediasLen())
+	}
+
+	// Accept all media
+	answer := makeSDP("192.168.1.1",
+		"m=audio 6000 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000",
+		"m=video 6002 RTP/AVP 120\r\na=rtpmap:120 H264/90000\r\na=content:main",
+		"m=video 6004 RTP/AVP 121\r\na=rtpmap:121 H264/90000\r\na=content:slides",
+		"m=application 6006 UDP/BFCP *\r\na=floorctrl:c-s\r\na=confid:1\r\na=userid:2\r\na=bfcpver:1",
+	)
+	f.emitAckWithSDP(t, answer)
+
+	// Verify we can request send pads after late offer negotiation
+	audioPad := f.sipbin.GetRequestPad("send_rtp_sink_2") // MICROPHONE
+	if audioPad == nil {
+		t.Error("expected request pad for MICROPHONE after late offer")
+	}
+	videoPad := f.sipbin.GetRequestPad("send_rtp_sink_1") // CAMERA
+	if videoPad == nil {
+		t.Error("expected request pad for CAMERA after late offer")
+	}
+	screensharePad := f.sipbin.GetRequestPad("send_rtp_sink_3") // SCREEN_SHARE
+	if screensharePad == nil {
+		t.Error("expected request pad for SCREEN_SHARE after late offer")
+	}
+	dumpDot(t, f.pipeline, "after_late_offer_full_accept")
+
+	f.close()
+}
+
+func TestLateOffer_PartialReject(t *testing.T) {
+	defer testutils.AssertNoLeaks(t)
+
+	f := newFixture(t, []*gst.Caps{pcmuCaps(), h264Caps()})
+
+	offer := f.emitOffer(t, "")
+	if offer == "" {
+		t.Fatal("expected non-empty offer")
+	}
+
+	msg := parseAnswer(t, offer)
+	if msg.MediasLen() != 4 {
+		t.Fatalf("expected 4 medias, got %d", msg.MediasLen())
+	}
+
+	// Accept audio only, reject everything else (port 0)
+	answer := makeSDP("192.168.1.1",
+		"m=audio 6000 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000",
+		"m=video 0 RTP/AVP 120\r\na=rtpmap:120 H264/90000\r\na=content:main",
+		"m=video 0 RTP/AVP 121\r\na=rtpmap:121 H264/90000\r\na=content:slides",
+		"m=application 0 UDP/BFCP *",
+	)
+	f.emitAckWithSDP(t, answer)
+
+	// Audio pad should work
+	audioPad := f.sipbin.GetRequestPad("send_rtp_sink_2")
+	if audioPad == nil {
+		t.Error("expected request pad for MICROPHONE after late offer with audio accepted")
+	}
+
+	// Video pads should not work (rejected)
+	videoPad := f.sipbin.GetRequestPad("send_rtp_sink_1")
+	if videoPad != nil {
+		t.Error("expected nil pad for CAMERA after late offer with video rejected")
+	}
+
+	f.close()
+}
+
+func TestLateOffer_TransactionState(t *testing.T) {
+	defer testutils.AssertNoLeaks(t)
+
+	f := newFixture(t, []*gst.Caps{pcmuCaps(), h264Caps()})
+
+	// After late offer, transaction should be pending ACK
+	offer := f.emitOffer(t, "")
+	if offer == "" {
+		t.Fatal("expected non-empty offer")
+	}
+
+	// Verify transaction is pending (should be pending=Ack)
+	val, err := f.sipbin.GetProperty("transaction-pending")
+	if err != nil {
+		t.Fatalf("failed to get transaction-pending: %v", err)
+	}
+	pending, ok := val.(int)
+	if !ok {
+		t.Fatalf("transaction-pending has unexpected type: %T", val)
+	}
+	if pending != int(TransactionPendingKindAck) {
+		t.Errorf("expected transaction-pending=%d (Ack), got %d", TransactionPendingKindAck, pending)
+	}
+
+	// Send answer in ACK to complete the transaction
+	answer := makeSDP("192.168.1.1",
+		"m=audio 6000 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000",
+		"m=video 6002 RTP/AVP 120\r\na=rtpmap:120 H264/90000\r\na=content:main",
+		"m=video 6004 RTP/AVP 121\r\na=rtpmap:121 H264/90000\r\na=content:slides",
+		"m=application 6006 UDP/BFCP *\r\na=floorctrl:c-s\r\na=bfcpver:1",
+	)
+	f.emitAckWithSDP(t, answer)
+
+	// Transaction should be idle now
+	val, err = f.sipbin.GetProperty("transaction-pending")
+	if err != nil {
+		t.Fatalf("failed to get transaction-pending: %v", err)
+	}
+	pending, ok = val.(int)
+	if !ok {
+		t.Fatalf("transaction-pending has unexpected type: %T", val)
+	}
+	if pending != int(TransactionPendingKindNone) {
+		t.Errorf("expected transaction-pending=%d (None) after ACK, got %d", TransactionPendingKindNone, pending)
+	}
+
+	// Should be able to do a normal offer/answer after late offer completes
+	reinviteOffer := makeSDP("192.168.1.1",
+		"m=audio 7000 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000",
+		"m=video 7002 RTP/AVP 120\r\na=rtpmap:120 H264/90000\r\na=content:main",
+		"m=video 7004 RTP/AVP 121\r\na=rtpmap:121 H264/90000\r\na=content:slides",
+		"m=application 7006 UDP/BFCP *\r\na=floorctrl:c-s\r\na=bfcpver:1",
+	)
+	reinviteAnswer := f.emitOffer(t, reinviteOffer)
+	if reinviteAnswer == "" {
+		t.Fatal("expected non-empty answer for re-INVITE after late offer")
+	}
+	f.emitAck(t)
+
+	f.close()
+}
+
+func TestLateOffer_OfferHasFormats(t *testing.T) {
+	defer testutils.AssertNoLeaks(t)
+
+	f := newFixture(t, []*gst.Caps{pcmuAnyCaps(), g722AnyCaps(), h264AnyCaps()})
+
+	offer := f.emitOffer(t, "")
+	if offer == "" {
+		t.Fatal("expected non-empty offer")
+	}
+
+	msg := parseAnswer(t, offer)
+
+	// Check that audio media has our configured codecs
+	audio := msg.Media(0)
+	if audio.GetMedia() != "audio" {
+		t.Fatalf("media 0: expected 'audio', got '%s'", audio.GetMedia())
+	}
+
+	hasPCMU := false
+	hasG722 := false
+	for _, format := range audio.Formats() {
+		pt, err := strconv.Atoi(format)
+		if err != nil {
+			continue
+		}
+		caps, err := audio.GetCaps(pt)
+		if err != nil || caps.GetSize() == 0 {
+			continue
+		}
+		encoding, err := caps.GetStructureAt(0).GetString("encoding-name")
+		if err != nil {
+			continue
+		}
+		switch encoding {
+		case "PCMU":
+			hasPCMU = true
+		case "G722":
+			hasG722 = true
+		}
+	}
+	if !hasPCMU {
+		t.Error("expected PCMU in late offer audio formats")
+	}
+	if !hasG722 {
+		t.Error("expected G722 in late offer audio formats")
+	}
+
+	// Check that video media has H264
+	video := msg.Media(1)
+	if video.GetMedia() != "video" {
+		t.Fatalf("media 1: expected 'video', got '%s'", video.GetMedia())
+	}
+
+	hasH264 := false
+	for _, format := range video.Formats() {
+		pt, err := strconv.Atoi(format)
+		if err != nil {
+			continue
+		}
+		caps, err := video.GetCaps(pt)
+		if err != nil || caps.GetSize() == 0 {
+			continue
+		}
+		encoding, err := caps.GetStructureAt(0).GetString("encoding-name")
+		if err != nil {
+			continue
+		}
+		if encoding == "H264" {
+			hasH264 = true
+		}
+	}
+	if !hasH264 {
+		t.Error("expected H264 in late offer video formats")
+	}
+
+	// Send answer to complete
+	answer := makeSDP("192.168.1.1",
+		"m=audio 6000 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000",
+		"m=video 6002 RTP/AVP 120\r\na=rtpmap:120 H264/90000\r\na=content:main",
+		"m=video 0 RTP/AVP 120",
+		"m=application 0 UDP/BFCP *",
+	)
+	f.emitAckWithSDP(t, answer)
+
+	f.close()
 }

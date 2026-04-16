@@ -22,21 +22,14 @@ func randID() string {
 	return strconv.FormatInt(rand.Int63n(math.MaxInt16), 10)
 }
 
-func (e *SipBin) OnOfferSdp(self *gst.Bin, offerData []byte) ([]byte, error) {
-	unlock, err := e.transaction.WaitReady()
-	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to wait for transaction to be ready: %v", err))
-		return nil, fmt.Errorf("transaction is not ready: %w", err)
-	}
-	defer unlock()
-
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	e.transactionID.Add(1)
-
+func (e *SipBin) handleOfferSdp(self *gst.Bin, offerData []byte) ([]byte, error) {
 	if e.ip == nil {
 		return nil, fmt.Errorf("no IP address configured for SIP media")
+	}
+
+	// late offer
+	if len(offerData) == 0 {
+		return e.buildOfferSdp(self)
 	}
 
 	offer, err := gstsdp.ParseSDPMessage(string(offerData))
@@ -195,11 +188,11 @@ func (e *SipBin) OnOfferSdp(self *gst.Bin, offerData []byte) ([]byte, error) {
 	return []byte(answerData), nil
 }
 
-func (e *SipBin) OnAnswerSdp(self *gst.Bin, answerData []byte) error {
-	unlock, err := e.transaction.Ack(TransactionPendingKindAnswer)
+func (e *SipBin) OnOfferSdp(self *gst.Bin, offerData []byte) ([]byte, error) {
+	unlock, err := e.transaction.WaitReady()
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to acknowledge transaction: %v", err))
-		return fmt.Errorf("failed to acknowledge transaction: %w", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to wait for transaction to be ready: %v", err))
+		return nil, fmt.Errorf("transaction is not ready: %w", err)
 	}
 	defer unlock()
 
@@ -208,6 +201,10 @@ func (e *SipBin) OnAnswerSdp(self *gst.Bin, answerData []byte) error {
 
 	e.transactionID.Add(1)
 
+	return e.handleOfferSdp(self, offerData)
+}
+
+func (e *SipBin) handleAnswerSdp(self *gst.Bin, answerData []byte) error {
 	if e.ip == nil {
 		return fmt.Errorf("no IP address configured for SIP media")
 	}
@@ -305,6 +302,89 @@ func (e *SipBin) OnAnswerSdp(self *gst.Bin, answerData []byte) error {
 	e.emitAvailableMedia(self)
 
 	return nil
+}
+
+func (e *SipBin) OnAnswerSdp(self *gst.Bin, answerData []byte) error {
+	unlock, err := e.transaction.Ack(TransactionPendingKindAnswer)
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to acknowledge transaction: %v", err))
+		return fmt.Errorf("failed to acknowledge transaction: %w", err)
+	}
+	defer unlock()
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.transactionID.Add(1)
+
+	return e.handleAnswerSdp(self, answerData)
+}
+
+func (e *SipBin) buildOfferSdp(self *gst.Bin) ([]byte, error) {
+	if e.Tracks[livekit.TrackSource_MICROPHONE] == nil {
+		microphoneMedia, err := e.makeOfferMedia(self, livekit.TrackSource_MICROPHONE, len(e.Medias), "")
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create offer media: %v", err))
+			return nil, fmt.Errorf("failed to create offer media: %w", err)
+		}
+		e.Medias = append(e.Medias, microphoneMedia)
+	}
+
+	if e.Tracks[livekit.TrackSource_CAMERA] == nil {
+		cameraMedia, err := e.makeOfferMedia(self, livekit.TrackSource_CAMERA, len(e.Medias), "")
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create offer media: %v", err))
+			return nil, fmt.Errorf("failed to create offer media: %w", err)
+		}
+		e.Medias = append(e.Medias, cameraMedia)
+	}
+
+	if e.Tracks[livekit.TrackSource_SCREEN_SHARE] == nil {
+		screenshareMedia, err := e.makeOfferMedia(self, livekit.TrackSource_SCREEN_SHARE, len(e.Medias), "")
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create offer media: %v", err))
+			return nil, fmt.Errorf("failed to create offer media: %w", err)
+		}
+		e.Medias = append(e.Medias, screenshareMedia)
+	}
+
+	if e.Bfcp == nil {
+		bfcpTrack, err := e.NewBfcpTrack(self, len(e.Medias), "UDP/BFCP")
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create BFCP track: %v", err))
+			return nil, fmt.Errorf("failed to create BFCP track: %w", err)
+		}
+		e.Bfcp = bfcpTrack
+		bfcpMedia, err := e.makeBfcpMedia(bfcpTrack)
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create offer media: %v", err))
+			return nil, fmt.Errorf("failed to create offer media: %w", err)
+		}
+		e.Medias = append(e.Medias, bfcpMedia)
+	}
+
+	if err := e.bfcpMediaAddStreams(e.Medias); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add BFCP streams to offer: %v", err))
+		return nil, fmt.Errorf("failed to add BFCP streams to offer: %w", err)
+	}
+
+	offer, err := e.makeOfferSdp(self)
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create offer: %v", err))
+		return nil, fmt.Errorf("failed to create offer: %w", err)
+	}
+
+	offerData := offer.AsText()
+	if offerData == "" {
+		self.Log(CAT, gst.LevelError, "Failed to serialize offer")
+		return nil, fmt.Errorf("failed to serialize offer")
+	}
+
+	e.transaction.SetPending(TransactionPendingKindAck)
+
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Generated offer SDP:\n%s", offerData))
+
+	return []byte(offerData), nil
 }
 
 func (e *SipBin) makeOfferSdp(self *gst.Bin) (*gstsdp.Message, error) {

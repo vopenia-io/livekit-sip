@@ -118,6 +118,10 @@ func (e *SipBin) NewTrack(self *gst.Bin, idx int, kind livekit.TrackSource, prot
 	// 	return nil, fmt.Errorf("failed to create RTP cut element: %w", err)
 	// }
 
+	if err := self.AddMany(rtpSrc, rtcpSrc, rtpSink, rtcpSink, rtpFilter); err != nil {
+		return nil, fmt.Errorf("failed to add track elements to bin: %w", err)
+	}
+
 	return &SipTrack{
 		initialized: false,
 		Idx:         idx,
@@ -173,10 +177,6 @@ func (t *SipTrack) Init(e *SipBin, self *gst.Bin, media *gstsdp.Media, session *
 		t.RtpFilter.SetProperty("caps", caps),
 	); err != nil {
 		return fmt.Errorf("failed to set properties on track elements: %w", err)
-	}
-
-	if err := self.AddMany(t.RtpSrc, t.RtcpSrc, t.RtpSink, t.RtcpSink, t.RtpFilter); err != nil {
-		return fmt.Errorf("failed to add track elements to bin: %w", err)
 	}
 
 	sendRtpSink := e.RtpBin.GetRequestPad(fmt.Sprintf("recv_rtp_sink_%d", t.Kind))

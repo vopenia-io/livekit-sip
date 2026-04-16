@@ -15,9 +15,18 @@ func (e *SipBin) OnAckSDP(self *gst.Bin, b []byte) error {
 	}
 	defer unlock()
 
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	e.transactionID.Add(1)
 
-	// TODO: handle late answer here
+	// late offer answer
+	if len(b) > 0 {
+		if err := e.handleAnswerSdp(self, b); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to handle answer SDP in AckSDP: %v", err))
+			return err
+		}
+	}
 
 	return nil
 }
