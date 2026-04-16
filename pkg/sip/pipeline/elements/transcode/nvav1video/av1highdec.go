@@ -47,7 +47,6 @@ func (e *NvAv1HighDec) ClassInit(klass *glib.ObjectClass) {
 		gst.NewCapsFromString("video/x-raw(memory:CUDAMemory)"),
 	))
 
-	class.InstallProperties(properties)
 }
 
 func (e *NvAv1HighDec) InstanceInit(instance *glib.Object) {
