@@ -107,9 +107,10 @@ type Config struct {
 	EnableJitterBufferProb float64 `yaml:"enable_jitter_buffer_prob"`
 
 	// internal
-	ServiceName string      `yaml:"-"`
-	NodeID      string      // Do not provide, will be overwritten
-	Video       VideoConfig `yaml:"video"`
+	ServiceName           string      `yaml:"-"`
+	NodeID                string      // Do not provide, will be overwritten
+	Video                 VideoConfig `yaml:"video"`
+	MaxActiveParticipants int         `yaml:"max_active_participants"`
 
 	// Experimental, these option might go away without notice.
 	Experimental struct {
@@ -168,6 +169,10 @@ func (c *Config) Init() error {
 	if c.Video.Width == 0 || c.Video.Height == 0 {
 		c.Video.Width = 1280
 		c.Video.Height = 720
+	}
+
+	if c.MaxActiveParticipants <= 0 {
+		c.MaxActiveParticipants = 6
 	}
 
 	if err := c.InitLogger(); err != nil {

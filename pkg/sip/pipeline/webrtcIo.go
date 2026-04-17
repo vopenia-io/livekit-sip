@@ -34,8 +34,11 @@ var _ GstChain = (*WebrtcIo)(nil)
 // Create implements [GstChain].
 func (wio *WebrtcIo) Create() error {
 	var err error
+
+	fmt.Printf("Creating WebRTC IO with max active participants: %d\n", wio.pipeline.maxActiveParticipants)
+
 	wio.LivekitBin, err = gst.NewElementWithProperties("livekitbin", map[string]interface{}{
-		"max-active-participants":     uint(6),
+		"max-active-participants":     uint(wio.pipeline.maxActiveParticipants),
 		"camera":                      false,
 		"camera-mime-type":            webrtc.MimeTypeVP8,
 		"microphone":                  false,

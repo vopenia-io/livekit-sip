@@ -27,9 +27,10 @@ type Pipeline struct {
 	dumpCH   chan bool
 	debugSrv *debug.Server
 
-	videoWidth  uint
-	videoHeight uint
-	nvidia      bool
+	videoWidth            uint
+	videoHeight           uint
+	nvidia                bool
+	maxActiveParticipants int
 
 	*SipIo
 	*WebrtcIo
@@ -239,15 +240,16 @@ func New(ctx context.Context, log logger.Logger, sipOpt SipOpt) (*Pipeline, erro
 	ctx, cancel := context.WithCancel(ctx)
 
 	p := &Pipeline{
-		Log:         log.WithComponent("pipeline"),
-		pipeline:    pipeline,
-		ctx:         ctx,
-		cancel:      cancel,
-		dtmfCh:      make(chan int, 10),
-		dumpCH:      make(chan bool, 1024),
-		videoWidth:  sipOpt.VideoWidth,
-		videoHeight: sipOpt.VideoHeight,
-		nvidia:      sipOpt.Nvidia,
+		Log:                   log.WithComponent("pipeline"),
+		pipeline:              pipeline,
+		ctx:                   ctx,
+		cancel:                cancel,
+		dtmfCh:                make(chan int, 10),
+		dumpCH:                make(chan bool, 1024),
+		videoWidth:            sipOpt.VideoWidth,
+		videoHeight:           sipOpt.VideoHeight,
+		nvidia:                sipOpt.Nvidia,
+		maxActiveParticipants: sipOpt.MaxActiveParticipants,
 	}
 	p.cleanup = p.cleanupChains
 

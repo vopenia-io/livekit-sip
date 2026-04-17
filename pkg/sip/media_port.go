@@ -214,17 +214,18 @@ type MediaConf struct {
 }
 
 type MediaOptions struct {
-	IP                  netip.Addr
-	IPLocal             netip.Addr // Local IP for binding (may differ from IP which is advertised in SDP)
-	Ports               rtcconfig.PortRange
-	MediaTimeoutInitial time.Duration
-	MediaTimeout        time.Duration
-	Stats               *PortStats
-	EnableJitterBuffer  bool
-	NoInputResample     bool
-	VideoWidth          uint
-	VideoHeight         uint
-	Nvidia              bool
+	IP                    netip.Addr
+	IPLocal               netip.Addr // Local IP for binding (may differ from IP which is advertised in SDP)
+	Ports                 rtcconfig.PortRange
+	MediaTimeoutInitial   time.Duration
+	MediaTimeout          time.Duration
+	Stats                 *PortStats
+	EnableJitterBuffer    bool
+	NoInputResample       bool
+	VideoWidth            uint
+	VideoHeight           uint
+	Nvidia                bool
+	MaxActiveParticipants int
 }
 
 func NewMediaPort(tid traceid.ID, log logger.Logger, mon *stats.CallMonitor, opts *MediaOptions, sampleRate int) (*MediaPort, error) {

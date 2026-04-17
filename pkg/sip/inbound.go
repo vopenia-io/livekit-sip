@@ -804,17 +804,18 @@ func (c *inboundCall) handleInvite(ctx context.Context, tid traceid.ID, req *sip
 	}
 
 	opts := &MediaOptions{
-		IP:                  c.s.sconf.MediaIP,
-		IPLocal:             c.s.sconf.MediaIPLocal,
-		Ports:               conf.RTPPort,
-		MediaTimeoutInitial: c.s.conf.MediaTimeoutInitial,
-		MediaTimeout:        c.s.conf.MediaTimeout,
-		EnableJitterBuffer:  c.jitterBuf,
-		Stats:               &c.stats.Port,
-		NoInputResample:     !RoomResample,
-		VideoWidth:          uint(c.s.conf.Video.Width),
-		VideoHeight:         uint(c.s.conf.Video.Height),
-		Nvidia:              c.s.conf.Video.Nvidia,
+		IP:                    c.s.sconf.MediaIP,
+		IPLocal:               c.s.sconf.MediaIPLocal,
+		Ports:                 conf.RTPPort,
+		MediaTimeoutInitial:   c.s.conf.MediaTimeoutInitial,
+		MediaTimeout:          c.s.conf.MediaTimeout,
+		EnableJitterBuffer:    c.jitterBuf,
+		Stats:                 &c.stats.Port,
+		NoInputResample:       !RoomResample,
+		VideoWidth:            uint(c.s.conf.Video.Width),
+		VideoHeight:           uint(c.s.conf.Video.Height),
+		Nvidia:                c.s.conf.Video.Nvidia,
+		MaxActiveParticipants: c.s.conf.MaxActiveParticipants,
 	}
 
 	orchestrator, err := NewMediaOrchestrator(c.log(), c.ctx, c.cc, opts)
@@ -1909,7 +1910,6 @@ retries:
 func (c *sipInbound) AcceptAck(req *sip.Request, tx sip.ServerTransaction) {
 	c.acked.Break()
 }
-
 
 func (c *sipInbound) AcceptBye(req *sip.Request, tx sip.ServerTransaction) {
 	_ = tx.Respond(sip.NewResponseFromRequest(req, 200, "OK", nil))
