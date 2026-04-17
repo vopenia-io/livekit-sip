@@ -93,6 +93,8 @@ func (e *SipBin) NewTrack(self *gst.Bin, idx int, kind livekit.TrackSource, prot
 		"close-socket": false,
 		"clients":      "",
 		"async":        false,
+		"sync":         false,
+		"qos":          false,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create RTP sink element: %w", err)
@@ -103,6 +105,8 @@ func (e *SipBin) NewTrack(self *gst.Bin, idx int, kind livekit.TrackSource, prot
 		"close-socket": false,
 		"clients":      "",
 		"async":        false,
+		"sync":         false,
+		"qos":          false,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create RTCP sink element: %w", err)
