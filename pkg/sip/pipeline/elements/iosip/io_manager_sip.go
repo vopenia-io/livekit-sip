@@ -34,11 +34,13 @@ type SipDtmfInTranscode struct {
 type SipCameraInTranscode struct {
 	gpad     *gst.GhostPad
 	RTPVideo *gst.Element
+	Queue    *gst.Element
 	pad      *gst.Pad
 }
 
 type SipCameraOutTranscode struct {
 	gpad     *gst.GhostPad
+	Queue    *gst.Element
 	VideoRTP *gst.Element
 	pad      *gst.Pad
 }
@@ -46,11 +48,13 @@ type SipCameraOutTranscode struct {
 type SipScreenshareInTranscode struct {
 	gpad     *gst.GhostPad
 	RTPVideo *gst.Element
+	Queue    *gst.Element
 	pad      *gst.Pad
 }
 
 type SipScreenshareOutTranscode struct {
 	gpad     *gst.GhostPad
+	Queue    *gst.Element
 	VideoRTP *gst.Element
 	pad      *gst.Pad
 }
@@ -488,9 +492,27 @@ func (e *IoManagerSip) requestNewPadCameraIn(self *gst.Bin, templ *gst.PadTempla
 		self.Error(fmt.Sprintf("Failed to create factorybin element for pad %s", name), err)
 		return nil
 	}
-	if err := self.Add(cameraIn.RTPVideo); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add factorybin element to SIP IO element for pad %s: %v", name, err))
-		self.Error(fmt.Sprintf("Failed to add factorybin element to SIP IO element for pad %s", name), err)
+	cameraIn.Queue, err = gst.NewElementWithProperties("queue", map[string]interface{}{
+		"max-size-buffers": 3,
+		"max-size-bytes":   0,
+		"max-size-time":    0,
+		"leaky":            2, // downstream
+	})
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create queue element for pad %s: %v", name, err))
+		self.Error(fmt.Sprintf("Failed to create queue element for pad %s", name), err)
+		return nil
+	}
+
+	if err := self.AddMany(cameraIn.RTPVideo, cameraIn.Queue); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add factorybin and queue elements to SIP IO element for pad %s: %v", name, err))
+		self.Error(fmt.Sprintf("Failed to add factorybin and queue elements to SIP IO element for pad %s", name), err)
+		return nil
+	}
+
+	if err := cameraIn.RTPVideo.Link(cameraIn.Queue); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link factorybin element to queue for pad %s: %v", name, err))
+		self.Error(fmt.Sprintf("Failed to link factorybin element to queue for pad %s", name), err)
 		return nil
 	}
 
@@ -501,9 +523,9 @@ func (e *IoManagerSip) requestNewPadCameraIn(self *gst.Bin, templ *gst.PadTempla
 		return nil
 	}
 
-	if ret := cameraIn.RTPVideo.GetStaticPad("src").Link(cameraIn.pad); ret != gst.PadLinkOK {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link factorybin src pad to compositor pad for pad %s: %v", name, ret))
-		self.Error(fmt.Sprintf("Failed to link factorybin src pad to compositor pad for pad %s", name), fmt.Errorf("failed to link pads"))
+	if ret := cameraIn.Queue.GetStaticPad("src").Link(cameraIn.pad); ret != gst.PadLinkOK {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link queue src pad to compositor pad for pad %s: %v", name, ret))
+		self.Error(fmt.Sprintf("Failed to link queue src pad to compositor pad for pad %s", name), fmt.Errorf("failed to link pads"))
 		return nil
 	}
 
@@ -524,6 +546,9 @@ func (e *IoManagerSip) requestNewPadCameraIn(self *gst.Bin, templ *gst.PadTempla
 
 	if !cameraIn.RTPVideo.SyncStateWithParent() {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state of factorybin element with parent for pad %s", name))
+	}
+	if !cameraIn.Queue.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state of queue element with parent for pad %s", name))
 	}
 
 	e.CameraIn[name] = cameraIn
@@ -565,9 +590,27 @@ func (e *IoManagerSip) requestNewPadScreenshareIn(self *gst.Bin, templ *gst.PadT
 		self.Error(fmt.Sprintf("Failed to create factorybin element for pad %s", name), err)
 		return nil
 	}
-	if err := self.Add(screenshareIn.RTPVideo); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add factorybin element to SIP IO element for pad %s: %v", name, err))
-		self.Error(fmt.Sprintf("Failed to add factorybin element to SIP IO element for pad %s", name), err)
+	screenshareIn.Queue, err = gst.NewElementWithProperties("queue", map[string]interface{}{
+		"max-size-buffers": 3,
+		"max-size-bytes":   0,
+		"max-size-time":    0,
+		"leaky":            2, // downstream
+	})
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create queue element for pad %s: %v", name, err))
+		self.Error(fmt.Sprintf("Failed to create queue element for pad %s", name), err)
+		return nil
+	}
+
+	if err := self.AddMany(screenshareIn.RTPVideo, screenshareIn.Queue); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add factorybin and queue elements to SIP IO element for pad %s: %v", name, err))
+		self.Error(fmt.Sprintf("Failed to add factorybin and queue elements to SIP IO element for pad %s", name), err)
+		return nil
+	}
+
+	if err := screenshareIn.RTPVideo.Link(screenshareIn.Queue); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link factorybin element to queue for pad %s: %v", name, err))
+		self.Error(fmt.Sprintf("Failed to link factorybin element to queue for pad %s", name), err)
 		return nil
 	}
 
@@ -578,9 +621,9 @@ func (e *IoManagerSip) requestNewPadScreenshareIn(self *gst.Bin, templ *gst.PadT
 		return nil
 	}
 
-	if ret := screenshareIn.RTPVideo.GetStaticPad("src").Link(screenshareIn.pad); ret != gst.PadLinkOK {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link factorybin src pad to compositor pad for pad %s: %v", name, ret))
-		self.Error(fmt.Sprintf("Failed to link factorybin src pad to compositor pad for pad %s", name), fmt.Errorf("failed to link pads"))
+	if ret := screenshareIn.Queue.GetStaticPad("src").Link(screenshareIn.pad); ret != gst.PadLinkOK {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link queue src pad to compositor pad for pad %s: %v", name, ret))
+		self.Error(fmt.Sprintf("Failed to link queue src pad to compositor pad for pad %s", name), fmt.Errorf("failed to link pads"))
 		return nil
 	}
 
@@ -601,6 +644,9 @@ func (e *IoManagerSip) requestNewPadScreenshareIn(self *gst.Bin, templ *gst.PadT
 
 	if !screenshareIn.RTPVideo.SyncStateWithParent() {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state of factorybin element with parent for pad %s", name))
+	}
+	if !screenshareIn.Queue.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state of queue element with parent for pad %s", name))
 	}
 
 	e.ScreenshareIn[name] = screenshareIn
@@ -717,11 +763,14 @@ func (e *IoManagerSip) releasePadCameraIn(self *gst.Bin, _ *gst.GhostPad, pname 
 	if err := cameraIn.RTPVideo.SetState(gst.StateNull); err != nil {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set factorybin element to NULL state for pad %s: %v", pname, err))
 	}
+	if err := cameraIn.Queue.SetState(gst.StateNull); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set queue element to NULL state for pad %s: %v", pname, err))
+	}
 
 	e.Compositor.ReleaseRequestPad(cameraIn.pad)
 
-	if err := self.Remove(cameraIn.RTPVideo); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove factorybin element from SIP IO element for pad %s: %v", pname, err))
+	if err := self.RemoveMany(cameraIn.RTPVideo, cameraIn.Queue); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove factorybin and queue element from SIP IO element for pad %s: %v", pname, err))
 	}
 
 	delete(e.CameraIn, pname)
@@ -742,11 +791,14 @@ func (e *IoManagerSip) releasePadScreenshareIn(self *gst.Bin, _ *gst.GhostPad, p
 	if err := screenshareIn.RTPVideo.SetState(gst.StateNull); err != nil {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set factorybin element to NULL state for pad %s: %v", pname, err))
 	}
+	if err := screenshareIn.Queue.SetState(gst.StateNull); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set queue element to NULL state for pad %s: %v", pname, err))
+	}
 
 	e.Compositor.ReleaseRequestPad(screenshareIn.pad)
 
-	if err := self.Remove(screenshareIn.RTPVideo); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove factorybin element from SIP IO element for pad %s: %v", pname, err))
+	if err := self.RemoveMany(screenshareIn.RTPVideo, screenshareIn.Queue); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove factorybin and queue element from SIP IO element for pad %s: %v", pname, err))
 	}
 
 	delete(e.ScreenshareIn, pname)
@@ -849,6 +901,19 @@ func (e *IoManagerSip) padAddedCameraOut(self *gst.Bin, pad *gst.Pad, name strin
 	cameraOut := &SipCameraOutTranscode{}
 
 	var err error
+
+	cameraOut.Queue, err = gst.NewElementWithProperties("queue", map[string]interface{}{
+		"max-size-buffers": 3,
+		"max-size-bytes":   0,
+		"max-size-time":    0,
+		"leaky":            2, // downstream
+	})
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create queue element for camera output pad: %v", err))
+		self.Error("Failed to create queue element for camera output pad", err)
+		return
+	}
+
 	properties := gst.NewStructure("properties")
 	if err := errors.Join(
 		properties.SetUint("*.video-width", e.videoWidth),
@@ -870,9 +935,16 @@ func (e *IoManagerSip) padAddedCameraOut(self *gst.Bin, pad *gst.Pad, name strin
 		self.Error("Failed to create factorybin element for camera output pad", err)
 		return
 	}
-	if err := self.Add(cameraOut.VideoRTP); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add factorybin element to SIP IO element for camera output pad: %v", err))
-		self.Error("Failed to add factorybin element to SIP IO element for camera output pad", err)
+
+	if err := self.AddMany(cameraOut.Queue, cameraOut.VideoRTP); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add queue and factorybin elements to SIP IO element for camera output pad: %v", err))
+		self.Error("Failed to add queue and factorybin elements to SIP IO element for camera output pad", err)
+		return
+	}
+
+	if err := cameraOut.Queue.Link(cameraOut.VideoRTP); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link queue element to factorybin element for camera output pad: %v", err))
+		self.Error("Failed to link queue element to factorybin element for camera output pad", err)
 		return
 	}
 
@@ -880,9 +952,9 @@ func (e *IoManagerSip) padAddedCameraOut(self *gst.Bin, pad *gst.Pad, name strin
 
 	class := gst.ToElementClass(self.Class())
 
-	if ret := cameraOut.pad.Link(cameraOut.VideoRTP.GetStaticPad("sink")); ret != gst.PadLinkOK {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link camera output pad to factorybin sink pad: %v", ret))
-		self.Error("Failed to link camera output pad to factorybin sink pad", fmt.Errorf("failed to link pads"))
+	if ret := cameraOut.pad.Link(cameraOut.Queue.GetStaticPad("sink")); ret != gst.PadLinkOK {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link camera output pad to queue sink pad: %v", ret))
+		self.Error("Failed to link camera output pad to queue sink pad", fmt.Errorf("failed to link pads"))
 		return
 	}
 
@@ -901,6 +973,9 @@ func (e *IoManagerSip) padAddedCameraOut(self *gst.Bin, pad *gst.Pad, name strin
 		return
 	}
 
+	if !cameraOut.Queue.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, "Failed to sync state of queue element with parent")
+	}
 	if !cameraOut.VideoRTP.SyncStateWithParent() {
 		self.Log(CAT, gst.LevelWarning, "Failed to sync state of factorybin element with parent")
 	}
@@ -922,6 +997,18 @@ func (e *IoManagerSip) padAddedScreenshareOut(self *gst.Bin, pad *gst.Pad, name 
 	screenshareOut := &SipScreenshareOutTranscode{}
 
 	var err error
+	screenshareOut.Queue, err = gst.NewElementWithProperties("queue", map[string]interface{}{
+		"max-size-buffers": 3,
+		"max-size-bytes":   0,
+		"max-size-time":    0,
+		"leaky":            2, // downstream
+	})
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create queue element for screenshare output pad: %v", err))
+		self.Error("Failed to create queue element for screenshare output pad", err)
+		return
+	}
+
 	properties := gst.NewStructure("properties")
 	if err := errors.Join(
 		properties.SetUint("*.video-width", e.videoWidth),
@@ -943,9 +1030,15 @@ func (e *IoManagerSip) padAddedScreenshareOut(self *gst.Bin, pad *gst.Pad, name 
 		self.Error("Failed to create factorybin element for screenshare output pad", err)
 		return
 	}
-	if err := self.Add(screenshareOut.VideoRTP); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add factorybin element to SIP IO element for screenshare output pad: %v", err))
-		self.Error("Failed to add factorybin element to SIP IO element for screenshare output pad", err)
+	if err := self.AddMany(screenshareOut.Queue, screenshareOut.VideoRTP); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add elements to SIP IO element for screenshare output pad: %v", err))
+		self.Error("Failed to add elements to SIP IO element for screenshare output pad", err)
+		return
+	}
+
+	if err := screenshareOut.Queue.Link(screenshareOut.VideoRTP); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link queue element to factorybin element for screenshare output pad: %v", err))
+		self.Error("Failed to link queue element to factorybin element for screenshare output pad", err)
 		return
 	}
 
@@ -953,9 +1046,9 @@ func (e *IoManagerSip) padAddedScreenshareOut(self *gst.Bin, pad *gst.Pad, name 
 
 	class := gst.ToElementClass(self.Class())
 
-	if ret := screenshareOut.pad.Link(screenshareOut.VideoRTP.GetStaticPad("sink")); ret != gst.PadLinkOK {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link screenshare output pad to factorybin sink pad: %v", ret))
-		self.Error("Failed to link screenshare output pad to factorybin sink pad", fmt.Errorf("failed to link pads"))
+	if ret := screenshareOut.pad.Link(screenshareOut.Queue.GetStaticPad("sink")); ret != gst.PadLinkOK {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link screenshare output pad to queue sink pad: %v", ret))
+		self.Error("Failed to link screenshare output pad to queue sink pad", fmt.Errorf("failed to link pads"))
 		return
 	}
 
@@ -974,6 +1067,9 @@ func (e *IoManagerSip) padAddedScreenshareOut(self *gst.Bin, pad *gst.Pad, name 
 		return
 	}
 
+	if !screenshareOut.Queue.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, "Failed to sync state of queue element with parent")
+	}
 	if !screenshareOut.VideoRTP.SyncStateWithParent() {
 		self.Log(CAT, gst.LevelWarning, "Failed to sync state of factorybin element with parent")
 	}
@@ -1043,12 +1139,15 @@ func (e *IoManagerSip) padRemovedCameraOut(self *gst.Bin, pad *gst.Pad, name str
 		return
 	}
 
+	if err := e.CameraOut.Queue.SetState(gst.StateNull); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set queue element to NULL state for pad %s: %v", name, err))
+	}
 	if err := e.CameraOut.VideoRTP.SetState(gst.StateNull); err != nil {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set factorybin element to NULL state for pad %s: %v", name, err))
 	}
 
-	if err := self.Remove(e.CameraOut.VideoRTP); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove factorybin element from SIP IO element for pad %s: %v", name, err))
+	if err := self.RemoveMany(e.CameraOut.Queue, e.CameraOut.VideoRTP); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove elements from SIP IO element for pad %s: %v", name, err))
 	}
 
 	if !self.RemovePad(e.CameraOut.gpad.Pad) {
@@ -1069,12 +1168,15 @@ func (e *IoManagerSip) padRemovedScreenshareOut(self *gst.Bin, pad *gst.Pad, nam
 		return
 	}
 
+	if err := e.ScreenshareOut.Queue.SetState(gst.StateNull); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set queue element to NULL state for pad %s: %v", name, err))
+	}
 	if err := e.ScreenshareOut.VideoRTP.SetState(gst.StateNull); err != nil {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set factorybin element to NULL state for pad %s: %v", name, err))
 	}
 
-	if err := self.Remove(e.ScreenshareOut.VideoRTP); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove factorybin element from SIP IO element for pad %s: %v", name, err))
+	if err := self.RemoveMany(e.ScreenshareOut.Queue, e.ScreenshareOut.VideoRTP); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove elements from SIP IO element for pad %s: %v", name, err))
 	}
 
 	if !self.RemovePad(e.ScreenshareOut.gpad.Pad) {
