@@ -197,7 +197,7 @@ func h264CapsStringForPLID(plid profileLevelID) string {
 	slices.Reverse(levels)
 
 	return fmt.Sprintf(
-		"video/x-h264, profile=(string)%s, level={(string)%s}, stream-format=(string)avc, alignment=(string)au",
+		"video/x-h264, profile=(string)%s, level=(string){(string)%s}, stream-format=(string)avc, alignment=(string)au",
 		profName, strings.Join(levels, ",(string)"),
 	)
 }
