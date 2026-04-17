@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 )
 
@@ -182,13 +183,22 @@ func gstH264LevelName(levelIDC uint8, is1b bool) string {
 // string if plid cannot be parsed to a known profile/level.
 func h264CapsStringForPLID(plid profileLevelID) string {
 	profName := gstH264ProfileName(plid.profile)
-	levelName := gstH264LevelName(plid.levelIDC, plid.isLevel1b)
-	if profName == "" || levelName == "" {
+
+	var levels []string
+	for _, level := range h264Levels {
+		if level.levelIDC <= plid.levelIDC && level.isLevel1b == plid.isLevel1b {
+			levels = append(levels, gstH264LevelName(level.levelIDC, level.isLevel1b))
+		}
+	}
+	if profName == "" || len(levels) == 0 {
 		return ""
 	}
+
+	slices.Reverse(levels)
+
 	return fmt.Sprintf(
-		"video/x-h264, profile=(string)%s, level=(string)%s, stream-format=(string)avc, alignment=(string)au",
-		profName, levelName,
+		"video/x-h264, profile=(string)%s, level={(string)%s}, stream-format=(string)avc, alignment=(string)au",
+		profName, strings.Join(levels, ",(string)"),
 	)
 }
 

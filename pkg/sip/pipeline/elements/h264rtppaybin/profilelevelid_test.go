@@ -1,8 +1,9 @@
 package h264rtppaybin
 
 import (
-	"strings"
 	"testing"
+
+	"github.com/go-gst/go-gst/gst"
 )
 
 func TestParseProfileLevelID(t *testing.T) {
@@ -82,17 +83,22 @@ func TestH264CapsStringForPLID(t *testing.T) {
 			if s == "" {
 				t.Fatalf("got empty caps string for plid=%s", tc.plid)
 			}
-			if !strings.Contains(s, "profile=(string)"+tc.wantProfile) {
-				t.Errorf("expected profile=%q in %q", tc.wantProfile, s)
+			caps := gst.NewCapsFromString(s)
+			if caps == nil {
+				t.Fatalf("failed to parse caps string %q", s)
 			}
-			if !strings.Contains(s, "level=(string)"+tc.wantLevel) {
-				t.Errorf("expected level=%q in %q", tc.wantLevel, s)
+
+			if !gst.NewCapsFromString("video/x-h264,profile=(string)" + tc.wantProfile).CanIntersect(caps) {
+				t.Errorf("expected profile=%q in %q", tc.wantProfile, caps.String())
 			}
-			if !strings.Contains(s, "stream-format=(string)avc") {
-				t.Errorf("expected stream-format=avc in %q", s)
+			if !gst.NewCapsFromString("video/x-h264,level=(string)" + tc.wantLevel).CanIntersect(caps) {
+				t.Errorf("expected level=%q in %q", tc.wantLevel, caps.String())
 			}
-			if !strings.Contains(s, "alignment=(string)au") {
-				t.Errorf("expected alignment=au in %q", s)
+			if !gst.NewCapsFromString("video/x-h264,stream-format=(string)avc").CanIntersect(caps) {
+				t.Errorf("expected stream-format=avc in %q", caps.String())
+			}
+			if !gst.NewCapsFromString("video/x-h264,alignment=(string)au").CanIntersect(caps) {
+				t.Errorf("expected alignment=au in %q", caps.String())
 			}
 		})
 	}

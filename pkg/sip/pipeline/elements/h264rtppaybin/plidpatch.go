@@ -98,7 +98,7 @@ func (e *plidPatch) resolvePlid(self *base.GstBaseTransform) {
 	st := downstream.GetStructureAt(0)
 	plid, err := st.GetString("profile-level-id")
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("resolvePlid: downstream caps missing profile-level-id: %v", err))
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("resolvePlid: downstream caps missing profile-level-id: %v", err))
 		return
 	}
 
