@@ -3,6 +3,7 @@ package sipbin
 import (
 	"fmt"
 	"net"
+	"regexp"
 	"strconv"
 
 	"github.com/go-gst/go-gst/gst"
@@ -86,7 +87,7 @@ func (e *SipBin) makeOfferMedia(self *gst.Bin, kind livekit.TrackSource, idx int
 				self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set payload type on caps structure: %v", err))
 				continue
 			}
-			offerCaps = append(offerCaps, caps.Copy())
+			offerCaps = append(offerCaps, caps.Copy().Fixate())
 		}
 	}
 
@@ -153,6 +154,28 @@ func (e *SipBin) makeOfferMedia(self *gst.Bin, kind livekit.TrackSource, idx int
 	return media, nil
 }
 
+var bareFmtpName = regexp.MustCompile(`^\d+(?:[,-]\d+)*$`)
+
+func mediaCapsFixBareFmtp(caps *gst.Caps) *gst.Caps {
+	for i := range caps.GetSize() {
+		structure := caps.GetStructureAt(i)
+		toRemove := make([]string, 0)
+		for key, value := range structure.Values() {
+			str, ok := value.(string)
+			if !ok || str != "1" {
+				continue
+			}
+			if bareFmtpName.MatchString(key) {
+				toRemove = append(toRemove, key)
+			}
+		}
+		for _, key := range toRemove {
+			structure.RemoveValue(key)
+		}
+	}
+	return caps
+}
+
 func (e *SipBin) selectCapsForMedia(self *gst.Bin, media *gstsdp.Media, kind livekit.TrackSource) (*gst.Caps, error) {
 	mediaCaps := make([]*gst.Caps, 0, media.FormatsLen())
 	for _, format := range media.Formats() {
@@ -169,6 +192,8 @@ func (e *SipBin) selectCapsForMedia(self *gst.Bin, media *gstsdp.Media, kind liv
 		}
 		caps.GetStructureAt(0).SetName("application/x-rtp")
 		// caps.GetStructureAt(0).RemoveValue("proto") // TODO: properly handle srtp if we want to support it
+
+		caps = mediaCapsFixBareFmtp(caps)
 
 		info := rtp.PayloadInfoForPt(uint8(pt))
 		if info != nil && info.PayloadType() < 96 {
