@@ -33,6 +33,13 @@ var properties = []*glib.ParamSpec{
 		gst.TypeStructure,
 		glib.ParameterWritable|glib.ParameterConstructOnly,
 	),
+	glib.NewStringParam(
+		"selected-factory",
+		"Selected Factory",
+		"The name of the factory that was selected based on the negotiated caps",
+		nil,
+		glib.ParameterReadable,
+	),
 }
 
 type FactoryCaps struct {
@@ -164,6 +171,8 @@ func (e *FactoryBin) onCapsEvent(instance *gst.Object, pad *gst.Pad, event *gst.
 		return false
 	}
 
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Selected factory %s for caps %q", fc.Factory.GetName(), caps.String()))
+
 	properties := make(map[string]interface{})
 	maps.Copy(properties, e.Properties["*"])
 	if factoryProperties, ok := e.Properties[fc.Factory.GetName()]; ok {
@@ -197,6 +206,8 @@ func (e *FactoryBin) onCapsEvent(instance *gst.Object, pad *gst.Pad, event *gst.
 	if !elem.SyncStateWithParent() {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state with parent for element %s", elem.GetName()))
 	}
+
+	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Factory %s successfully configured for caps %q", fc.Factory.GetName(), caps.String()))
 
 	return pad.EventDefault(instance, event)
 }
@@ -366,6 +377,17 @@ func (e *FactoryBin) GetProperty(instance *glib.Object, id uint) *glib.Value {
 		value, err := glib.GValue(strv)
 		if err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating GValue for factories property: %v", err))
+			return nil
+		}
+		return value
+	case "selected-factory":
+		if e.Elem == nil {
+			return nil
+		}
+		factoryName := e.Elem.GetFactory().GetName()
+		value, err := glib.GValue(factoryName)
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating GValue for selected-factory property: %v", err))
 			return nil
 		}
 		return value
