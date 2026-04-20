@@ -44,6 +44,7 @@ type SampleWriter struct {
 	cancel    context.CancelFunc
 	i         int
 	ptsOffset gst.ClockTime
+	ptsCursor gst.ClockTime
 	started   bool
 }
 
@@ -78,8 +79,16 @@ func (e *SampleWriter) InstanceInit(instance *glib.Object) {
 	self.SetAsync(false)
 	self.SetDoTimestamp(false)
 
-	blockSize := uint(int(e.sampleDur.Seconds()*float64(e.rate)) * 2)
-	self.SetBlocksize(blockSize)
+	if srcPad := self.Element.GetStaticPad("src"); srcPad != nil {
+		srcPad.AddProbe(gst.PadProbeTypeQueryUpstream, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+			q := info.GetQuery()
+			if q == nil || q.Type() != gst.QueryLatency {
+				return gst.PadProbeOK
+			}
+			q.SetLatency(true, 0, gst.ClockTimeNone)
+			return gst.PadProbeHandled
+		})
+	}
 }
 
 func (e *SampleWriter) SetCaps(self *base.GstBaseSrc, caps *gst.Caps) bool {
@@ -108,6 +117,15 @@ func (e *SampleWriter) Start(self *base.GstBaseSrc) bool {
 	e.i = 0
 	e.started = false
 	e.ptsOffset = 0
+	e.ptsCursor = 0
+
+	blockSize := int(e.sampleDur.Seconds()*float64(e.rate)) * 2
+	for _, f := range e.frames {
+		if sz := f.Size(); sz > blockSize {
+			blockSize = sz
+		}
+	}
+	self.SetBlocksize(uint(blockSize))
 
 	return true
 }
@@ -147,9 +165,6 @@ func (e *SampleWriter) Fill(self *base.GstBaseSrc, offset uint64, length uint, b
 	}
 
 	if !e.started {
-		// Live source added to a running pipeline: align PTS with the
-		// pipeline's current running time so the sink doesn't drop our
-		// initial buffers as "late".
 		if clock := self.GetClock(); clock != nil {
 			now := clock.GetTime()
 			base := self.GetBaseTime()
@@ -160,9 +175,11 @@ func (e *SampleWriter) Fill(self *base.GstBaseSrc, offset uint64, length uint, b
 		e.started = true
 	}
 
-	pts := gst.ClockTime(time.Duration(e.i)*e.sampleDur) + e.ptsOffset
-	buffer.SetPresentationTimestamp(pts)
-	buffer.SetDuration(gst.ClockTime(e.sampleDur.Nanoseconds()))
+	samples := n / 2 // S16 mono, 2 bytes/sample
+	dur := gst.ClockTime(time.Duration(samples) * time.Second / time.Duration(e.rate))
+	buffer.SetPresentationTimestamp(e.ptsCursor + e.ptsOffset)
+	buffer.SetDuration(dur)
+	e.ptsCursor += dur
 	e.i++
 
 	if uint(n) < length {

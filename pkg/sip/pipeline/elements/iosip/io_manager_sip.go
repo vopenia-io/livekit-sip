@@ -718,6 +718,11 @@ func (e *IoManagerSip) releasePadAudioIn(self *gst.Bin, _ *gst.GhostPad, pname s
 		if err := audioIn.RtpAudio.SetState(gst.StateNull); err != nil {
 			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set decoder element to NULL state for pad %s: %v", pname, err))
 		}
+		if audioIn.DtmfDetect != nil {
+			if err := audioIn.DtmfDetect.SetState(gst.StateNull); err != nil {
+				self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set dtmfdetect element to NULL state for pad %s: %v", pname, err))
+			}
+		}
 
 		if audioIn.pad != nil {
 			e.Compositor.ReleaseRequestPad(audioIn.pad)
@@ -725,6 +730,11 @@ func (e *IoManagerSip) releasePadAudioIn(self *gst.Bin, _ *gst.GhostPad, pname s
 
 		if err := self.Remove(audioIn.RtpAudio); err != nil {
 			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove decoder element from SIP IO element for pad %s: %v", pname, err))
+		}
+		if audioIn.DtmfDetect != nil {
+			if err := self.Remove(audioIn.DtmfDetect); err != nil {
+				self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove dtmfdetect element from SIP IO element for pad %s: %v", pname, err))
+			}
 		}
 	}
 

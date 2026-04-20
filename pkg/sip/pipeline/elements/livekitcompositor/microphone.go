@@ -2,13 +2,16 @@ package livekitcompositor
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/livekit"
 )
 
 type LivekitCompositorMicrophone struct {
-	AudioMixer *gst.Element
+	AudioTestSrc  *gst.Element
+	SilenceFilter *gst.Element
+	AudioMixer    *gst.Element
 }
 
 func (e *LivekitCompositor) initMicrophone(self *gst.Bin) error {
@@ -28,8 +31,31 @@ func (e *LivekitCompositor) initMicrophone(self *gst.Bin) error {
 		return err
 	}
 
-	if err := self.Add(e.LivekitCompositorMicrophone.AudioMixer); err != nil {
-		return fmt.Errorf("failed to add audiomixer to bin: %w", err)
+	e.LivekitCompositorMicrophone.AudioTestSrc, err = gst.NewElementWithProperties("audiotestsrc", map[string]interface{}{
+		"is-live": true,
+		"wave":    int(4), // silence
+	})
+	if err != nil {
+		return err
+	}
+
+	e.LivekitCompositorMicrophone.SilenceFilter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
+		"caps": gst.NewCapsFromString("audio/x-raw,channels=1,rate=8000"),
+	})
+	if err != nil {
+		return err
+	}
+
+	if err := self.AddMany(e.LivekitCompositorMicrophone.AudioTestSrc, e.LivekitCompositorMicrophone.SilenceFilter, e.LivekitCompositorMicrophone.AudioMixer); err != nil {
+		return fmt.Errorf("failed to add elements to bin: %w", err)
+	}
+
+	if err := gst.ElementLinkMany(e.LivekitCompositorMicrophone.AudioTestSrc, e.LivekitCompositorMicrophone.SilenceFilter); err != nil {
+		return fmt.Errorf("failed to link elements: %w", err)
+	}
+
+	if ret := e.LivekitCompositorMicrophone.SilenceFilter.GetStaticPad("src").Link(e.LivekitCompositorMicrophone.AudioMixer.GetRequestPad("sink_%u")); ret != gst.PadLinkOK {
+		return fmt.Errorf("failed to link silence filter to audiomixer: %v", ret)
 	}
 
 	class := gst.ToElementClass(self.Class())
@@ -44,8 +70,26 @@ func (e *LivekitCompositor) initMicrophone(self *gst.Bin) error {
 		return fmt.Errorf("failed to add ghost pad for microphone source to bin")
 	}
 
+	if !e.LivekitCompositorMicrophone.AudioTestSrc.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, "Failed to sync state of audio test src with parent")
+	}
+	if !e.LivekitCompositorMicrophone.SilenceFilter.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, "Failed to sync state of silence filter with parent")
+	}
 	if !e.LivekitCompositorMicrophone.AudioMixer.SyncStateWithParent() {
 		self.Log(CAT, gst.LevelWarning, "Failed to sync state of audiomixer with parent")
+	}
+	
+	done := make(chan struct{})
+	silenceSrc := e.LivekitCompositorMicrophone.SilenceFilter.GetStaticPad("src")
+	silenceSrc.AddProbe(gst.PadProbeTypeBuffer, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+		close(done)
+		return gst.PadProbeRemove
+	})
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		self.Log(CAT, gst.LevelWarning, "Timed out waiting for first silence buffer")
 	}
 
 	return nil

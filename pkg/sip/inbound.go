@@ -906,15 +906,15 @@ func (c *inboundCall) handleInvite(ctx context.Context, tid traceid.ID, req *sip
 		// For late offer calls (empty INVITE body), the ACK contains the answer SDP.
 		// We must wait for it before proceeding (e.g. pin prompt needs media to be ready).
 		// The ACK arrives via Server.onAck() which forwards it to the pipeline.
-		if len(req.Body()) == 0 {
-			select {
-			case <-c.cc.InviteACK():
-			case <-time.After(inviteOkAckLateTimeout):
-				c.log().Warnw("Late offer: no ACK received", nil)
-			case <-ctx.Done():
-				return false, ctx.Err()
-			}
+		// if len(req.Body()) == 0 {
+		select {
+		case <-c.cc.InviteACK():
+		case <-time.After(inviteOkAckLateTimeout):
+			c.log().Warnw("Late offer: no ACK received", nil)
+		case <-ctx.Done():
+			return false, ctx.Err()
 		}
+		// }
 		if !c.s.conf.Experimental.InboundWaitACK {
 			ackReceived = c.cc.InviteACK()
 			// Start this timer right after the Accept.
@@ -922,9 +922,9 @@ func (c *inboundCall) handleInvite(ctx context.Context, tid traceid.ID, req *sip
 		}
 		// c.media.EnableTimeout(true)
 		// c.media.EnableOut()
-		if ok, err := c.waitMedia(ctx); !ok {
-			return false, err
-		}
+		// if ok, err := c.waitMedia(ctx); !ok {
+		// 	return false, err
+		// }
 		c.setStatus(CallActive)
 		return true, nil
 	}
