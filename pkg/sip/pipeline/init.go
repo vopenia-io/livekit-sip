@@ -51,6 +51,7 @@ import (
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/bfcpserver"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/h264rtppaybin"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/hop"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/iolivekit"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/iosip"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin"
@@ -95,6 +96,10 @@ var MainLoop *glib.MainLoop
 
 func init() {
 	gst.Init(nil)
+
+	if !hop.Register() {
+		panic("Failed to register hop src/sink")
+	}
 
 	if !sipmanager.Register() {
 		panic("Failed to register sipmanager")

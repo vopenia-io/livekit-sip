@@ -181,5 +181,7 @@ func (c *IOManager) Close() error {
 	); err != nil {
 		return fmt.Errorf("failed to remove IO Manager elements from pipeline: %w", err)
 	}
+	c.SipController = nil
+	c.LivekitController = nil
 	return nil
 }

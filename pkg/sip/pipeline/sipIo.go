@@ -4,11 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
+	"unsafe"
 	"weak"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/logger"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/hop"
 	"github.com/samber/lo"
 )
 
@@ -18,6 +21,7 @@ func NewSipInput(log logger.Logger, parent *Pipeline, opts SipOpt) *SipIo {
 		pipeline:    parent,
 		opts:        opts,
 		sendOfferCh: make(chan string, 1),
+		hops:        make(map[string]*Hop),
 	}
 }
 
@@ -31,6 +35,13 @@ type SipOpt struct {
 	MaxActiveParticipants int
 }
 
+type Hop struct {
+	srcPad  *gst.Pad
+	src     *gst.Element
+	sink    *gst.Element
+	sinkPad *gst.Pad
+}
+
 type SipIo struct {
 	log      logger.Logger
 	pipeline *Pipeline
@@ -39,6 +50,9 @@ type SipIo struct {
 
 	SipBin      *gst.Element
 	sendOfferCh chan string
+
+	hopMu sync.Mutex
+	hops  map[string]*Hop
 }
 
 func makeH264HighCaps() *gst.Caps {
@@ -166,7 +180,7 @@ func (sio *SipIo) Add() error {
 	)
 }
 
-func (sio *SipIo) binPadAddedRecvRtpSrc(rtpbin *gst.Element, pad *gst.Pad) {
+func (sio *SipIo) binPadAddedRecvRtpSrc(_ *gst.Element, pad *gst.Pad) {
 	var session, ssrc, pt uint
 	if _, err := fmt.Sscanf(pad.GetName(), "recv_rtp_src_%d_%d_%d", &session, &ssrc, &pt); err != nil {
 		sio.log.Warnw("Received new pad on rtpbin with unrecognized name format", err, "padName", pad.GetName())
@@ -175,46 +189,106 @@ func (sio *SipIo) binPadAddedRecvRtpSrc(rtpbin *gst.Element, pad *gst.Pad) {
 
 	sio.log.Debugw("Received new recv RTP src pad on rtpbin", "session", session, "ssrc", ssrc, "pt", pt)
 
-	sink := sio.pipeline.IOManager.SipController.GetRequestPad(fmt.Sprintf("recv_rtp_sink_%d_%d_%d", session, ssrc, pt))
-	if sink == nil {
+	sio.hopMu.Lock()
+	defer sio.hopMu.Unlock()
+
+	sinkPad := sio.pipeline.IOManager.SipController.GetRequestPad(fmt.Sprintf("recv_rtp_sink_%d_%d_%d", session, ssrc, pt))
+	if sinkPad == nil {
 		sio.log.Warnw("Received new recv RTP src pad on rtpbin, but no matching sink pad was found on sipbin", nil, "session", session, "ssrc", ssrc, "pt", pt)
 		return
 	}
 
-	if ret := pad.Link(sink); ret != gst.PadLinkOK {
+	hopSrc, err := gst.NewElementWithProperties("hopsrc", map[string]interface{}{})
+	if err != nil {
+		sio.log.Errorw("Failed to create hop src element for new recv RTP pad", err, "session", session, "ssrc", ssrc, "pt", pt)
+		return
+	}
+
+	value, err := glib.ValueInit(hop.TypeHopSrc)
+	if err != nil {
+		sio.log.Errorw("Failed to create GValue for hop src type", err, "session", session, "ssrc", ssrc, "pt", pt)
+		return
+	}
+
+	value.SetInstance(unsafe.Pointer(hopSrc.Instance()))
+
+	hopSink, err := gst.NewElementWithProperties("hopsink", map[string]interface{}{
+		"src": value,
+	})
+	if err != nil {
+		sio.log.Errorw("Failed to create hop sink element for new recv RTP pad", err, "session", session, "ssrc", ssrc, "pt", pt)
+		return
+	}
+
+	if err := sio.pipeline.Pipeline().AddMany(
+		hopSrc, hopSink,
+	); err != nil {
+		sio.log.Errorw("Failed to add hop elements to pipeline for new recv RTP pad", err, "session", session, "ssrc", ssrc, "pt", pt)
+		return
+	}
+
+	if ret := hopSrc.GetStaticPad("src").Link(sinkPad); ret != gst.PadLinkOK {
+		sio.log.Errorw("Failed to link new hop src pad to sipbin sink pad", fmt.Errorf("link failed: %v", ret), "session", session, "ssrc", ssrc, "pt", pt)
+		return
+	}
+
+	if ret := pad.Link(hopSink.GetStaticPad("sink")); ret != gst.PadLinkOK {
 		sio.log.Errorw("Failed to link new recv RTP src pad from rtpbin to sipbin sink pad", fmt.Errorf("link failed: %v", ret), "session", session, "ssrc", ssrc, "pt", pt)
 		return
 	}
 
-	sio.log.Infow("Linked new recv RTP src pad from rtpbin to sipbin sink pad", "session", session, "ssrc", ssrc, "pt", pt)
+	if !hopSrc.SyncStateWithParent() {
+		sio.log.Warnw("Failed to sync hop src state with parent pipeline for new recv RTP pad", nil, "session", session, "ssrc", ssrc, "pt", pt)
+	}
+	if !hopSink.SyncStateWithParent() {
+		sio.log.Warnw("Failed to sync hop sink state with parent pipeline for new recv RTP pad", nil, "session", session, "ssrc", ssrc, "pt", pt)
+	}
 
-	// go func() {
-	// switch livekit.TrackSource(session) {
-	// case livekit.TrackSource_CAMERA:
-	// 	if err := sio.pipeline.WebrtcIo.LivekitBin.SetProperty("camera", true); err != nil {
-	// 		sio.log.Errorw("Failed to set camera property on LiveKit bin after linking new RTP pad for camera track", err)
-	// 	}
-	// case livekit.TrackSource_MICROPHONE:
-	// 	if err := sio.pipeline.WebrtcIo.LivekitBin.SetProperty("microphone", true); err != nil {
-	// 		sio.log.Errorw("Failed to set microphone property on LiveKit bin after linking new RTP pad for microphone track", err)
-	// 	}
-	// case livekit.TrackSource_SCREEN_SHARE:
-	// 	if err := sio.pipeline.WebrtcIo.LivekitBin.SetProperty("screenshare", true); err != nil {
-	// 		sio.log.Errorw("Failed to set screenshare property on LiveKit bin after linking new RTP pad for screenshare track", err)
-	// 	}
-	// 	// most sip devices mix screenshare audio into the microphone track
-	// 	if err := sio.pipeline.WebrtcIo.LivekitBin.SetProperty("screenshare-audio", true); err != nil {
-	// 		sio.log.Errorw("Failed to set screenshare-audio property on LiveKit bin after linking new RTP pad for screenshare audio track", err)
-	// 	}
-	// case livekit.TrackSource_SCREEN_SHARE_AUDIO:
-	// 	if err := sio.pipeline.WebrtcIo.LivekitBin.SetProperty("screenshare-audio", true); err != nil {
-	// 		sio.log.Errorw("Failed to set screenshare-audio property on LiveKit bin after linking new RTP pad for screenshare audio track", err)
-	// 	}
-	// default:
-	// 	sio.log.Warnw("Received new recv RTP src pad on rtpbin with unrecognized session kind", nil, "session", session, "ssrc", ssrc, "pt", pt)
-	// 	return
-	// }
-	// }()
+	sio.hops[fmt.Sprintf("%d_%d_%d", session, ssrc, pt)] = &Hop{
+		srcPad:  pad,
+		src:     hopSrc,
+		sink:    hopSink,
+		sinkPad: sinkPad,
+	}
+
+	sio.log.Infow("Linked new recv RTP src pad from rtpbin to sipbin sink pad", "session", session, "ssrc", ssrc, "pt", pt)
+}
+
+func (sio *SipIo) binPadRemoved(_ *gst.Element, pad *gst.Pad) {
+	var session, ssrc, pt uint
+	if _, err := fmt.Sscanf(pad.GetName(), "recv_rtp_src_%d_%d_%d", &session, &ssrc, &pt); err != nil {
+		sio.log.Warnw("Received removed pad on rtpbin with unrecognized name format", err, "padName", pad.GetName())
+		return
+	}
+
+	sio.log.Debugw("Received removed recv RTP src pad on rtpbin", "session", session, "ssrc", ssrc, "pt", pt)
+
+	sio.hopMu.Lock()
+	defer sio.hopMu.Unlock()
+
+	hopKey := fmt.Sprintf("%d_%d_%d", session, ssrc, pt)
+	hop, ok := sio.hops[hopKey]
+	if !ok {
+		sio.log.Warnw("Received removed recv RTP src pad on rtpbin, but no matching hop was found", nil, "session", session, "ssrc", ssrc, "pt", pt)
+		return
+	}
+
+	if hop.sinkPad.GetParent().Instance() != nil {
+		sio.pipeline.IOManager.SipController.ReleaseRequestPad(hop.sinkPad)
+	}
+
+	for _, elem := range []*gst.Element{hop.sink, hop.src} {
+		if err := elem.SetState(gst.StateNull); err != nil {
+			sio.log.Errorw("Failed to set hop element to NULL state for removed recv RTP pad", err, "session", session, "ssrc", ssrc, "pt", pt)
+		}
+		if err := sio.pipeline.Pipeline().Remove(elem); err != nil {
+			sio.log.Errorw("Failed to remove hop element from pipeline for removed recv RTP pad", err, "session", session, "ssrc", ssrc, "pt", pt)
+		}
+	}
+	sio.hops[hopKey] = nil
+	delete(sio.hops, hopKey)
+
+	sio.log.Infow("Unlinked and removed hop for removed recv RTP src pad on rtpbin", "session", session, "ssrc", ssrc, "pt", pt)
 }
 
 func (sio *SipIo) onAvailableMedia(camera, microphone, screenshare, screenshareAudio bool) {
@@ -246,6 +320,15 @@ func (sio *SipIo) Link() error {
 		}
 	}); err != nil {
 		return fmt.Errorf("failed to connect to rtpbin pad-added signal: %w", err)
+	}
+
+	if _, err := sio.SipBin.Connect("pad-removed", func(rtpbin *gst.Element, pad *gst.Pad) {
+		ptr := siow.Value()
+		if ptr != nil {
+			ptr.binPadRemoved(rtpbin, pad)
+		}
+	}); err != nil {
+		return fmt.Errorf("failed to connect to rtpbin pad-removed signal: %w", err)
 	}
 
 	if _, err := sio.SipBin.Connect("send-offer-sdp", func(_ *gst.Element, offer string) {
@@ -280,5 +363,16 @@ func (sio *SipIo) Close() error {
 	); err != nil {
 		return fmt.Errorf("failed to remove SIP IO elements from pipeline: %w", err)
 	}
+	sio.SipBin = nil
+	sio.hopMu.Lock()
+	defer sio.hopMu.Unlock()
+	for _, hop := range sio.hops {
+		if err := sio.pipeline.Pipeline().RemoveMany(
+			hop.src, hop.sink,
+		); err != nil {
+			sio.log.Errorw("Failed to remove hop elements from pipeline", err)
+		}
+	}
+	sio.hops = make(map[string]*Hop)
 	return nil
 }
