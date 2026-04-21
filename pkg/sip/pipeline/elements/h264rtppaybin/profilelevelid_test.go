@@ -137,7 +137,7 @@ func TestMaxResolutionForLevel(t *testing.T) {
 			if err != nil {
 				t.Fatalf("failed to parse plid %q: %v", tc.plid, err)
 			}
-			w, h, ok := maxResolutionForLevel(parsed, tc.fps)
+			w, h, ok := maxResolutionForLevel(parsed.levelIDC, parsed.isLevel1b, tc.fps)
 			if !ok {
 				t.Fatalf("plid=%s: not ok", tc.plid)
 			}
@@ -154,7 +154,7 @@ func TestMaxResolutionForLevel_Invalid(t *testing.T) {
 	if err != nil {
 		t.Skip("parse error, skipping")
 	}
-	if _, _, ok := maxResolutionForLevel(parsed, 30); ok {
+	if _, _, ok := maxResolutionForLevel(parsed.levelIDC, parsed.isLevel1b, 30); ok {
 		t.Errorf("expected !ok for unknown level")
 	}
 }

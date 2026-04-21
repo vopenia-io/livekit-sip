@@ -178,6 +178,47 @@ func gstH264LevelName(levelIDC uint8, is1b bool) string {
 	return ""
 }
 
+func gstH264LevelIDC(levelStr string) (uint8, bool) {
+	switch levelStr {
+	case "1":
+		return 10, false
+	case "1.1":
+		return 11, false
+	case "1.2":
+		return 12, false
+	case "1.3":
+		return 13, false
+	case "2":
+		return 20, false
+	case "2.1":
+		return 21, false
+	case "2.2":
+		return 22, false
+	case "3":
+		return 30, false
+	case "3.1":
+		return 31, false
+	case "3.2":
+		return 32, false
+	case "4":
+		return 40, false
+	case "4.1":
+		return 41, false
+	case "4.2":
+		return 42, false
+	case "5":
+		return 50, false
+	case "5.1":
+		return 51, false
+	case "5.2":
+		return 52, false
+	case "1b":
+		return 11, true
+	default:
+		return 0, false
+	}
+}
+
 // h264CapsStringForPLID returns a GStreamer caps string describing the
 // H.264-domain constraint implied by the given profile-level-id. Empty
 // string if plid cannot be parsed to a known profile/level.
@@ -186,7 +227,7 @@ func h264CapsStringForPLID(plid profileLevelID) string {
 
 	var levels []string
 	for _, level := range h264Levels {
-		if level.levelIDC <= plid.levelIDC && level.levelIDC/10 == plid.levelIDC/10 && level.isLevel1b == plid.isLevel1b {
+		if level.levelIDC <= plid.levelIDC && level.isLevel1b == plid.isLevel1b {
 			levels = append(levels, gstH264LevelName(level.levelIDC, level.isLevel1b))
 		}
 	}
@@ -241,8 +282,8 @@ func limitsForLevel(levelIDC uint8, isLevel1b bool) *h264LevelLimits {
 // maxResolutionForLevel computes the maximum width and height (assuming
 // 16:9 aspect ratio) that fit within the given profile-level-id's
 // constraints at the specified framerate.
-func maxResolutionForLevel(plid profileLevelID, fps int) (maxWidth, maxHeight int, ok bool) {
-	limits := limitsForLevel(plid.levelIDC, plid.isLevel1b)
+func maxResolutionForLevel(levelIDC uint8, isLevel1b bool, fps int) (maxWidth, maxHeight int, ok bool) {
+	limits := limitsForLevel(levelIDC, isLevel1b)
 	if limits == nil {
 		return 0, 0, false
 	}

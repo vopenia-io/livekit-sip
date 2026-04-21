@@ -1,8 +1,24 @@
 package h264rtppaybin
 
+// /*
+// #cgo pkg-config: gstreamer-1.0 gstreamer-base-1.0
+// #include <gst/gst.h>
+// #include <gst/base/gstbasetransform.h>
+
+// void capsfilter_set_prefer_passthrough(GstElement *capsfilter, gboolean prefer_passthrough) {
+// 	GstBaseTransform *transform = GST_BASE_TRANSFORM(capsfilter);
+// 	if (transform == NULL) {
+// 		g_printerr("Failed to cast capsfilter to GstBaseTransform\n");
+// 		return;
+// 	}
+// 	gst_base_transform_set_prefer_passthrough(transform, prefer_passthrough);
+// }
+// */
+// import "C"
+
 import (
 	"fmt"
-	"sync/atomic"
+	"weak"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
@@ -37,12 +53,10 @@ const (
 // The bin also re-emits max-resolution(int, int) derived from the same
 // plid, used by videoh264 to clamp its raw-video ScaleFilter.
 type H264RtpPayBin struct {
-	H264Parse         *gst.Element
 	ProfileCapsFilter *gst.Element
+	H264Parse         *gst.Element
 	RtpH264Pay        *gst.Element
 	PlidPatch         *gst.Element
-
-	profileApplied atomic.Bool
 }
 
 func (e *H264RtpPayBin) New() glib.GoObjectSubclass {
@@ -79,19 +93,39 @@ func (e *H264RtpPayBin) ClassInit(klass *glib.ObjectClass) {
 		glib.TYPE_NONE,
 		glib.TYPE_INT, glib.TYPE_INT,
 	)
-
-	gst.SignalNew(
-		class.Type(),
-		"caps-changed",
-		gst.SignalRunLast,
-		glib.TYPE_NONE,
-		glib.TYPE_STRING,
-	)
 }
 
 func (e *H264RtpPayBin) Constructed(instance *glib.Object) {
 	self := gst.ToGstBin(instance)
 	var err error
+
+	wself := glib.WeakRefInit(self)
+	ewaek := weak.Make(e)
+
+	e.ProfileCapsFilter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{})
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create profile capsfilter: %v", err))
+		self.Error("Failed to create profile capsfilter", err)
+		return
+	}
+	// C.capsfilter_set_prefer_passthrough((*C.GstElement)(unsafe.Pointer(e.ProfileCapsFilter.Instance())), C.gboolean(1))
+	if _, err := e.ProfileCapsFilter.GetStaticPad("src").Connect("notify::caps", func(pad *gst.Pad, _ *glib.ParamSpec) {
+		self := gst.ToGstBin(wself.Get())
+		e := ewaek.Value()
+		if self == nil || e == nil {
+			return
+		}
+		caps := pad.CurrentCaps()
+		if caps == nil || caps.IsEmpty() {
+			self.Log(CAT, gst.LevelWarning, "caps are empty")
+			return
+		}
+		e.setMaxResolution(self, caps)
+	}); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to connect to profile capsfilter caps notify: %v", err))
+		self.Error("Failed to connect to profile capsfilter caps notify", err)
+		return
+	}
 
 	e.H264Parse, err = gst.NewElementWithProperties("h264parse", map[string]interface{}{
 		"config-interval": int(-1),
@@ -99,13 +133,6 @@ func (e *H264RtpPayBin) Constructed(instance *glib.Object) {
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create h264parse: %v", err))
 		self.Error("Failed to create h264parse", err)
-		return
-	}
-
-	e.ProfileCapsFilter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{})
-	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create profile capsfilter: %v", err))
-		self.Error("Failed to create profile capsfilter", err)
 		return
 	}
 
@@ -127,28 +154,26 @@ func (e *H264RtpPayBin) Constructed(instance *glib.Object) {
 		return
 	}
 
-	wself := glib.WeakRefInit(self)
-	wProfileCapsFilter := glib.WeakRefInit(e.ProfileCapsFilter)
-	if _, err := e.PlidPatch.Connect("plid-resolved", func(_ *gst.Element, plid string, maxWidth, maxHeight int) {
+	if _, err := e.PlidPatch.Connect("plid-resolved", func(_ *gst.Element, plid string) {
 		self := gst.ToGstBin(wself.Get())
-		profileCapsFilter := gst.ToElement(wProfileCapsFilter.Get())
-		if self == nil || profileCapsFilter == nil {
+		e := ewaek.Value()
+		if self == nil || e == nil {
 			return
 		}
-		onPlidResolved(self, profileCapsFilter, plid, maxWidth, maxHeight)
+		e.onPlidResolved(self, plid)
 	}); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to connect plid-resolved: %v", err))
 		self.Error("Failed to connect plid-resolved", err)
 		return
 	}
 
-	if err := self.AddMany(e.H264Parse, e.ProfileCapsFilter, e.RtpH264Pay, e.PlidPatch); err != nil {
+	if err := self.AddMany(e.ProfileCapsFilter, e.H264Parse, e.RtpH264Pay, e.PlidPatch); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add elements to bin: %v", err))
 		self.Error("Failed to add elements to bin", err)
 		return
 	}
 
-	if err := gst.ElementLinkMany(e.H264Parse, e.ProfileCapsFilter, e.RtpH264Pay, e.PlidPatch); err != nil {
+	if err := gst.ElementLinkMany(e.ProfileCapsFilter, e.H264Parse, e.RtpH264Pay, e.PlidPatch); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link elements: %v", err))
 		self.Error("Failed to link elements", err)
 		return
@@ -156,15 +181,45 @@ func (e *H264RtpPayBin) Constructed(instance *glib.Object) {
 
 	elemClass := gst.ToElementClass(self.Class())
 
-	ghostSink := gst.NewGhostPadFromTemplate("sink", e.H264Parse.GetStaticPad("sink"), elemClass.GetPadTemplate("sink"))
+	ghostSink := gst.NewGhostPadFromTemplate("sink", e.ProfileCapsFilter.GetStaticPad("sink"), elemClass.GetPadTemplate("sink"))
 	self.AddPad(ghostSink.Pad)
 
 	ghostSrc := gst.NewGhostPadFromTemplate("src", e.PlidPatch.GetStaticPad("src"), elemClass.GetPadTemplate("src"))
 	self.AddPad(ghostSrc.Pad)
 }
 
-func onPlidResolved(self *gst.Bin, profileCapsFilter *gst.Element, plid string, maxWidth, maxHeight int) {
-	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Profile-level-id resolved: %s (max resolution: %dx%d)", plid, maxWidth, maxHeight))
+func (e *H264RtpPayBin) setMaxResolution(self *gst.Bin, caps *gst.Caps) {
+	caps = caps.Copy().Fixate()
+	structure := caps.GetStructureAt(0)
+	level, err := structure.GetString("level")
+	if err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("No level field in caps %s: %v", caps.String(), err))
+		return
+	}
+	levelIdc, is1b := gstH264LevelIDC(level)
+	if levelIdc == 0 && !is1b {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown level %q in caps %s", level, caps.String()))
+		return
+	}
+
+	framerate := 24
+	if framerateFracNum, framerateFracDen, err := structure.GetFraction("framerate"); err == nil {
+		framerate = int(framerateFracNum / framerateFracDen)
+	}
+
+	maxWidth, maxHeight, ok := maxResolutionForLevel(levelIdc, is1b, framerate)
+	if !ok {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to get max resolution for level %q in caps %s", level, caps.String()))
+		return
+	}
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Caps changed: level=%s is1b=%t framerate=%d - %dx%d", level, is1b, framerate, maxWidth, maxHeight))
+	if _, err := self.Emit("max-resolution", maxWidth, maxHeight); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to emit max-resolution: %v", err))
+	}
+}
+
+func (e *H264RtpPayBin) onPlidResolved(self *gst.Bin, plid string) {
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Profile-level-id resolved: %s", plid))
 
 	parsed, err := parseProfileLevelID(plid)
 	if err != nil {
@@ -173,11 +228,18 @@ func onPlidResolved(self *gst.Bin, profileCapsFilter *gst.Element, plid string, 
 	}
 
 	caps := gst.NewCapsFromString(h264CapsStringForPLID(parsed))
-	if err := profileCapsFilter.SetProperty("caps", caps); err != nil {
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Parsed profile-level-id: profileIDC=%d profileIOP=%d levelIDC=%d isLevel1b=%t: %s", parsed.profileIDC, parsed.profileIOP, parsed.levelIDC, parsed.isLevel1b, caps.String()))
+	if err := e.ProfileCapsFilter.SetProperty("caps", caps); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set caps on profile capsfilter: %v", err))
 	}
 
-	if _, err := self.Emit("max-resolution", maxWidth, maxHeight); err != nil {
+	w, h, ok := maxResolutionForLevel(parsed.levelIDC, parsed.isLevel1b, 24)
+	if !ok {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown profile-level-id %q; cannot determine max resolution", plid))
+		return
+	}
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Emitting max-resolution for level %q: %dx%d", plid, w, h))
+	if _, err := self.Emit("max-resolution", w, h); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to emit max-resolution: %v", err))
 	}
 }
