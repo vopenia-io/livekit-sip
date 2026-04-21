@@ -186,7 +186,7 @@ func h264CapsStringForPLID(plid profileLevelID) string {
 
 	var levels []string
 	for _, level := range h264Levels {
-		if level.levelIDC <= plid.levelIDC && level.isLevel1b == plid.isLevel1b {
+		if level.levelIDC <= plid.levelIDC && level.levelIDC/10 == plid.levelIDC/10 && level.isLevel1b == plid.isLevel1b {
 			levels = append(levels, gstH264LevelName(level.levelIDC, level.isLevel1b))
 		}
 	}
