@@ -431,7 +431,10 @@ func (e *FactoryBin) Constructed(instance *glib.Object) {
 		return false
 	})
 
+	var msg strings.Builder
+	msg.WriteString("Available factories and their caps:\n")
 	for _, fc := range e.FactoryCaps {
-		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Factory %s: src caps: %q, sink caps: %q", fc.Factory.GetName(), fc.SrcCaps.String(), fc.SinkCaps.String()))
+		msg.WriteString(fmt.Sprintf("- %s: src caps: %q, sink caps: %q\n", fc.Factory.GetName(), fc.SrcCaps.String(), fc.SinkCaps.String()))
 	}
+	self.Log(CAT, gst.LevelInfo, msg.String())
 }
