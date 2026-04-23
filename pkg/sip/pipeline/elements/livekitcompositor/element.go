@@ -10,6 +10,7 @@ import (
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin/livekittracks"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitcompositor/patchbay"
+	"github.com/samber/lo"
 )
 
 var CAT = gst.NewDebugCategory(
@@ -18,14 +19,15 @@ var CAT = gst.NewDebugCategory(
 	"livekit_compositor Element",
 )
 
+const NbTracks = int(livekit.TrackSource_SCREEN_SHARE_AUDIO) + 1
+
 func init() {
 	patchbay.CAT = CAT
 }
 
 type ParticipantInfo struct {
-	SID        string
-	Name       string
-	AudioLevel float32
+	SID  string
+	Name string
 }
 
 type LivekitCompositor struct {
@@ -39,11 +41,10 @@ type LivekitCompositor struct {
 	*LivekitCompositorCamera
 	*LivekitCompositorScreenshare
 
-	participants map[string]ParticipantInfo
+	participants map[string]ParticipantInfo                         // key is participant SID
+	tracks       [NbTracks]map[string]livekittracks.TrackSourceInfo // key is participant SID, indexed by livekit.TrackSource
 
 	currentLayout []string
-
-	ready bool
 }
 
 func (e *LivekitCompositor) New() glib.GoObjectSubclass {
@@ -93,6 +94,9 @@ func (e *LivekitCompositor) ClassInit(klass *glib.ObjectClass) {
 
 func (e *LivekitCompositor) InstanceInit(instance *glib.Object) {
 	e.participants = make(map[string]ParticipantInfo)
+	for i := 0; i < NbTracks; i++ {
+		e.tracks[i] = make(map[string]livekittracks.TrackSourceInfo)
+	}
 	e.videoWidth = 1280
 	e.videoHeight = 720
 	e.nvidia = false
@@ -112,49 +116,6 @@ func (e *LivekitCompositor) Constructed(instance *glib.Object) {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to connect active-speakers-changed signal: %v", err))
 		self.Error("Failed to connect active-speakers-changed signal", err)
 	}
-}
-
-func (e *LivekitCompositor) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
-	self := gst.ToGstBin(instance)
-
-	if transition == gst.StateChangeNullToReady {
-		e.mu.Lock()
-		e.ready = true
-		e.mu.Unlock()
-	}
-
-	if transition == gst.StateChangeReadyToNull {
-		e.mu.Lock()
-		e.ready = false
-		e.mu.Unlock()
-
-		sinks, err := self.GetSinkPads()
-		if err != nil {
-			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to get sink pads: %v", err))
-		} else {
-			for _, sink := range sinks {
-				e.ReleasePad(instance, sink)
-			}
-		}
-
-		e.mu.Lock()
-		e.cleanupMicrophone(self)
-		e.cleanupCamera(self)
-		e.cleanupScreenshare(self)
-		e.mu.Unlock()
-	}
-
-	ret := self.ParentChangeState(transition)
-
-	if transition == gst.StateChangeReadyToNull {
-		e.participants = make(map[string]ParticipantInfo)
-		e.currentLayout = nil
-		e.LivekitCompositorCamera = nil
-		e.LivekitCompositorMicrophone = nil
-		e.LivekitCompositorScreenshare = nil
-	}
-
-	return ret
 }
 
 func (e *LivekitCompositor) RequestNewPad(instance *gst.Element, templ *gst.PadTemplate, name string, caps *gst.Caps) *gst.Pad {
@@ -224,9 +185,29 @@ func (e *LivekitCompositor) requestNewSinkPad(self *gst.Bin, templ *gst.PadTempl
 		}
 		e.mu.Lock()
 		defer e.mu.Unlock()
+
+		var session, ssrc, pt int
+		if _, err := fmt.Sscanf(pad.GetName(), "sink_%d_%d_%d", &session, &ssrc, &pt); err != nil {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Invalid pad name in track source info callback: %s", pad.GetName()))
+			return
+		}
+
 		e.participants[info.ParticipantSID] = ParticipantInfo{
 			SID:  info.ParticipantSID,
 			Name: info.ParticipantName,
+		}
+		if ssrc != int(info.SSRC) || session != int(info.Source) || pt != int(info.PT) {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Track source info does not match pad name: %s (info: session=%d, ssrc=%d, pt=%d)", pad.GetName(), info.Source, info.SSRC, info.PT))
+			info.SSRC = uint(ssrc)
+			info.Source = livekit.TrackSource(kind)
+			info.PT = uint(pt)
+		}
+		e.tracks[info.Source][info.ParticipantSID] = info
+
+		if lo.Contains(e.currentLayout, info.ParticipantSID) {
+			e.applyCameraLayout(self, e.currentLayout)
+			e.applyMicrophoneLayout(self, e.currentLayout)
+			e.applyScreenshareLayout(self, e.currentLayout)
 		}
 	})
 
@@ -281,4 +262,18 @@ func (e *LivekitCompositor) releaseSinkPad(self *gst.Bin, gpad *gst.GhostPad) {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown track source in released pad name: %s", gpad.GetName()))
 		return
 	}
+}
+
+func (e *LivekitCompositor) Finalize(instance *glib.Object) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.participants = nil
+	for i := 0; i < NbTracks; i++ {
+		e.tracks[i] = nil
+	}
+	e.currentLayout = nil
+	e.LivekitCompositorCamera = nil
+	e.LivekitCompositorMicrophone = nil
+	e.LivekitCompositorScreenshare = nil
 }

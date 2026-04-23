@@ -23,11 +23,6 @@ func (e *LivekitCompositor) onActiveSpeakersChanged(instance *gst.Element, struc
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if !e.ready {
-		self.Log(CAT, gst.LevelDebug, "Not applying active speakers change because compositor is not ready")
-		return
-	}
-
 	layout := make([]string, len(info.ParticipantsSID))
 
 	newParticipants := make([]string, 0, len(info.ParticipantsSID))

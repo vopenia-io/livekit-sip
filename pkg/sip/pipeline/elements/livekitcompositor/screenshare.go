@@ -39,7 +39,7 @@ func (e *LivekitCompositor) initScreenshare(self *gst.Bin) error {
 	}
 
 	e.LivekitCompositorScreenshare.Filter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-		"caps": gst.NewCapsFromString(fmt.Sprintf("%s, format=(string)I420, width=(int)%d, height=(int)%d", e.LivekitCompositorScreenshare.Format, e.videoWidth, e.videoHeight)),
+		"caps": gst.NewCapsFromString(fmt.Sprintf("%s, width=(int)%d, height=(int)%d", e.LivekitCompositorScreenshare.Format, e.videoWidth, e.videoHeight)),
 	})
 	if err != nil {
 		return err
@@ -47,6 +47,10 @@ func (e *LivekitCompositor) initScreenshare(self *gst.Bin) error {
 
 	if err := self.AddMany(e.LivekitCompositorScreenshare.FallbackSwitch, e.LivekitCompositorScreenshare.Filter); err != nil {
 		return fmt.Errorf("failed to add elements to bin: %w", err)
+	}
+
+	if err := e.LivekitCompositorScreenshare.FallbackSwitch.Link(e.LivekitCompositorScreenshare.Filter); err != nil {
+		return fmt.Errorf("failed to link fallbackswitch and capsfilter: %w", err)
 	}
 
 	class := gst.ToElementClass(self.Class())
@@ -64,6 +68,9 @@ func (e *LivekitCompositor) initScreenshare(self *gst.Bin) error {
 
 	if !e.LivekitCompositorScreenshare.FallbackSwitch.SyncStateWithParent() {
 		self.Log(CAT, gst.LevelWarning, "Failed to sync state of fallbackswitch with parent")
+	}
+	if !e.LivekitCompositorScreenshare.Filter.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, "Failed to sync state of capsfilter with parent")
 	}
 
 	return nil
@@ -86,19 +93,19 @@ func (e *LivekitCompositor) requestNewScreenshareSinkPad(self *gst.Bin, templ *g
 
 	gpad := gst.NewGhostPadFromTemplate(name, sink, templ)
 	if gpad == nil {
-		self.Log(CAT, gst.LevelError, "Failed to create ghost pad for microphone sink")
+		self.Log(CAT, gst.LevelError, "Failed to create ghost pad for screenshare sink")
 		return nil
 	}
 	if !gpad.SetActive(true) {
-		self.Log(CAT, gst.LevelError, "Failed to activate ghost pad for microphone sink")
+		self.Log(CAT, gst.LevelError, "Failed to activate ghost pad for screenshare sink")
 		return nil
 	}
 	if !self.AddPad(gpad.Pad) {
-		self.Log(CAT, gst.LevelError, "Failed to add ghost pad for microphone sink to bin")
+		self.Log(CAT, gst.LevelError, "Failed to add ghost pad for screenshare sink to bin")
 		return nil
 	}
 
-	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Created new microphone sink pad %s", gpad.GetName()))
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Created new screenshare sink pad %s", gpad.GetName()))
 
 	return gpad.Pad
 }
@@ -145,7 +152,10 @@ func (e *LivekitCompositor) cleanupScreenshare(self *gst.Bin) {
 	if err := e.LivekitCompositorScreenshare.FallbackSwitch.SetState(gst.StateNull); err != nil {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set fallbackswitch to null state after releasing last screenshare sink pad: %v", err))
 	}
-	if err := self.Remove(e.LivekitCompositorScreenshare.FallbackSwitch); err != nil {
+	if err := e.LivekitCompositorScreenshare.Filter.SetState(gst.StateNull); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set capsfilter to null state after releasing last screenshare sink pad: %v", err))
+	}
+	if err := self.RemoveMany(e.LivekitCompositorScreenshare.FallbackSwitch, e.LivekitCompositorScreenshare.Filter); err != nil {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove fallbackswitch from bin after releasing last screenshare sink pad: %v", err))
 	}
 	if !self.RemovePad(e.LivekitCompositorScreenshare.gpad.Pad) {
