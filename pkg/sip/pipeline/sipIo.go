@@ -73,6 +73,7 @@ func makeH264HighCaps() *gst.Caps {
 		"640829", "64082a", "640828", "640820", "64081f", "64081e",
 	}
 
+	profiles = lo.Interleave(profiles, lo.Map(profiles, func(p string, _ int) string { return strings.ToUpper(p) }))
 	profiles = lo.Map(profiles, func(p string, _ int) string { return "(string)" + p })
 
 	return gst.NewCapsFromString(fmt.Sprintf(
@@ -88,6 +89,7 @@ func makeH264MainCaps() *gst.Caps {
 		"4d4029", "4d4028", "4d401f",
 	}
 
+	profiles = lo.Interleave(profiles, lo.Map(profiles, func(p string, _ int) string { return strings.ToUpper(p) }))
 	profiles = lo.Map(profiles, func(p string, _ int) string { return "(string)" + p })
 
 	return gst.NewCapsFromString(fmt.Sprintf(
@@ -127,6 +129,7 @@ func makeH264BaselineCaps() *gst.Caps {
 		"42100b", "42900b", "42d00b", "42f00b",
 	}
 
+	profiles = lo.Interleave(profiles, lo.Map(profiles, func(p string, _ int) string { return strings.ToUpper(p) }))
 	profiles = lo.Map(profiles, func(p string, _ int) string { return "(string)" + p })
 
 	return gst.NewCapsFromString(fmt.Sprintf(
