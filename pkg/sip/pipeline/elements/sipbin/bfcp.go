@@ -3,7 +3,9 @@ package sipbin
 import (
 	"fmt"
 	"strconv"
+	"time"
 
+	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/gstsdp"
 	"github.com/livekit/protocol/livekit"
@@ -123,5 +125,147 @@ func (e *SipBin) bfcpStopScreenshare(self *gst.Bin) {
 		self.Error("Failed to emit stop-screenshare signal", err)
 	} else {
 		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Emitted stop-screenshare signal for floor ID %d", e.Bfcp.FloorID))
+	}
+}
+
+func (e *SipBin) bfcpClearScreenshare(self *gst.Bin) {
+	time.Sleep(1 * time.Second)
+	rtpSessionVal, err := e.RtpBin.Emit("get-internal-session", uint(livekit.TrackSource_SCREEN_SHARE))
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get internal session for screenshare: %v", err))
+		self.Error("Failed to get internal session for screenshare", err)
+		return
+	}
+	rtpSession, ok := rtpSessionVal.(*glib.Object)
+	if !ok {
+		self.Log(CAT, gst.LevelError, "Failed to convert internal session to element for screenshare")
+		self.Error("Failed to convert internal session to element for screenshare", fmt.Errorf("invalid RTP session element"))
+		return
+	}
+
+	sourcesVal, err := rtpSession.GetProperty("sources")
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get sources property from RTP session: %v", err))
+		self.Error("Failed to get sources property from RTP session", err)
+		return
+	}
+	sources, ok := sourcesVal.(*glib.ValueArray)
+	if !ok {
+		self.Log(CAT, gst.LevelError, "Failed to convert sources property to value array for screenshare")
+		self.Error("Failed to convert sources property to value array for screenshare", fmt.Errorf("invalid sources property"))
+		return
+	}
+	ssrcs := make([]uint32, 0, sources.Len())
+	nptk := make([]uint64, 0, sources.Len())
+	for i := range sources.Len() {
+		rtpSourceVal, err := sources.Index(i)
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get source at index %d from sources array: %v", i, err))
+			self.Error(fmt.Sprintf("Failed to get source at index %d from sources array", i), err)
+			continue
+		}
+		rtpSource, ok := rtpSourceVal.(*glib.Object)
+		if !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to convert source at index %d to element for screenshare", i))
+			self.Error(fmt.Sprintf("Failed to convert source at index %d to element for screenshare", i), fmt.Errorf("invalid RTP source element"))
+			continue
+		}
+
+		statsVal, err := rtpSource.GetProperty("stats")
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get stats property from RTP source at index %d: %v", i, err))
+			self.Error(fmt.Sprintf("Failed to get stats property from RTP source at index %d", i), err)
+			continue
+		}
+		stats, ok := statsVal.(*gst.Structure)
+		if !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to convert stats property to structure for RTP source at index %d", i))
+			self.Error(fmt.Sprintf("Failed to convert stats property to structure for RTP source at index %d", i), fmt.Errorf("invalid stats property"))
+			continue
+		}
+		internal, err := stats.GetBool("internal")
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get internal field from stats for RTP source at index %d: %v", i, err))
+			self.Error(fmt.Sprintf("Failed to get internal field from stats for RTP source at index %d", i), err)
+			continue
+		}
+		if internal {
+			continue
+		}
+		validated, err := stats.GetBool("validated")
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get validated field from stats for RTP source at index %d: %v", i, err))
+			self.Error(fmt.Sprintf("Failed to get validated field from stats for RTP source at index %d", i), err)
+			continue
+		}
+		if !validated {
+			continue
+		}
+
+		ssrcVal, err := rtpSource.GetProperty("ssrc")
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get ssrc property from RTP source at index %d: %v", i, err))
+			self.Error(fmt.Sprintf("Failed to get ssrc property from RTP source at index %d", i), err)
+			continue
+		}
+		ssrc, ok := ssrcVal.(uint)
+		if !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to convert ssrc property to uint for RTP source at index %d", i))
+			self.Error(fmt.Sprintf("Failed to convert ssrc property to uint for RTP source at index %d", i), fmt.Errorf("invalid ssrc property"))
+			continue
+		}
+
+		packetsReceived, err := stats.GetUint64("packets-received")
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get packets-received field from stats for RTP source at index %d: %v", i, err))
+			self.Error(fmt.Sprintf("Failed to get packets-received field from stats for RTP source at index %d", i), err)
+			continue
+		}
+		ssrcs = append(ssrcs, uint32(ssrc))
+		nptk = append(nptk, packetsReceived)
+	}
+	time.Sleep(1 * time.Second)
+	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Clearing %d SSRCs from RTP session for screenshare: %v", len(ssrcs), ssrcs))
+	for i, ssrc := range ssrcs {
+		rtpSourceVal, err := rtpSession.Emit("get-source-by-ssrc", uint(ssrc))
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get source by SSRC %d from RTP session: %v", ssrc, err))
+			self.Error(fmt.Sprintf("Failed to get source by SSRC %d from RTP session", ssrc), err)
+			continue
+		}
+		rtpSource, ok := rtpSourceVal.(*glib.Object)
+		if !ok || rtpSource == nil {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("No source found for SSRC %d in RTP session", ssrc))
+			continue
+		}
+
+		statsVal, err := rtpSource.GetProperty("stats")
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get stats property from RTP source for SSRC %d: %v", ssrc, err))
+			self.Error(fmt.Sprintf("Failed to get stats property from RTP source for SSRC %d", ssrc), err)
+			continue
+		}
+		stats, ok := statsVal.(*gst.Structure)
+		if !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to convert stats property to structure for RTP source for SSRC %d", ssrc))
+			self.Error(fmt.Sprintf("Failed to convert stats property to structure for RTP source for SSRC %d", ssrc), fmt.Errorf("invalid stats property"))
+			continue
+		}
+		packetsReceived, err := stats.GetUint64("packets-received")
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get packets-received field from stats for RTP source for SSRC %d: %v", ssrc, err))
+			self.Error(fmt.Sprintf("Failed to get packets-received field from stats for RTP source for SSRC %d", ssrc), err)
+			continue
+		}
+
+		if packetsReceived > nptk[i] {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Source for SSRC %d is still receiving packets (received %d, previously received %d), skipping clear", ssrc, packetsReceived, nptk[i]))
+			continue
+		}
+
+		if _, err := e.RtpBin.Emit("clear-ssrc", uint(livekit.TrackSource_SCREEN_SHARE), ssrc); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to clear ssrc %d from rtpbin for screenshare: %v", ssrc, err))
+			self.Error(fmt.Sprintf("Failed to clear ssrc %d from rtpbin for screenshare", ssrc), err)
+		}
 	}
 }

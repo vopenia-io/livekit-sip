@@ -264,6 +264,17 @@ func (e *SipBin) InstanceInit(instance *glib.Object) {
 		self.Error("failed to connect request-pt-map signal", err)
 		return
 	}
+	if _, err := e.RtpBin.Connect("on-sender-timeout", func(instance *gst.Element, session, ssrc uint) {
+		e := eweak.Value()
+		if e == nil {
+			return
+		}
+		e.onRtpBinSenderTimeout(self, session, ssrc)
+	}); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to connect on-sender-timeout signal: %v", err))
+		self.Error("failed to connect on-sender-timeout signal", err)
+		return
+	}
 
 	if err := self.Add(e.RtpBin); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to add rtpbin element to bin: %v", err))

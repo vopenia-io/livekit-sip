@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"weak"
 
+	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/gstsdp"
 	"github.com/livekit/protocol/livekit"
@@ -36,7 +38,6 @@ type SipTrack struct {
 	RtpSink     *gst.Element
 	RtcpSink    *gst.Element
 	RtpFilter   *gst.Element
-	// RtpCut      *gst.Element
 }
 
 func (e *SipBin) NewTrack(self *gst.Bin, idx int, kind livekit.TrackSource, proto string) (*SipTrack, error) {
@@ -291,6 +292,19 @@ func (e *SipBin) NewBfcpTrack(self *gst.Bin, idx int, proto string) (*BfcpTrack,
 	bfcpServer, err := gst.NewElementWithProperties("bfcpserver", props)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create BFCP server element: %w", err)
+	}
+
+	wself := glib.WeakRefInit(self)
+	eweak := weak.Make(e)
+	if _, err := bfcpServer.Connect("on-floor-released", func(instance *gst.Element, floorID, userID int) {
+		self := gst.ToGstBin(wself.Get())
+		e := eweak.Value()
+		if self == nil || self.Instance() == nil || e == nil {
+			return
+		}
+		e.bfcpClearScreenshare(self)
+	}); err != nil {
+		return nil, fmt.Errorf("failed to connect on-floor-released signal: %w", err)
 	}
 
 	return &BfcpTrack{

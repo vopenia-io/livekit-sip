@@ -65,6 +65,23 @@ func (e *SipBin) onRtpBinRequestPtMap(self *gst.Bin, session int, pt uint8) *gst
 	return caps
 }
 
+func (e *SipBin) onRtpBinSenderTimeout(self *gst.Bin, session, ssrc uint) {
+	kind := livekit.TrackSource(session)
+	switch kind {
+	case livekit.TrackSource_CAMERA, livekit.TrackSource_SCREEN_SHARE,
+		livekit.TrackSource_MICROPHONE, livekit.TrackSource_SCREEN_SHARE_AUDIO:
+	default:
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Received sender timeout for unsupported track source %d", kind))
+		return
+	}
+
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Sender timeout for track source %d, ssrc %d", kind, ssrc))
+
+	if _, err := e.RtpBin.Emit("clear-ssrc", session, ssrc); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to emit clear-ssrc signal on rtpbin for session %d and ssrc %d: %v", session, ssrc, err))
+	}
+}
+
 func (e *SipBin) onRtpBinPadAdded(self *gst.Bin, pad *gst.Pad) {
 	templ := pad.Template()
 	if templ == nil {
@@ -209,8 +226,40 @@ func (e *SipBin) onRtpBinPadRemoved(self *gst.Bin, pad *gst.Pad) {
 	switch templ.GetName() {
 	case "send_rtp_src_%u":
 		e.onRtpBinPadRemovedSendRtpSrc(self, pad)
+	case "recv_rtp_src_%u_%u_%u":
+		e.onRtpBinPadRemovedRecvRtpSrc(self, pad)
 	default:
 		self.Log(CAT, gst.LevelTrace, fmt.Sprintf("Pad %s removed from rtpbin with unrecognized template %s", pad.GetName(), templ.GetName()))
+	}
+}
+
+func (e *SipBin) onRtpBinPadRemovedRecvRtpSrc(self *gst.Bin, pad *gst.Pad) {
+	var session, ssrc, pt int
+	if _, err := fmt.Sscanf(pad.GetName(), "recv_rtp_src_%d_%d_%d", &session, &ssrc, &pt); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Pad %s removed from rtpbin, but failed to parse session, ssrc, and payload type: %v", pad.GetName(), err))
+		return
+	}
+
+	kind := livekit.TrackSource(session)
+	switch kind {
+	case livekit.TrackSource_CAMERA, livekit.TrackSource_SCREEN_SHARE,
+		livekit.TrackSource_MICROPHONE, livekit.TrackSource_SCREEN_SHARE_AUDIO:
+	default:
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Pad %s removed from rtpbin for unsupported track source %d", pad.GetName(), kind))
+		return
+	}
+
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Pad %s removed from rtpbin for track source %d, ssrc %d, and payload type %d", pad.GetName(), kind, ssrc, pt))
+
+	gpad := self.GetStaticPad(fmt.Sprintf("recv_rtp_src_%d_%d_%d", session, ssrc, pt))
+	if gpad == nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to get ghost pad for removed RTP source pad %s", pad.GetName()))
+		return
+	}
+
+	if !self.RemovePad(gpad) {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove ghost pad for removed RTP source pad %s", pad.GetName()))
+		return
 	}
 }
 
