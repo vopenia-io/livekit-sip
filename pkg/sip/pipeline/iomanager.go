@@ -95,6 +95,29 @@ func (c *IOManager) handleSipControllerPadAdded(_ *gst.Element, pad *gst.Pad) {
 	}
 }
 
+func (c *IOManager) handleSipControllerPadRemoved(_ *gst.Element, pad *gst.Pad) {
+	pname := pad.GetName()
+	c.log.Debugw("SIP IO Manager pad removed", "pad", pname)
+
+	if !strings.HasPrefix(pname, "send_rtp_src_") {
+		return
+	}
+
+	var session int
+	if _, err := fmt.Sscanf(pname, "send_rtp_src_%d", &session); err != nil {
+		c.log.Errorw("Failed to parse pad name", err, "pad", pname)
+		return
+	}
+
+	destPad := c.pipeline.WebrtcIo.LivekitBin.GetStaticPad(fmt.Sprintf("send_rtp_sink_%d", session))
+	if destPad == nil {
+		c.log.Warnw("Failed to get static pad", nil, "pad", fmt.Sprintf("send_rtp_sink_%d", session))
+		return
+	}
+	c.pipeline.WebrtcIo.LivekitBin.ReleaseRequestPad(destPad)
+	c.log.Infow("Released request pad on LiveKit bin", "pad", destPad.GetName())
+}
+
 func (c *IOManager) handleLivekitCompositorPadAdded(_ *gst.Element, pad *gst.Pad) {
 	pname := pad.GetName()
 	c.log.Debugw("Livekit IO Manager pad added", "pad", pname)
@@ -153,6 +176,14 @@ func (c *IOManager) Link() error {
 			return
 		}
 		ptr.handleSipControllerPadAdded(e, pad)
+	})
+
+	c.SipController.Connect("pad-removed", func(e *gst.Element, pad *gst.Pad) {
+		ptr := cweak.Value()
+		if ptr == nil {
+			return
+		}
+		ptr.handleSipControllerPadRemoved(e, pad)
 	})
 
 	c.LivekitController.Connect("pad-added", func(e *gst.Element, pad *gst.Pad) {
