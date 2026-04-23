@@ -1,10 +1,13 @@
 package bfcpserver
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strconv"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
@@ -24,6 +27,10 @@ type BFCPServer struct {
 	started     bool
 	constructed bool
 	requestID   atomic.Int64
+
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 func (e *BFCPServer) New() glib.GoObjectSubclass {
@@ -88,6 +95,7 @@ func (e *BFCPServer) InstanceInit(instance *glib.Object) {
 	self := gst.ToElement(instance)
 
 	e.props.floorID = 1
+	e.ctx, e.cancel = context.WithCancel(context.Background())
 
 	class := gst.ToElementClass(self.Class())
 
@@ -103,7 +111,6 @@ func (e *BFCPServer) Constructed(instance *glib.Object) {
 	}
 
 	config := bfcp.DefaultServerConfig(addr, 1)
-	config.AutoGrant = true
 	if e.portStart != 0 {
 		config.PortMin = int(e.portStart)
 	}
@@ -152,9 +159,29 @@ func (e *BFCPServer) Constructed(instance *glib.Object) {
 	e.constructed = true
 }
 
+func (e *BFCPServer) broadcast() {
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		t := time.NewTicker(5 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-e.ctx.Done():
+				return
+			case <-t.C:
+				for _, f := range e.bfcpServer.ListFloors() {
+					e.bfcpServer.BroadcastFloorState(f.FloorID, f.GetOwner(), f.GetState())
+				}
+			}
+		}
+	}()
+}
+
 func (e *BFCPServer) ChangeState(self *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
 	if transition == gst.StateChangeReadyToPaused && !e.started {
 		e.bfcpServer.Serve()
+		e.broadcast()
 		e.started = true
 	}
 
@@ -168,9 +195,11 @@ func (e *BFCPServer) ChangeState(self *gst.Element, transition gst.StateChange) 
 	}
 
 	if transition == gst.StateChangeReadyToNull {
+		e.cancel()
 		if err := e.bfcpServer.Close(); err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to close BFCP server: %v", err))
 		}
+		e.wg.Wait()
 	}
 	return ret
 }

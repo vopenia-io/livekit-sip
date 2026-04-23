@@ -2,13 +2,14 @@ package bfcpserver
 
 import (
 	"fmt"
+	"time"
 	"weak"
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/vopenia-io/bfcp"
 )
 
-const VirtualClientID = 0x0F0F
+const VirtualClientID = 0x0101
 
 func (e *BFCPServer) startScreenshare(self *gst.Element, floorID int) {
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Received start-screenshare signal for floorID=%d", floorID))
@@ -18,6 +19,17 @@ func (e *BFCPServer) startScreenshare(self *gst.Element, floorID int) {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Floor not found for floorID=%d", floorID))
 		self.Error(fmt.Sprintf("Floor not found for floorID=%d", floorID), fmt.Errorf("floor not found"))
 		return
+	}
+
+	if floor.IsGranted() {
+		if err := floor.Release(floor.GetOwner()); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to release floor for floorID=%d: %v", floorID, err))
+			self.Error(fmt.Sprintf("Failed to release floor for floorID=%d", floorID), fmt.Errorf("release failed: %v", err))
+			return
+		}
+		e.bfcpServer.BroadcastFloorState(uint16(floorID), VirtualClientID, bfcp.RequestStatusReleased)
+		time.Sleep(150 * time.Millisecond)
+		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Released existing floor for floorID=%d before starting new screenshare", floorID))
 	}
 
 	if status, err := floor.Request(VirtualClientID, uint16(e.requestID.Add(1)), bfcp.PriorityNormal); err != nil || status != bfcp.RequestStatusPending {
@@ -59,6 +71,22 @@ func (e *BFCPServer) stopScreenshare(self *gst.Element, floorID int) {
 }
 
 func (e *BFCPServer) SetupSignals(self *gst.Element) {
+	e.bfcpServer.OnFloorRequest = func(floorID, userID, requestID uint16) bool {
+		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Floor request: floorID=%d, userID=%d, requestID=%d", floorID, userID, requestID))
+
+		floor, ok := e.bfcpServer.GetFloor(floorID)
+		if !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Floor not found for floorID=%d", floorID))
+			return false
+		}
+		if floor.IsGranted() {
+			self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Floor %d is already granted, rejecting request from userID=%d", floorID, userID))
+			return false
+		}
+
+		return true
+	}
+
 	e.bfcpServer.OnFloorGranted = func(floorID, userID, requestID uint16) {
 		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Floor granted: floorID=%d, userID=%d, requestID=%d", floorID, userID, requestID))
 		if _, err := self.Emit("on-floor-granted", int(floorID), int(userID), int(requestID)); err != nil {
@@ -69,6 +97,7 @@ func (e *BFCPServer) SetupSignals(self *gst.Element) {
 
 	e.bfcpServer.OnFloorReleased = func(floorID, userID uint16) {
 		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Floor released: floorID=%d, userID=%d", floorID, userID))
+
 		if _, err := self.Emit("on-floor-released", int(floorID), int(userID)); err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error emitting on-floor-released signal: %v", err))
 			self.Error("Error emitting on-floor-released signal", err)
