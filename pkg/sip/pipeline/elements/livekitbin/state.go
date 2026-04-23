@@ -13,9 +13,10 @@ const (
 	RoomStateNone    RoomState = 0
 	RoomStateJoined  RoomState = 2
 	RoomStateJoining RoomState = 4
-	RoomStatePlaying RoomState = 8
 	RoomStateClosed  RoomState = 16
 )
+
+var ErrRoomClosed = fmt.Errorf("room closed")
 
 func (s RoomState) String() string {
 	states := []string{}
@@ -29,9 +30,6 @@ func (s RoomState) String() string {
 	}
 	if s&RoomStateJoining != 0 {
 		states = append(states, "joining")
-	}
-	if s&RoomStatePlaying != 0 {
-		states = append(states, "playing")
 	}
 	if s&RoomStateClosed != 0 {
 		states = append(states, "closed")
@@ -84,5 +82,5 @@ func (s *state) Wait(state RoomState) error {
 	if (s.state.Load() & int64(state)) != 0 {
 		return nil
 	}
-	return fmt.Errorf("room closed while waiting for state %d", state)
+	return ErrRoomClosed
 }

@@ -3,6 +3,7 @@ package livekitbin
 import (
 	"fmt"
 	"runtime"
+	"slices"
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/livekit"
@@ -15,20 +16,15 @@ import (
 func (e *LivekitBin) OnConnectSignal(instance *gst.Element) {
 	self := gst.ToGstBin(instance)
 
-	if err := e.Wait(RoomStatePlaying); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error waiting for room to be playing: %v", err))
-		self.Error(fmt.Sprintf("Error waiting for room to be playing: %v", err), err)
-		return
-	}
+	e.livekitMu.Lock()
+	defer e.livekitMu.Unlock()
 
 	if e.Set(RoomStateJoining)&RoomStateJoining != 0 {
 		self.Log(CAT, gst.LevelWarning, "Already joining a LiveKit room")
 		return
 	}
 
-	defer func() {
-		e.Unset(RoomStateJoining)
-	}()
+	defer e.Unset(RoomStateJoining)
 
 	if e.Is(RoomStateJoined) {
 		self.Log(CAT, gst.LevelWarning, "Already connected to a LiveKit room")
@@ -61,25 +57,14 @@ func (e *LivekitBin) OnConnectSignal(instance *gst.Element) {
 	e.Unset(RoomStateJoining)
 	self.Log(CAT, gst.LevelInfo, "Connected to LiveKit room")
 
-	if err := e.setupRtcpSink(); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error setting up RTCP sink: %v", err))
-		self.Error("Error setting up RTCP sink", err)
+	for _, rp := range e.room.GetRemoteParticipants() {
+		e.OnParticipantConnected(rp)
 	}
 
 	if _, err := self.Emit("connected"); err != nil {
 		self.Log(CAT, gst.LevelError, "Error emitting connected signal")
 		self.Error("Error emitting connected signal", err)
 	}
-}
-
-func (e *LivekitBin) setupRtcpSink() error {
-	rtcpSink, ok := gst.SubclassFromElement[*livekittracks.SinkRtcp](e.RtcpSink)
-	if !ok {
-		return fmt.Errorf("failed to get SinkRtcp subclass from element")
-	}
-	rtcpSink.Setup(e.RtcpSink, e.room.LocalParticipant.GetPublisherPeerConnection())
-
-	return nil
 }
 
 func roomWaitConnected(room *lksdk.Room) error {
@@ -124,8 +109,6 @@ func (e *LivekitBin) Close() {
 		return
 	}
 
-	e.UnsubscribeAll()
-
 	if e.room.ConnectionState() != lksdk.ConnectionStateDisconnected {
 		e.room.Disconnect()
 	}
@@ -151,7 +134,7 @@ func (e *LivekitBin) OnActiveSpeakersChanged(p []lksdk.Participant) {
 
 	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Active speakers changed: %v", lo.Map(p, func(part lksdk.Participant, i int) string { return part.SID() })))
 
-	if !e.IsAll(RoomStateJoined | RoomStatePlaying) {
+	if !e.Is(RoomStateJoined) {
 		self.Log(CAT, gst.LevelWarning, "Received active speakers changed callback while not joined to a room")
 		return
 	}
@@ -230,12 +213,17 @@ func (e *LivekitBin) OnParticipantConnected(rp *lksdk.RemoteParticipant) {
 		return
 	}
 
-	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Participant connected: %s", rp.SID()))
-	if _, err := self.Emit("participant-join", rp.SID()); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error emitting participant-join signal: %v", err))
-		self.Error("Error emitting participant-join signal", err)
-		return
-	}
+	// self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Participant connected: %s", rp.SID()))
+	// if _, err := self.Emit("participant-join", rp.SID()); err != nil {
+	// 	self.Log(CAT, gst.LevelError, fmt.Sprintf("Error emitting participant-join signal: %v", err))
+	// 	self.Error("Error emitting participant-join signal", err)
+	// 	return
+	// }
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.updateActiveSpeakers(self, append(e.getCurrentActiveSpeakers(), rp))
 }
 
 func (e *LivekitBin) OnParticipantDisconnected(rp *lksdk.RemoteParticipant) {
@@ -244,14 +232,19 @@ func (e *LivekitBin) OnParticipantDisconnected(rp *lksdk.RemoteParticipant) {
 		return
 	}
 
-	e.activeSpeakers = lo.Without(e.activeSpeakers, rp.SID())
+	e.mu.Lock()
+	defer e.mu.Unlock()
 
-	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Participant disconnected: %s", rp.SID()))
-	if _, err := self.Emit("participant-left", rp.SID()); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error emitting participant-left signal: %v", err))
-		self.Error("Error emitting participant-left signal", err)
-		return
-	}
+	e.updateActiveSpeakers(self, lo.Filter(e.getCurrentActiveSpeakers(), func(p lksdk.Participant, _ int) bool {
+		return p.SID() != rp.SID()
+	}))
+
+	// self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Participant disconnected: %s", rp.SID()))
+	// if _, err := self.Emit("participant-left", rp.SID()); err != nil {
+	// 	self.Log(CAT, gst.LevelError, fmt.Sprintf("Error emitting participant-left signal: %v", err))
+	// 	self.Error("Error emitting participant-left signal", err)
+	// 	return
+	// }
 }
 
 func (e *LivekitBin) OnTrackMuted(publication lksdk.TrackPublication, participant lksdk.Participant) {
@@ -314,4 +307,99 @@ func (e *LivekitBin) OnTrackUnmuted(publication lksdk.TrackPublication, particip
 	}
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Unmuted track %s(%s) of participant %s", pub.Source(), pub.SID(), participant.SID()))
+}
+
+func (e *LivekitBin) getCurrentActiveSpeakers() []lksdk.Participant {
+	return lo.Filter(lo.Map(e.room.GetRemoteParticipants(), func(participant *lksdk.RemoteParticipant, i int) lksdk.Participant {
+		return participant
+	}), func(participant lksdk.Participant, i int) bool {
+		return lo.Contains(e.activeSpeakers, participant.SID())
+	})
+
+}
+
+func (e *LivekitBin) updateActiveSpeakers(self *gst.Bin, p []lksdk.Participant) {
+	p = lo.Filter(p, func(part lksdk.Participant, i int) bool {
+		_, ok := part.(*lksdk.RemoteParticipant)
+		return ok
+	})
+	activeSpeakers := lo.Map(p, func(part lksdk.Participant, i int) string { return part.SID() })
+	activeSpeakers = lo.Uniq(activeSpeakers)
+
+	rp := e.room.GetRemoteParticipants()
+	activeSpeakers = lo.Filter(activeSpeakers, func(sid string, i int) bool {
+		if !lo.ContainsBy(rp, func(part *lksdk.RemoteParticipant) bool {
+			return part.SID() == sid
+		}) {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Active speaker with SID %s not found among remote participants", sid))
+			return false
+		}
+		return true
+	})
+
+	maxActive := int(e.maxActiveParticipants)
+	if maxActive == 0 {
+		maxActive = MAX_ACTIVE_PARTICIPANTS
+	}
+
+	if len(activeSpeakers) > maxActive {
+		activeSpeakers = activeSpeakers[:maxActive]
+	}
+
+	if slices.Equal(e.activeSpeakers, activeSpeakers) {
+		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Active speakers unchanged: %v", activeSpeakers))
+		return
+	}
+	e.activeSpeakers = activeSpeakers
+
+	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Active speakers updated: %v", activeSpeakers))
+
+	structure := livekittracks.NewActiveSpeakerChangeInfo(p).Structure()
+	runtime.SetFinalizer(structure, nil)
+
+	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Active speakers changed: %v", activeSpeakers))
+	if _, err := self.Emit("active-speakers-changed", structure); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error emitting active-speakers-changed signal: %v", err))
+		self.Error("Error emitting active-speakers-changed signal", err)
+		return
+	}
+
+	e.cameraSleep(self, p)
+}
+
+func (e *LivekitBin) updateSubscriptions(self *gst.Bin) {
+	trackConfig := []struct {
+		kind    livekit.TrackSource
+		enabled bool
+	}{
+		{livekit.TrackSource_CAMERA, e.camera},
+		{livekit.TrackSource_MICROPHONE, e.microphone},
+		{livekit.TrackSource_SCREEN_SHARE, e.screenshare},
+		{livekit.TrackSource_SCREEN_SHARE_AUDIO, e.screenshareAudio},
+	}
+
+	changed := false
+	for _, participant := range e.room.GetRemoteParticipants() {
+		for _, config := range trackConfig {
+			if !config.enabled {
+				continue
+			}
+			pub, ok := participant.GetTrackPublication(config.kind).(*lksdk.RemoteTrackPublication)
+			if !ok || pub == nil {
+				continue
+			}
+			if pub.IsSubscribed() {
+				continue
+			}
+			if err := pub.SetSubscribed(true); err != nil {
+				self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to subscribe to track %s of participant %s: %v", config.kind, participant.Identity(), err))
+			} else {
+				changed = true
+			}
+		}
+	}
+	if changed {
+		self.Log(CAT, gst.LevelInfo, "Track subscription states updated")
+		e.updateActiveSpeakers(self, e.getCurrentActiveSpeakers())
+	}
 }

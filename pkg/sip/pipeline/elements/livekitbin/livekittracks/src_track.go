@@ -3,9 +3,7 @@ package livekittracks
 import (
 	"errors"
 	"fmt"
-	"runtime"
 	"time"
-	"weak"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
@@ -27,12 +25,26 @@ var srcTrackProperties = []*glib.ParamSpec{
 		false,
 		glib.ParameterReadable|glib.ParameterWritable,
 	),
-	glib.NewBoolParam(
-		"mute",
-		"Mute",
-		"Whether the track is muted (i.e. not forwarded to the pipeline)",
-		false,
-		glib.ParameterReadable|glib.ParameterWritable,
+	glib.NewBoxedParam(
+		"track",
+		"Track",
+		"The webrtc track this element will read from",
+		glib.TYPE_ARBITRARY_DATA,
+		glib.ParameterWritable|glib.ParameterConstructOnly,
+	),
+	glib.NewBoxedParam(
+		"pub",
+		"Publication",
+		"The LiveKit publication for the track this element will read from",
+		glib.TYPE_ARBITRARY_DATA,
+		glib.ParameterWritable|glib.ParameterConstructOnly,
+	),
+	glib.NewBoxedParam(
+		"rp",
+		"RemoteParticipant",
+		"The LiveKit RemoteParticipant that published the track this element will read from",
+		glib.TYPE_ARBITRARY_DATA,
+		glib.ParameterWritable|glib.ParameterConstructOnly,
 	),
 }
 
@@ -40,34 +52,12 @@ func SrcTrackName(sid string) string {
 	return SrcTrackNamePrefix + sid
 }
 
-func NewSrcTrack(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) (*gst.Element, error) {
-	element, err := gst.NewElementWithName("livekitbin_srctrack", SrcTrackName(pub.SID()))
-	if err != nil {
-		return nil, err
-	}
-	src, ok := gst.SubclassFromElement[*SrcTrack](element)
-	if !ok {
-		return nil, fmt.Errorf("failed to cast element to SrcTrack")
-	}
-	src.Track = track
-	src.Pub = pub
-	src.Rp = rp
-
-	src.SSRC = uint32(track.SSRC())
-
-	return element, nil
-}
-
 type SrcTrack struct {
 	Track *webrtc.TrackRemote
 	Pub   *lksdk.RemoteTrackPublication
 	Rp    *lksdk.RemoteParticipant
 
-	SSRC        uint32
-	muteProbeID uint64
-
-	src   *gst.Element
-	Queue *gst.Element
+	src *gst.Element
 }
 
 func (*SrcTrack) New() glib.GoObjectSubclass {
@@ -105,65 +95,41 @@ func (*SrcTrack) ClassInit(klass *glib.ObjectClass) {
 	class.InstallProperties(srcTrackProperties)
 }
 
-func (s *SrcTrack) InstanceInit(instance *glib.Object) {
+func (s *SrcTrack) Constructed(instance *glib.Object) {
 	self := gst.ToGstBin(instance)
 	class := gst.ToElementClass(self.Class())
 
+	if s.Track == nil || s.Pub == nil || s.Rp == nil {
+		self.Log(CAT, gst.LevelError, "Track, Pub, and Rp properties must be set before constructing SrcTrack element")
+		self.Error("Track, Pub, and Rp properties must be set before constructing SrcTrack element", errors.New("missing required properties"))
+		return
+	}
+
 	var err error
-	s.src, err = NewSrcTrackRtp(s)
+	s.src, err = gst.NewElementWithProperties("livekitbin_srctrack_rtp", map[string]interface{}{
+		"track": glib.ArbitraryValue{Data: s.Track},
+		"pub":   glib.ArbitraryValue{Data: s.Pub},
+		"rp":    glib.ArbitraryValue{Data: s.Rp},
+	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create srctrack_rtp: %v", err))
 		self.Error("Failed to create srctrack_rtp", err)
 		return
 	}
 
-	s.Queue, err = gst.NewElementWithProperties("queue", map[string]interface{}{
-		"max-size-buffers": uint(0),
-		"max-size-bytes":   uint(0),
-		"max-size-time":    uint(50 * time.Millisecond),
-	})
-	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create queue element: %v", err))
-		self.Error("Failed to create queue element", err)
-		return
-	}
-
-	if err := self.AddMany(s.src, s.Queue); err != nil {
+	if err := self.Add(s.src); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add srctrack_rtp: %v", err))
 		self.Error("Failed to add srctrack_rtp", err)
 		return
 	}
 
-	if ret := s.src.GetStaticPad("src").Link(s.Queue.GetStaticPad("sink")); ret != gst.PadLinkOK {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link srctrack_rtp to queue: %v", ret))
-		self.Error("Failed to link srctrack_rtp to queue", errors.New("failed to link srctrack_rtp to queue"))
-		return
-	}
-
-	gsrcPad := gst.NewGhostPadFromTemplate("src", s.Queue.GetStaticPad("src"), class.GetPadTemplate("src"))
+	gsrcPad := gst.NewGhostPadFromTemplate("src", s.src.GetStaticPad("src"), class.GetPadTemplate("src"))
 	self.AddPad(gsrcPad.Pad)
 
 	// rtcp
 	rtcpPad := gst.NewPadFromTemplate(class.GetPadTemplate("src_rtcp"), "src_rtcp")
 	rtcpPad.UseFixedCaps()
 	self.AddPad(rtcpPad)
-
-	sweak := weak.Make(s)
-	if _, err := self.Connect("send-info", func(self *gst.Element) {
-		ptr := sweak.Value()
-		if ptr == nil {
-			CAT.Log(gst.LevelError, "SrcTrack instance is nil in send-info signal callback")
-			return
-		}
-		if err := ptr.SendSourceInfo(); err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to send source info: %v", err))
-			self.Error("Failed to send source info", err)
-		}
-	}); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to connect to send-info signal: %v", err))
-		self.Error("Failed to connect to send-info signal", err)
-		return
-	}
 }
 
 func (s *SrcTrack) open(self *gst.Bin) gst.StateChangeReturn {
@@ -264,17 +230,14 @@ func (s *SrcTrack) ChangeState(instance *gst.Element, transition gst.StateChange
 		s.stop(self)
 	}
 
-	ret := self.ParentChangeState(transition)
-	if ret == gst.StateChangeFailure {
-		return ret
-	}
+	return self.ParentChangeState(transition)
+}
 
-	switch transition {
-	case gst.StateChangeReadyToNull:
-		s.src = nil
-	}
-
-	return ret
+func (s *SrcTrack) Finalize(instance *glib.Object) {
+	s.Track = nil
+	s.Pub = nil
+	s.Rp = nil
+	s.src = nil
 }
 
 func filterSSRC(pkt rtcp.Packet, ssrc uint32) rtcp.Packet {
@@ -351,7 +314,6 @@ func (s *SrcTrack) pushRtcp(self *gst.Bin, rtcpPad *gst.Pad, pkt rtcp.Packet) {
 		}
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to push RTCP buffer: %v", ret))
 	}
-	// self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Pushed RTCP packet of size %d: %+v", len(raw), filtered))
 }
 
 func (s *SrcTrack) onRtcp(self *gst.Bin, rtcpPad *gst.Pad) func(p rtcp.Packet) {
@@ -366,21 +328,10 @@ func (s *SrcTrack) onRtcp(self *gst.Bin, rtcpPad *gst.Pad) func(p rtcp.Packet) {
 			return
 		}
 
-		self.Log(CAT, gst.LevelTrace, fmt.Sprintf("Pushing RTCP packet: %T", filtered))
+		self.Log(CAT, gst.LevelTrace, fmt.Sprintf("Pushing RTCP packet: %T:\n%+v", filtered, filtered))
 
 		s.pushRtcp(self, rtcpPad, filtered)
 	}
-}
-
-func (s *SrcTrack) SendSourceInfo() error {
-	structure := NewTrackSourceInfo(s.Rp, s.Pub).Structure()
-	if structure == nil {
-		return fmt.Errorf("failed to create structure for track source info")
-	}
-	runtime.SetFinalizer(structure, nil)
-	evt := gst.NewCustomEvent(gst.EventTypeCustomDownstreamSticky, structure)
-	s.src.GetStaticPad("src").PushEvent(evt)
-	return nil
 }
 
 func (s *SrcTrack) GetProperty(instance *glib.Object, id uint) *glib.Value {
@@ -392,14 +343,6 @@ func (s *SrcTrack) GetProperty(instance *glib.Object, id uint) *glib.Value {
 		val, err := glib.GValue(enabled)
 		if err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get enabled property value: %v", err))
-			return nil
-		}
-		return val
-	case "mute":
-		muted := s.muteProbeID != 0
-		val, err := glib.GValue(muted)
-		if err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get mute property value: %v", err))
 			return nil
 		}
 		return val
@@ -425,51 +368,76 @@ func (s *SrcTrack) SetProperty(instance *glib.Object, id uint, value *glib.Value
 			return
 		}
 		s.Pub.SetEnabled(enabled)
-
-	case "mute":
-		muteVal, err := value.GoValue()
+	case "track":
+		gv, err := value.GoValue()
 		if err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get bool value for mute property: %v", err))
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get Go value for track property: %v", err))
+			self.Error("Failed to get Go value for track property", err)
 			return
 		}
-		mute, ok := muteVal.(bool)
+		if gv == nil {
+			return
+		}
+		data, ok := gv.(glib.ArbitraryValue)
 		if !ok {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to convert mute property value to bool: %v", muteVal))
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid type for track property: %T", gv))
+			self.Error("Invalid type for track property", fmt.Errorf("expected glib.ArbitraryValue, got %T", gv))
 			return
 		}
-		if mute {
-			s.mute(self)
-		} else {
-			s.unmute(self)
+		track, ok := data.Data.(*webrtc.TrackRemote)
+		if !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid data type for track property: %T", data.Data))
+			self.Error("Invalid data type for track property", fmt.Errorf("expected *webrtc.TrackRemote, got %T", data.Data))
+			return
 		}
+		s.Track = track
+	case "pub":
+		gv, err := value.GoValue()
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get Go value for pub property: %v", err))
+			self.Error("Failed to get Go value for pub property", err)
+			return
+		}
+		if gv == nil {
+			return
+		}
+		data, ok := gv.(glib.ArbitraryValue)
+		if !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid type for pub property: %T", gv))
+			self.Error("Invalid type for pub property", fmt.Errorf("expected glib.ArbitraryValue, got %T", gv))
+			return
+		}
+		pub, ok := data.Data.(*lksdk.RemoteTrackPublication)
+		if !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid data type for pub property: %T", data.Data))
+			self.Error("Invalid data type for pub property", fmt.Errorf("expected *lksdk.RemoteTrackPublication, got %T", data.Data))
+			return
+		}
+		s.Pub = pub
+	case "rp":
+		gv, err := value.GoValue()
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get Go value for rp property: %v", err))
+			self.Error("Failed to get Go value for rp property", err)
+			return
+		}
+		if gv == nil {
+			return
+		}
+		data, ok := gv.(glib.ArbitraryValue)
+		if !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid type for rp property: %T", gv))
+			self.Error("Invalid type for rp property", fmt.Errorf("expected glib.ArbitraryValue, got %T", gv))
+			return
+		}
+		rp, ok := data.Data.(*lksdk.RemoteParticipant)
+		if !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid data type for rp property: %T", data.Data))
+			self.Error("Invalid data type for rp property", fmt.Errorf("expected *lksdk.RemoteParticipant, got %T", data.Data))
+			return
+		}
+		s.Rp = rp
 	default:
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown property %s", param.Name()))
 	}
-}
-
-func (s *SrcTrack) mute(self *gst.Bin) {
-	if s.muteProbeID != 0 {
-		self.Log(CAT, gst.LevelDebug, "SrcTrack is already muted")
-		return
-	}
-
-	if err := s.Queue.SetProperty("leaky", int(2) /* downstream */); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set queue to leaky downstream for muting: %v", err))
-	}
-	s.muteProbeID = s.Queue.GetStaticPad("src").AddProbe(gst.PadProbeTypeBlock|gst.PadProbeTypeBuffer|gst.PadProbeTypeBufferList, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
-		return gst.PadProbeOK
-	})
-}
-
-func (s *SrcTrack) unmute(self *gst.Bin) {
-	if s.muteProbeID == 0 {
-		self.Log(CAT, gst.LevelDebug, "SrcTrack is not muted")
-		return
-	}
-
-	if err := s.Queue.SetProperty("leaky", int(0) /* no */); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set queue to non-leaky after unmuting: %v", err))
-	}
-	s.Queue.GetStaticPad("src").RemoveProbe(s.muteProbeID)
-	s.muteProbeID = 0
 }

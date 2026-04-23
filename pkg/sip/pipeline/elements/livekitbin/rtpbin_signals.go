@@ -2,12 +2,10 @@ package livekitbin
 
 import (
 	"fmt"
-	"strings"
 	"weak"
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/livekit"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin/livekittracks"
 )
 
 func (e *LivekitBin) setupRtpBinSignals(self *gst.Bin) {
@@ -35,19 +33,6 @@ func (e *LivekitBin) setupRtpBinSignals(self *gst.Bin) {
 	}); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error connecting to rtpbin pad-removed signal: %v", err))
 		self.Error("Error connecting to rtpbin pad-removed signal", err)
-		return
-	}
-
-	if _, err := e.RtpBin.Connect("element-removed", func(_ *gst.Element, element *gst.Element) {
-		ptr := eweak.Value()
-		if ptr == nil {
-			CAT.Log(gst.LevelError, "LivekitBin instance is nil in rtpbin element-removed callback")
-			return
-		}
-		ptr.OnElementRemoved(element)
-	}); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error connecting to rtpbin element-removed signal: %v", err))
-		self.Error("Error connecting to rtpbin element-removed signal", err)
 		return
 	}
 
@@ -98,24 +83,28 @@ func (e *LivekitBin) OnRtpBinPadAdded(pad *gst.Pad) {
 	}
 
 	pname := pad.GetName()
-	if strings.Contains(pname, "_sink_") {
+	templ := pad.Template()
+	if templ == nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("No pad template found for pad %s", pname))
 		return
 	}
 
 	handles := []struct {
-		prefix  string
-		handler func(self *gst.Bin, pad *gst.Pad, pname string)
+		template string
+		handler  func(self *gst.Bin, pad *gst.Pad, pname string)
 	}{
-		{"send_rtp_src_", e.PublishTrack},
-		{"recv_rtp_src_", e.ForwardSubscribeTrack},
+		{"send_rtp_src_%u", e.onRtpBinPadAddedSendRtp},
+		{"recv_rtp_src_%u_%u_%u", e.onRtpBinPadAddedRecvRtp},
 	}
 
 	for _, h := range handles {
-		if strings.HasPrefix(pname, h.prefix) {
+		if templ.GetName() == h.template {
 			h.handler(self, pad, pname)
 			return
 		}
 	}
+
+	self.Log(CAT, gst.LevelLog, fmt.Sprintf("No handler for pad %s with template %s", pname, templ.GetName()))
 }
 
 func (e *LivekitBin) OnRtpBinPadRemoved(pad *gst.Pad) {
@@ -125,38 +114,28 @@ func (e *LivekitBin) OnRtpBinPadRemoved(pad *gst.Pad) {
 	}
 
 	pname := pad.GetName()
-	if strings.Contains(pname, "_sink_") {
+	templ := pad.Template()
+	if templ == nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("No pad template found for pad %s", pname))
 		return
 	}
 
 	handles := []struct {
-		prefix  string
-		handler func(self *gst.Bin, pad *gst.Pad, pname string)
+		template string
+		handler  func(self *gst.Bin, pad *gst.Pad, pname string)
 	}{
-		{"send_rtp_src_", e.CleanupRtpSink},
-		{"recv_rtp_src_", e.GhostPadRemove},
-		{"send_rtcp_src_", e.CleanupRtcpPad},
+		{"send_rtp_src_%u", e.onRtpBinPadRemovedSendRtp},
+		{"recv_rtp_src_%u_%u_%u", e.onRtpBinPadRemovedRecvRtp},
 	}
 
 	for _, h := range handles {
-		if strings.HasPrefix(pname, h.prefix) {
+		if templ.GetName() == h.template {
 			h.handler(self, pad, pname)
 			return
 		}
 	}
-}
 
-func (e *LivekitBin) OnElementRemoved(element *gst.Element) {
-	self := gst.ToGstBin(e.self.Get())
-	if self == nil || self.Instance() == nil {
-		return
-	}
-
-	name := element.GetName()
-	if !strings.HasPrefix(name, livekittracks.SrcTrackNamePrefix) {
-		return
-	}
-	e.CleanupSrcTrack(self, element, name)
+	self.Log(CAT, gst.LevelLog, fmt.Sprintf("No handler for pad %s with template %s", pname, templ.GetName()))
 }
 
 func (e *LivekitBin) OnRtpBinRequestPtMap(session, pt uint) *gst.Caps {
@@ -174,8 +153,8 @@ func (e *LivekitBin) OnRtpBinRequestPtMap(session, pt uint) *gst.Caps {
 		return nil
 	}
 
-	e.encodingMu.RLock()
-	defer e.encodingMu.RUnlock()
+	e.ptMu.RLock()
+	defer e.ptMu.RUnlock()
 	caps, ok := e.PtMap[kind][uint8(pt)]
 
 	if !ok {

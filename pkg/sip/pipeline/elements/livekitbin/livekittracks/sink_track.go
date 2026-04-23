@@ -7,69 +7,30 @@ import (
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/base"
-	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/webrtc/v4"
 )
 
-type TrackCfg struct {
-	Kind     livekit.TrackSource
-	MimeType string
-}
-
-func (t TrackCfg) CapsString() string {
-	switch t.Kind {
-	case livekit.TrackSource_CAMERA, livekit.TrackSource_SCREEN_SHARE:
-		return "application/x-rtp, media=(string)video"
-	case livekit.TrackSource_MICROPHONE, livekit.TrackSource_SCREEN_SHARE_AUDIO:
-		return "application/x-rtp, media=(string)audio"
-	default:
-		return "application/x-rtp"
-	}
-}
-
-func (t TrackCfg) Label() string {
-	return t.Kind.String()
-}
-
-func SinkTrackName(session int) string {
-	return fmt.Sprintf("livekitbin_sinktrack_%d", session)
-}
-
-func NewSinkTrack(participant *lksdk.LocalParticipant, cfg TrackCfg) (*gst.Element, *SinkTrack, error) {
-	element, err := gst.NewElementWithName("livekitbin_sinktrack", SinkTrackName(int(cfg.Kind)))
-	if err != nil {
-		return nil, nil, err
-	}
-	sink, ok := gst.SubclassFromElement[*SinkTrack](element)
-	if !ok {
-		return nil, nil, fmt.Errorf("failed to cast element to SinkTrack")
-	}
-	sink.Participant = participant
-	sink.TrackCfg = cfg
-	return element, sink, nil
+var sinkTrackProperties = []*glib.ParamSpec{
+	glib.NewBoxedParam(
+		"track",
+		"Track",
+		"The webrtc track this element will write to",
+		glib.TYPE_ARBITRARY_DATA,
+		glib.ParameterWritable|glib.ParameterConstructOnly,
+	),
+	glib.NewBoxedParam(
+		"pub",
+		"Publication",
+		"The LiveKit publication for the track this element will write to",
+		glib.TYPE_ARBITRARY_DATA,
+		glib.ParameterWritable|glib.ParameterConstructOnly,
+	),
 }
 
 type SinkTrack struct {
-	TrackCfg
-
-	Participant *lksdk.LocalParticipant
-
 	track *webrtc.TrackLocalStaticRTP
-	pt    *lksdk.LocalTrackPublication
-}
-
-func NewTrackSink(cfg TrackCfg) (*gst.Element, error) {
-	element, err := gst.NewElement("lkroom_sinktrack")
-	if err != nil {
-		return nil, err
-	}
-	sink, ok := gst.SubclassFromElement[*SinkTrack](element)
-	if !ok {
-		return nil, fmt.Errorf("failed to cast element to SinkTrack")
-	}
-	sink.TrackCfg = cfg
-	return element, nil
+	pub   *lksdk.LocalTrackPublication
 }
 
 func (*SinkTrack) New() glib.GoObjectSubclass {
@@ -91,6 +52,8 @@ func (*SinkTrack) ClassInit(klass *glib.ObjectClass) {
 		gst.PadDirectionSink,
 		gst.PadPresenceAlways,
 		gst.NewCapsFromString("application/x-rtp")))
+
+	class.InstallProperties(sinkTrackProperties)
 }
 
 func (s *SinkTrack) InstanceInit(instance *glib.Object) {
@@ -106,7 +69,7 @@ func (s *SinkTrack) SetCaps(self *base.GstBaseSink, caps *gst.Caps) bool {
 }
 
 func (s *SinkTrack) GetCaps(self *base.GstBaseSink, filter *gst.Caps) *gst.Caps {
-	caps := gst.NewCapsFromString(s.CapsString())
+	caps := gst.NewCapsFromString("application/x-rtp")
 	if filter != nil && filter.Instance() != nil && !filter.IsEmpty() && !filter.IsAny() {
 		if intersect := caps.Intersect(filter); intersect != nil {
 			return intersect
@@ -116,22 +79,17 @@ func (s *SinkTrack) GetCaps(self *base.GstBaseSink, filter *gst.Caps) *gst.Caps 
 }
 
 func (s *SinkTrack) Start(self *base.GstBaseSink) bool {
-	if s.Participant == nil {
-		self.Log(CAT, gst.LevelError, "Participant is not set, dropping RTCP packet")
-		self.Error("Participant is not set", errors.New("participant is nil"))
+	if s.pub == nil || s.track == nil {
+		self.Log(CAT, gst.LevelError, "Track or publication is not set in sink_track")
+		self.Error("Track or publication is not set", errors.New("one or more required fields are nil"))
 		return false
 	}
 
-	return s.publishTrack(self)
+	return true
 }
 
 func (s *SinkTrack) Stop(self *base.GstBaseSink) bool {
 	self.Log(CAT, gst.LevelDebug, "Stopping")
-
-	s.track = nil
-	s.pt.CloseTrack()
-	s.pt = nil
-	s.Participant = nil
 
 	return true
 }
@@ -152,29 +110,63 @@ func (s *SinkTrack) Render(self *base.GstBaseSink, buffer *gst.Buffer) gst.FlowR
 	return gst.FlowOK
 }
 
-func (s *SinkTrack) publishTrack(self *base.GstBaseSink) bool {
-	track, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{
-		MimeType: s.MimeType,
-	}, s.Label(), "pion")
-	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create new local track: %v", err))
-		self.Error("Failed to create new local track", err)
-		return false
+func (s *SinkTrack) Finalize(instance *glib.Object) {
+	s.track = nil
+	s.pub = nil
+}
+
+func (s *SinkTrack) SetProperty(instance *glib.Object, id uint, value *glib.Value) {
+	self := base.ToGstBaseSink(instance)
+	param := sinkTrackProperties[id]
+	switch param.Name() {
+	case "track":
+		gv, err := value.GoValue()
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get Go value for track property: %v", err))
+			self.Error("Failed to get Go value for track property", err)
+			return
+		}
+		if gv == nil {
+			return
+		}
+		data, ok := gv.(glib.ArbitraryValue)
+		if !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid type for track property: %T", gv))
+			self.Error("Invalid type for track property", fmt.Errorf("expected glib.ArbitraryValue, got %T", gv))
+			return
+		}
+		track, ok := data.Data.(*webrtc.TrackLocalStaticRTP)
+		if !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid data type for track property: %T", data.Data))
+			self.Error("Invalid data type for track property", fmt.Errorf("expected *webrtc.TrackLocalStaticRTP, got %T", data.Data))
+			return
+		}
+		s.track = track
+	case "pub":
+		gv, err := value.GoValue()
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get Go value for pub property: %v", err))
+			self.Error("Failed to get Go value for pub property", err)
+			return
+		}
+		if gv == nil {
+			return
+		}
+		data, ok := gv.(glib.ArbitraryValue)
+		if !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid type for pub property: %T", gv))
+			self.Error("Invalid type for pub property", fmt.Errorf("expected glib.ArbitraryValue, got %T", gv))
+			return
+		}
+		pub, ok := data.Data.(*lksdk.LocalTrackPublication)
+		if !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid data type for pub property: %T", data.Data))
+			self.Error("Invalid data type for pub property", fmt.Errorf("expected *lksdk.LocalTrackPublication, got %T", data.Data))
+			return
+		}
+		s.pub = pub
+	default:
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unknown property ID %d for SinkTrack", id))
+		self.Error(fmt.Sprintf("Unknown property ID %d for SinkTrack", id), nil)
 	}
-
-	pt, err := s.Participant.PublishTrack(track, &lksdk.TrackPublicationOptions{
-		Name:   fmt.Sprintf("%s_%s", s.Participant.Identity(), s.Label()),
-		Source: s.Kind,
-	})
-	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to publish track: %v", err))
-		self.Error("Failed to publish track", err)
-		return false
-	}
-	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Published camera track with SID %s", pt.SID()))
-
-	s.track = track
-	s.pt = pt
-
-	return true
 }
