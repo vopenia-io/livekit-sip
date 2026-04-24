@@ -264,3 +264,21 @@ func (e *LivekitBin) ReleasePad(instance *gst.Element, pad *gst.Pad) {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unknown pad template for released pad %s: %s", pad.GetName(), templ.Name()))
 	}
 }
+
+func (e *LivekitBin) Finalize(instance *glib.Object) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.ptMu.Lock()
+	defer e.ptMu.Unlock()
+	e.livekitMu.Lock()
+	defer e.livekitMu.Unlock()
+
+	e.RtpBin = nil
+	e.tracks = nil
+	e.sidBySsrc = nil
+	e.publications = [NbTracks]*LivekitBinPublication{}
+	e.rtcp = LivekitBinRtcp{}
+	e.funnels = [NbTracks]LivekitBinTrackFunnel{}
+	e.room = nil
+	e.PtMap = [NbTracks]map[uint8]*gst.Caps{}
+}
