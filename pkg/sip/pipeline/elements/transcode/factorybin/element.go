@@ -438,3 +438,18 @@ func (e *FactoryBin) Constructed(instance *glib.Object) {
 	}
 	self.Log(CAT, gst.LevelInfo, msg.String())
 }
+
+func (e *FactoryBin) Finalize(instance *glib.Object) {
+	self := gst.ToGstBin(instance)
+	self.Log(CAT, gst.LevelDebug, "Finalizing FactoryBin element")
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.Factories = nil
+	e.FactoryCaps = nil
+	e.Elem = nil
+	e.SrcPad = nil
+	e.SinkPad = nil
+	e.Properties = nil
+}

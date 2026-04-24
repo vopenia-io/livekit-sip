@@ -83,15 +83,19 @@ func (e *SipCompositor) ChangeState(instance *gst.Element, transition gst.StateC
 		e.mu.Unlock()
 	}
 
-	ret := self.ParentChangeState(transition)
+	return self.ParentChangeState(transition)
+}
 
-	if transition == gst.StateChangeReadyToNull {
-		e.SipCompositorCamera = nil
-		e.SipCompositorMicrophone = nil
-		e.SipCompositorScreenshare = nil
-	}
+func (e *SipCompositor) Finalize(instance *glib.Object) {
+	self := gst.ToGstBin(instance)
+	self.Log(CAT, gst.LevelDebug, "Finalizing SipCompositor element")
 
-	return ret
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.SipCompositorCamera = nil
+	e.SipCompositorMicrophone = nil
+	e.SipCompositorScreenshare = nil
 }
 
 func (e *SipCompositor) RequestNewPad(instance *gst.Element, templ *gst.PadTemplate, name string, caps *gst.Caps) *gst.Pad {

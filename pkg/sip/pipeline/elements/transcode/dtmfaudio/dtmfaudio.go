@@ -107,19 +107,12 @@ func (e *DtmfAudio) InstanceInit(instance *glib.Object) {
 	self.AddPad(ghostSrc.Pad)
 }
 
-func (e *DtmfAudio) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
+func (e *DtmfAudio) Finalize(instance *glib.Object) {
 	self := gst.ToGstBin(instance)
+	self.Log(CAT, gst.LevelDebug, "Finalizing DtmfAudio element")
 
-	ret := self.ParentChangeState(transition)
-	if ret != gst.StateChangeSuccess {
-		return ret
-	}
-
-	if transition == gst.StateChangeReadyToNull {
-		e.RtpDtmfDepay = nil
-		e.AudioConvert = nil
-		e.AudioResample = nil
-		e.AudioRate = nil
-	}
-	return ret
+	e.RtpDtmfDepay = nil
+	e.AudioConvert = nil
+	e.AudioResample = nil
+	e.AudioRate = nil
 }

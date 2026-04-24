@@ -115,19 +115,12 @@ func (e *AudioOpus) InstanceInit(instance *glib.Object) {
 	self.AddPad(ghostSrc.Pad)
 }
 
-func (e *AudioOpus) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
+func (e *AudioOpus) Finalize(instance *glib.Object) {
 	self := gst.ToGstBin(instance)
+	self.Log(CAT, gst.LevelDebug, "Finalizing AudioOpus element")
 
-	ret := self.ParentChangeState(transition)
-	if ret != gst.StateChangeSuccess {
-		return ret
-	}
-
-	if transition == gst.StateChangeReadyToNull {
-		e.Level = nil
-		e.OpusEnc = nil
-		e.RtpOpusPay = nil
-		e.RtpFilter = nil
-	}
-	return ret
+	e.Level = nil
+	e.OpusEnc = nil
+	e.RtpOpusPay = nil
+	e.RtpFilter = nil
 }
