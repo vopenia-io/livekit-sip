@@ -56,13 +56,10 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/iosip"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitcompositor"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/mediacut"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/rtpcapscodecfilter"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/rtph264capsintersect"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/samplewriter"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipbin"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipcompositor"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipmanager"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audioopus"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audiopcma"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audiopcmu"
@@ -99,14 +96,6 @@ func init() {
 
 	if !hop.Register() {
 		panic("Failed to register hop src/sink")
-	}
-
-	if !sipmanager.Register() {
-		panic("Failed to register sipmanager")
-	}
-
-	if !mediacut.Register() {
-		panic("Failed to register mediacut")
 	}
 
 	if !sipbin.Register() {
@@ -182,10 +171,6 @@ func init() {
 
 	if !pcm16audio.Register() {
 		panic("Failed to register pcm16audio")
-	}
-
-	if !rtph264capsintersect.Register() {
-		panic("Failed to register rtph264capsintersect")
 	}
 
 	if !rtpcapscodecfilter.Register() {

@@ -8,7 +8,6 @@ import (
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/h264rtppaybin"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/rtph264capsintersect"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/h264video"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/opusaudio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videoh264"
@@ -20,7 +19,7 @@ func TestMain(m *testing.M) {
 	glib.SetEnv("GST_DEBUG", glib.GetEnv("GST_DEBUG")+",factorybin:5", true)
 	gst.Init(nil)
 	Register()
-	rtph264capsintersect.Register()
+	h264rtppaybin.Register()
 	h264rtppaybin.Register()
 	h264video.Register()
 	vp8video.Register()
