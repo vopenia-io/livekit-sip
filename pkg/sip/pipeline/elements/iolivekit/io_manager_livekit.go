@@ -197,34 +197,20 @@ func (e *IoManagerLivekit) Constructed(instance *glib.Object) {
 	}
 }
 
-func (e *IoManagerLivekit) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
-	self := gst.ToGstBin(instance)
+func (e *IoManagerLivekit) Finalize(instance *gst.Element) {
+	e.inMu.Lock()
+	e.outMu.Lock()
+	defer e.inMu.Unlock()
+	defer e.outMu.Unlock()
 
-	ret := self.ParentChangeState(transition)
-	if ret != gst.StateChangeSuccess {
-		return ret
-	}
-
-	if transition == gst.StateChangeReadyToNull {
-		e.inMu.Lock()
-		e.outMu.Lock()
-		defer e.inMu.Unlock()
-		defer e.outMu.Unlock()
-
-		e.Compositor = nil
-
-		e.RawIn = make(map[string]*RawInTranscode)
-
-		e.AudioIn = make(map[string]*AudioInTranscode)
-		e.AudioOut = nil
-
-		e.CameraIn = make(map[string]*CameraInTranscode)
-		e.CameraOut = nil
-
-		e.ScreenShareIn = make(map[string]*ScreenShareInTranscode)
-		e.ScreenShareOut = nil
-	}
-	return ret
+	e.Compositor = nil
+	e.RawIn = nil
+	e.AudioIn = nil
+	e.AudioOut = nil
+	e.CameraIn = nil
+	e.CameraOut = nil
+	e.ScreenShareIn = nil
+	e.ScreenShareOut = nil
 }
 
 func (e *IoManagerLivekit) RequestNewPad(instance *gst.Element, templ *gst.PadTemplate, name string, caps *gst.Caps) *gst.Pad {

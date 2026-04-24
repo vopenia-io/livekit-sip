@@ -166,58 +166,20 @@ func (e *IoManagerSip) Constructed(instance *glib.Object) {
 	}
 }
 
-func (e *IoManagerSip) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
-	self := gst.ToGstBin(instance)
+func (e *IoManagerSip) Finalize(instance *glib.Object) {
+	e.inMu.Lock()
+	defer e.inMu.Unlock()
+	e.outMu.Lock()
+	defer e.outMu.Unlock()
 
-	if transition == gst.StateChangeReadyToNull {
-		// Release all input pads and their transcode elements before transitioning children
-		sinks, err := self.GetSinkPads()
-		if err != nil {
-			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to get sink pads: %v", err))
-		} else {
-			for _, sink := range sinks {
-				e.ReleasePad(instance, sink)
-			}
-		}
-
-		e.outMu.Lock()
-		if e.AudioOut != nil {
-			e.AudioOut.AudioOpus.SetState(gst.StateNull)
-			self.Remove(e.AudioOut.AudioOpus)
-			self.RemovePad(e.AudioOut.gpad.Pad)
-			e.AudioOut = nil
-		}
-
-		if e.CameraOut != nil {
-			e.CameraOut.VideoRTP.SetState(gst.StateNull)
-			self.Remove(e.CameraOut.VideoRTP)
-			self.RemovePad(e.CameraOut.gpad.Pad)
-			e.CameraOut = nil
-		}
-		e.outMu.Unlock()
-	}
-
-	ret := self.ParentChangeState(transition)
-	if ret != gst.StateChangeSuccess {
-		return ret
-	}
-
-	if transition == gst.StateChangeReadyToNull {
-		e.inMu.Lock()
-		e.outMu.Lock()
-		defer e.inMu.Unlock()
-		defer e.outMu.Unlock()
-
-		e.Compositor = nil
-		e.AudioIn = make(map[string]*SipAudioInTranscode)
-		e.AudioOut = nil
-		e.DtmfIn = make(map[string]*SipDtmfInTranscode)
-		e.CameraIn = make(map[string]*SipCameraInTranscode)
-		e.CameraOut = nil
-		e.ScreenshareIn = make(map[string]*SipScreenshareInTranscode)
-		e.ScreenshareOut = nil
-	}
-	return ret
+	e.Compositor = nil
+	e.AudioIn = nil
+	e.AudioOut = nil
+	e.DtmfIn = nil
+	e.CameraIn = nil
+	e.CameraOut = nil
+	e.ScreenshareIn = nil
+	e.ScreenshareOut = nil
 }
 
 func (e *IoManagerSip) RequestNewPad(instance *gst.Element, templ *gst.PadTemplate, name string, caps *gst.Caps) *gst.Pad {
