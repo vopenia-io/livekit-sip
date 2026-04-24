@@ -95,8 +95,6 @@ func (e *FactoryBin) computeCaps(instance *gst.Object, pad *gst.Pad, direction g
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// self := gst.ToGstBin(instance)
-
 	var otherPad *gst.Pad
 	if direction == gst.PadDirectionSink {
 		otherPad = e.SrcPad.Pad
@@ -129,8 +127,6 @@ func (e *FactoryBin) computeCaps(instance *gst.Object, pad *gst.Pad, direction g
 	if result != nil && filter != nil {
 		result = result.IntersectFull(filter, gst.CapsIntersectFirst)
 	}
-
-	// self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Computed caps for %s pad: %q (other pad caps: %q, filter: %q)", pad.GetName(), result.String(), otherCaps.String(), filter.String()))
 
 	return result
 }
@@ -377,6 +373,7 @@ func (e *FactoryBin) GetProperty(instance *glib.Object, id uint) *glib.Value {
 		value, err := glib.GValue(strv)
 		if err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating GValue for factories property: %v", err))
+			self.Error("Error creating GValue for factories property", err)
 			return nil
 		}
 		return value
@@ -388,6 +385,7 @@ func (e *FactoryBin) GetProperty(instance *glib.Object, id uint) *glib.Value {
 		value, err := glib.GValue(factoryName)
 		if err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error creating GValue for selected-factory property: %v", err))
+			self.Error("Error creating GValue for selected-factory property", err)
 			return nil
 		}
 		return value

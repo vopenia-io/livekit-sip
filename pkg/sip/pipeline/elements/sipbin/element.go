@@ -171,6 +171,7 @@ func (e *SipBin) InstanceInit(instance *glib.Object) {
 		answerData, err := e.OnOfferSdp(self, []byte(offer))
 		if err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to process offer: %v", err))
+			self.Error("failed to process offer", err)
 			return ""
 		}
 		return string(answerData)
@@ -189,6 +190,7 @@ func (e *SipBin) InstanceInit(instance *glib.Object) {
 		err := e.OnAnswerSdp(self, []byte(answer))
 		if err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to process answer: %v", err))
+			self.Error("failed to process answer", err)
 			return
 		}
 	}); err != nil {
@@ -206,6 +208,7 @@ func (e *SipBin) InstanceInit(instance *glib.Object) {
 		err := e.OnAckSDP(self, []byte(ack))
 		if err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to process ack: %v", err))
+			self.Error("failed to process ack", err)
 			return
 		}
 	}); err != nil {

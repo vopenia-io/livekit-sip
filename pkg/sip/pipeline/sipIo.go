@@ -184,9 +184,14 @@ func (sio *SipIo) Add() error {
 }
 
 func (sio *SipIo) binPadAddedRecvRtpSrc(_ *gst.Element, pad *gst.Pad) {
+	padName := pad.GetName()
+	if !strings.HasPrefix(padName, "recv_rtp_src_") {
+		return
+	}
+
 	var session, ssrc, pt uint
-	if _, err := fmt.Sscanf(pad.GetName(), "recv_rtp_src_%d_%d_%d", &session, &ssrc, &pt); err != nil {
-		sio.log.Warnw("Received new pad on rtpbin with unrecognized name format", err, "padName", pad.GetName())
+	if _, err := fmt.Sscanf(padName, "recv_rtp_src_%d_%d_%d", &session, &ssrc, &pt); err != nil {
+		sio.log.Warnw("Failed to parse recv RTP src pad name", err, "padName", padName)
 		return
 	}
 
@@ -258,9 +263,14 @@ func (sio *SipIo) binPadAddedRecvRtpSrc(_ *gst.Element, pad *gst.Pad) {
 }
 
 func (sio *SipIo) binPadRemoved(_ *gst.Element, pad *gst.Pad) {
+	padName := pad.GetName()
+	if !strings.HasPrefix(padName, "recv_rtp_src_") {
+		return
+	}
+
 	var session, ssrc, pt uint
-	if _, err := fmt.Sscanf(pad.GetName(), "recv_rtp_src_%d_%d_%d", &session, &ssrc, &pt); err != nil {
-		sio.log.Warnw("Received removed pad on rtpbin with unrecognized name format", err, "padName", pad.GetName())
+	if _, err := fmt.Sscanf(padName, "recv_rtp_src_%d_%d_%d", &session, &ssrc, &pt); err != nil {
+		sio.log.Warnw("Failed to parse removed recv RTP src pad name", err, "padName", padName)
 		return
 	}
 

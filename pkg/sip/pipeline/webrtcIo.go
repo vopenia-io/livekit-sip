@@ -43,7 +43,7 @@ var _ GstChain = (*WebrtcIo)(nil)
 func (wio *WebrtcIo) Create() error {
 	var err error
 
-	fmt.Printf("Creating WebRTC IO with max active participants: %d\n", wio.pipeline.maxActiveParticipants)
+	wio.log.Infow("Creating WebRTC IO", "maxActiveParticipants", wio.pipeline.maxActiveParticipants)
 
 	wio.LivekitBin, err = gst.NewElementWithProperties("livekitbin", map[string]interface{}{
 		"max-active-participants":     uint(wio.pipeline.maxActiveParticipants),
@@ -110,9 +110,9 @@ func (wio *WebrtcIo) binPadAdded(_ *gst.Element, pad *gst.Pad) {
 		return
 	}
 
-	var session, ssrc, pt int
+	var session, ssrc, pt uint
 	if _, err := fmt.Sscanf(padName, "recv_rtp_src_%d_%d_%d", &session, &ssrc, &pt); err != nil {
-		wio.log.Warnw("Invalid RTP pad format", err, "pad", padName)
+		wio.log.Warnw("Failed to parse recv RTP src pad name", err, "pad", padName)
 		return
 	}
 
@@ -164,12 +164,12 @@ func (wio *WebrtcIo) binPadAdded(_ *gst.Element, pad *gst.Pad) {
 	}
 
 	if ret := hopSrc.GetStaticPad("src").Link(sinkPad); ret != gst.PadLinkOK {
-		wio.log.Errorw("Failed to link new hop src pad to sipbin sink pad", fmt.Errorf("link failed: %v", ret), "session", session, "ssrc", ssrc, "pt", pt)
+		wio.log.Errorw("Failed to link new hop src pad to LiveKit IO Manager sink pad", fmt.Errorf("link failed: %v", ret), "session", session, "ssrc", ssrc, "pt", pt)
 		return
 	}
 
 	if ret := pad.Link(hopSink.GetStaticPad("sink")); ret != gst.PadLinkOK {
-		wio.log.Errorw("Failed to link new recv RTP src pad from rtpbin to sipbin sink pad", fmt.Errorf("link failed: %v", ret), "session", session, "ssrc", ssrc, "pt", pt)
+		wio.log.Errorw("Failed to link new recv RTP src pad from livekitbin to hop sink pad", fmt.Errorf("link failed: %v", ret), "session", session, "ssrc", ssrc, "pt", pt)
 		return
 	}
 

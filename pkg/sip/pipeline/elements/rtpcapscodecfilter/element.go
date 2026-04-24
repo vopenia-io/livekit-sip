@@ -73,11 +73,13 @@ func (e *RtpCapsCodecFilter) SetProperty(instance *glib.Object, id uint, value *
 		gv, err := value.GoValue()
 		if err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting caps property value: %v", err))
+			self.Error("Error getting caps property value", err)
 			return
 		}
 		val, ok := gv.(*gst.Caps)
 		if !ok {
 			self.Log(CAT, gst.LevelError, "Invalid type for caps property")
+			self.Error("Invalid type for caps property", fmt.Errorf("expected *gst.Caps, got %T", gv))
 			return
 		}
 		if val != nil {
