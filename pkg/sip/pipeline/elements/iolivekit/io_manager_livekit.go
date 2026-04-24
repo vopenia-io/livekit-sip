@@ -222,34 +222,33 @@ func (e *IoManagerLivekit) RequestNewPad(instance *gst.Element, templ *gst.PadTe
 	}
 
 	switch templ.Name() {
-	case "recv_rtp_sink_%u_%u_%u":
 	case "raw_sink_%u":
 		return e.requestNewPadRawIn(self, templ)
+	case "recv_rtp_sink_%u_%u_%u":
+		var session, ssrc, pt int
+		if _, err := fmt.Sscanf(name, "recv_rtp_sink_%d_%d_%d", &session, &ssrc, &pt); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to parse pad name %s: %v", name, err))
+			return nil
+		}
+
+		if pt < 0 || pt > 127 {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid payload type in pad name %s: %d", name, pt))
+			return nil
+		}
+
+		switch livekit.TrackSource(session) {
+		case livekit.TrackSource_MICROPHONE:
+			return e.requestNewPadAudioIn(self, templ, name, session, ssrc, pt)
+		case livekit.TrackSource_CAMERA:
+			return e.requestNewPadCameraIn(self, templ, name, session, ssrc, pt)
+		case livekit.TrackSource_SCREEN_SHARE:
+			return e.requestNewPadScreenShareIn(self, templ, name, session, ssrc, pt)
+		default:
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Unsupported session kind in pad name %s: %d (%s)", name, session, livekit.TrackSource(session).String()))
+			return nil
+		}
 	default:
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unknown pad template %s for pad %s", templ.Name(), name))
-		return nil
-	}
-
-	var session, ssrc, pt int
-	if _, err := fmt.Sscanf(name, "recv_rtp_sink_%d_%d_%d", &session, &ssrc, &pt); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to parse pad name %s: %v", name, err))
-		return nil
-	}
-
-	if pt < 0 || pt > 127 {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid payload type in pad name %s: %d", name, pt))
-		return nil
-	}
-
-	switch livekit.TrackSource(session) {
-	case livekit.TrackSource_MICROPHONE:
-		return e.requestNewPadAudioIn(self, templ, name, session, ssrc, pt)
-	case livekit.TrackSource_CAMERA:
-		return e.requestNewPadCameraIn(self, templ, name, session, ssrc, pt)
-	case livekit.TrackSource_SCREEN_SHARE:
-		return e.requestNewPadScreenShareIn(self, templ, name, session, ssrc, pt)
-	default:
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unsupported session kind in pad name %s: %d (%s)", name, session, livekit.TrackSource(session).String()))
 		return nil
 	}
 }
@@ -592,30 +591,28 @@ func (e *IoManagerLivekit) ReleasePad(instance *gst.Element, pad *gst.Pad) {
 	}
 
 	switch templ.Name() {
-	case "recv_rtp_sink_%u_%u_%u":
 	case "raw_sink_%u":
 		e.releasePadRawIn(self, gpad, pname)
-		return
+	case "recv_rtp_sink_%u_%u_%u":
+		var session, ssrc, pt int
+		if _, err := fmt.Sscanf(pname, "recv_rtp_sink_%d_%d_%d", &session, &ssrc, &pt); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to parse pad name %s: %v", pname, err))
+			return
+		}
+
+		switch livekit.TrackSource(session) {
+		case livekit.TrackSource_MICROPHONE:
+			e.releasePadAudioIn(self, gpad, pname, session, ssrc, pt)
+		case livekit.TrackSource_CAMERA:
+			e.releasePadCameraIn(self, gpad, pname, session, ssrc, pt)
+		case livekit.TrackSource_SCREEN_SHARE:
+			e.releasePadScreenShareIn(self, gpad, pname, session, ssrc, pt)
+		default:
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Unsupported session kind in pad name %s: %d (%s)", pname, session, livekit.TrackSource(session).String()))
+			return
+		}
 	default:
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unknown pad template %s for pad %s", templ.Name(), pname))
-		return
-	}
-
-	var session, ssrc, pt int
-	if _, err := fmt.Sscanf(pname, "recv_rtp_sink_%d_%d_%d", &session, &ssrc, &pt); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to parse pad name %s: %v", pname, err))
-		return
-	}
-
-	switch livekit.TrackSource(session) {
-	case livekit.TrackSource_MICROPHONE:
-		e.releasePadAudioIn(self, gpad, pname, session, ssrc, pt)
-	case livekit.TrackSource_CAMERA:
-		e.releasePadCameraIn(self, gpad, pname, session, ssrc, pt)
-	case livekit.TrackSource_SCREEN_SHARE:
-		e.releasePadScreenShareIn(self, gpad, pname, session, ssrc, pt)
-	default:
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unsupported session kind in pad name %s: %d (%s)", pname, session, livekit.TrackSource(session).String()))
 		return
 	}
 
@@ -624,11 +621,11 @@ func (e *IoManagerLivekit) ReleasePad(instance *gst.Element, pad *gst.Pad) {
 		return
 	}
 	if !self.RemovePad(gpad.Pad) {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to remove ghost pad %s from SIP IO element", pname))
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to remove ghost pad %s from io_manager_livekit", pname))
 		return
 	}
 
-	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Successfully released pad %s for session %d", pname, session))
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Successfully released pad %s", pname))
 }
 
 func (e *IoManagerLivekit) releasePadRawIn(self *gst.Bin, gpad *gst.GhostPad, pname string) {
