@@ -313,6 +313,9 @@ func (e *FactoryBin) SetProperty(instance *glib.Object, id uint, value *glib.Val
 			self.Log(CAT, gst.LevelError, "Invalid type for factories property")
 			return
 		}
+		if val == nil {
+			return
+		}
 
 		factories := make([]*gst.ElementFactory, 0, val.Len())
 		for _, factoryName := range val.Strings() {
@@ -330,12 +333,12 @@ func (e *FactoryBin) SetProperty(instance *glib.Object, id uint, value *glib.Val
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting child-properties property value: %v", err))
 			return
 		}
-		if gv == nil {
-			return
-		}
 		val, ok := gv.(*gst.Structure)
 		if !ok {
 			self.Log(CAT, gst.LevelError, "Invalid type for child-properties property")
+			return
+		}
+		if val == nil {
 			return
 		}
 
