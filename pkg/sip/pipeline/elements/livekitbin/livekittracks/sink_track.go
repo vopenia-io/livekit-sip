@@ -7,7 +7,6 @@ import (
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/base"
-	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -19,18 +18,10 @@ var sinkTrackProperties = []*glib.ParamSpec{
 		glib.TYPE_ARBITRARY_DATA,
 		glib.ParameterWritable|glib.ParameterConstructOnly,
 	),
-	glib.NewBoxedParam(
-		"pub",
-		"Publication",
-		"The LiveKit publication for the track this element will write to",
-		glib.TYPE_ARBITRARY_DATA,
-		glib.ParameterWritable|glib.ParameterConstructOnly,
-	),
 }
 
 type SinkTrack struct {
 	track *webrtc.TrackLocalStaticRTP
-	pub   *lksdk.LocalTrackPublication
 }
 
 func (*SinkTrack) New() glib.GoObjectSubclass {
@@ -79,9 +70,9 @@ func (s *SinkTrack) GetCaps(self *base.GstBaseSink, filter *gst.Caps) *gst.Caps 
 }
 
 func (s *SinkTrack) Start(self *base.GstBaseSink) bool {
-	if s.pub == nil || s.track == nil {
-		self.Log(CAT, gst.LevelError, "Track or publication is not set in sink_track")
-		self.Error("Track or publication is not set", errors.New("one or more required fields are nil"))
+	if s.track == nil {
+		self.Log(CAT, gst.LevelError, "Track is not set in sink_track")
+		self.Error("Track is not set", errors.New("track is nil"))
 		return false
 	}
 
@@ -112,7 +103,6 @@ func (s *SinkTrack) Render(self *base.GstBaseSink, buffer *gst.Buffer) gst.FlowR
 
 func (s *SinkTrack) Finalize(instance *glib.Object) {
 	s.track = nil
-	s.pub = nil
 }
 
 func (s *SinkTrack) SetProperty(instance *glib.Object, id uint, value *glib.Value) {
@@ -142,29 +132,6 @@ func (s *SinkTrack) SetProperty(instance *glib.Object, id uint, value *glib.Valu
 			return
 		}
 		s.track = track
-	case "pub":
-		gv, err := value.GoValue()
-		if err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get Go value for pub property: %v", err))
-			self.Error("Failed to get Go value for pub property", err)
-			return
-		}
-		if gv == nil {
-			return
-		}
-		data, ok := gv.(glib.ArbitraryValue)
-		if !ok {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid type for pub property: %T", gv))
-			self.Error("Invalid type for pub property", fmt.Errorf("expected glib.ArbitraryValue, got %T", gv))
-			return
-		}
-		pub, ok := data.Data.(*lksdk.LocalTrackPublication)
-		if !ok {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid data type for pub property: %T", data.Data))
-			self.Error("Invalid data type for pub property", fmt.Errorf("expected *lksdk.LocalTrackPublication, got %T", data.Data))
-			return
-		}
-		s.pub = pub
 	default:
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unknown property ID %d for SinkTrack", id))
 		self.Error(fmt.Sprintf("Unknown property ID %d for SinkTrack", id), nil)

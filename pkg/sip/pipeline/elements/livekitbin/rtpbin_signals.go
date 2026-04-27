@@ -13,7 +13,6 @@ func (e *LivekitBin) setupRtpBinSignals(self *gst.Bin) {
 	if _, err := e.RtpBin.Connect("pad-added", func(_ *gst.Element, pad *gst.Pad) {
 		ptr := eweak.Value()
 		if ptr == nil {
-			CAT.Log(gst.LevelError, "LivekitBin instance is nil in rtpbin pad-added callback")
 			return
 		}
 		ptr.OnRtpBinPadAdded(pad)
@@ -26,7 +25,6 @@ func (e *LivekitBin) setupRtpBinSignals(self *gst.Bin) {
 	if _, err := e.RtpBin.Connect("pad-removed", func(_ *gst.Element, pad *gst.Pad) {
 		ptr := eweak.Value()
 		if ptr == nil {
-			CAT.Log(gst.LevelError, "LivekitBin instance is nil in rtpbin pad-removed callback")
 			return
 		}
 		ptr.OnRtpBinPadRemoved(pad)
@@ -39,7 +37,6 @@ func (e *LivekitBin) setupRtpBinSignals(self *gst.Bin) {
 	if _, err := e.RtpBin.Connect("request-pt-map", func(_ *gst.Element, session, pt uint) *gst.Caps {
 		ptr := eweak.Value()
 		if ptr == nil {
-			CAT.Log(gst.LevelError, "LivekitBin instance is nil in rtpbin request-pt-map callback")
 			return nil
 		}
 		return ptr.OnRtpBinRequestPtMap(session, pt)
@@ -52,7 +49,6 @@ func (e *LivekitBin) setupRtpBinSignals(self *gst.Bin) {
 	if _, err := e.RtpBin.Connect("on-ssrc-collision", func(_ *gst.Element, session uint, ssrc uint) {
 		ptr := eweak.Value()
 		if ptr == nil {
-			CAT.Log(gst.LevelError, "LivekitBin instance is nil in rtpbin on-ssrc-collision callback")
 			return
 		}
 		ptr.OnSSRCCollision(session, ssrc)
@@ -65,7 +61,6 @@ func (e *LivekitBin) setupRtpBinSignals(self *gst.Bin) {
 	if _, err := e.RtpBin.Connect("on-timeout", func(_ *gst.Element, session uint, ssrc uint) {
 		ptr := eweak.Value()
 		if ptr == nil {
-			CAT.Log(gst.LevelError, "LivekitBin instance is nil in rtpbin on-timeout callback")
 			return
 		}
 		ptr.OnTimeout(session, ssrc)

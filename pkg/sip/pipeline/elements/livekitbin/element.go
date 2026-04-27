@@ -56,8 +56,6 @@ type LivekitBinPublication struct {
 	TrackSink    *gst.Element
 	FormatFilter *gst.Element
 	Track        *webrtc.TrackLocalStaticRTP
-	Pub          *lksdk.LocalTrackPublication
-	SID          string
 }
 
 type LivekitBinTrackFunnel struct {
