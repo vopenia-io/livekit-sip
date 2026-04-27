@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"weak"
 
 	"github.com/go-gst/go-glib/glib"
@@ -240,13 +241,17 @@ func (e *SipBin) CleanupTrack(self *gst.Bin, track *SipTrack) error {
 		if sendRtpSink != nil {
 			e.RtpBin.ReleaseRequestPad(sendRtpSink)
 		}
-		sendRtcpSink := e.RtpBin.GetStaticPad(fmt.Sprintf("recv_rtcp_sink_%d", track.Kind))
-		if sendRtcpSink != nil {
-			e.RtpBin.ReleaseRequestPad(sendRtcpSink)
+		sendRtcpSrc := e.RtpBin.GetStaticPad(fmt.Sprintf("send_rtcp_src_%d", track.Kind))
+		if sendRtcpSrc != nil {
+			e.RtpBin.ReleaseRequestPad(sendRtcpSrc)
 		}
 		recvRtpSrc := e.RtpBin.GetStaticPad(fmt.Sprintf("send_rtp_sink_%d", track.Kind))
 		if recvRtpSrc != nil {
 			e.RtpBin.ReleaseRequestPad(recvRtpSrc)
+		}
+		recvRtcpSink := e.RtpBin.GetStaticPad(fmt.Sprintf("recv_rtcp_sink_%d", track.Kind))
+		if recvRtcpSink != nil {
+			e.RtpBin.ReleaseRequestPad(recvRtcpSink)
 		}
 	}
 	if track.rtpConn != nil {
@@ -328,6 +333,7 @@ func (b *BfcpTrack) Init(e *SipBin, self *gst.Bin, media *gstsdp.Media, session 
 	// }
 
 	if version := media.GetAttributeVal("bfcpver"); version != "" {
+		version, _, _ = strings.Cut(version, " ")
 		if v, err := strconv.Atoi(version); err == nil {
 			b.BfcpVersion = v
 		} else {

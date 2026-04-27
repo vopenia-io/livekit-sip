@@ -21,31 +21,6 @@ var CAT = gst.NewDebugCategory(
 
 const NbTracks = int(livekit.TrackSource_SCREEN_SHARE_AUDIO) + 1
 
-// type LogMutex struct {
-// 	sync.Mutex
-// }
-
-// func (m *LogMutex) Lock() {
-// 	uid := uuid.NewString()
-
-// 	done := make(chan struct{})
-
-// 	fmt.Printf("Locking mutex %s\n", uid)
-// 	go func() {
-// 		defer close(done)
-// 		select {
-// 		case <-done:
-// 			fmt.Printf("Mutex %s locked\n", uid)
-// 		case <-time.After(5 * time.Second):
-// 			fmt.Printf("Timeout waiting to lock mutex %s at:\n %s", uid, string(debug.Stack()))
-// 		}
-// 	}()
-
-// 	m.Mutex.Lock()
-// 	done <- struct{}{}
-// 	<-done
-// }
-
 type SipBin struct {
 	config
 	mu sync.Mutex
@@ -404,14 +379,14 @@ func (e *SipBin) requestNewPadSendRtpSink(self *gst.Bin, templ *gst.PadTemplate,
 
 	switch kind {
 	case livekit.TrackSource_CAMERA:
-		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Created new RTP sink pad for camera track: %s", gpad.GetName()))
+		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Created new RTP sink pad for camera track: %s", gpad.GetName()))
 	case livekit.TrackSource_SCREEN_SHARE:
-		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Created new RTP sink pad for screen share track: %s", gpad.GetName()))
+		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Created new RTP sink pad for screen share track: %s", gpad.GetName()))
 		e.bfcpStartScreenshare(self)
 	case livekit.TrackSource_MICROPHONE:
-		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Created new RTP sink pad for microphone track: %s", gpad.GetName()))
+		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Created new RTP sink pad for microphone track: %s", gpad.GetName()))
 	case livekit.TrackSource_SCREEN_SHARE_AUDIO:
-		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Created new RTP sink pad for screen share audio track: %s", gpad.GetName()))
+		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Created new RTP sink pad for screen share audio track: %s", gpad.GetName()))
 	}
 
 	return gpad.Pad
