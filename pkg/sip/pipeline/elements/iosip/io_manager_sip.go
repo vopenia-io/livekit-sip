@@ -364,6 +364,8 @@ func (e *IoManagerSip) linkNewPadAudioMicrophone(self *gst.Bin, pad *gst.Pad, na
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state of dtmfdetect element with parent for pad %s", name))
 	}
 
+	e.AudioIn[name] = audioIn
+
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Successfully linked audio pad %s with factorybin element", name))
 
 	return nil
@@ -415,6 +417,8 @@ func (e *IoManagerSip) linkNewPadAudioDtmf(self *gst.Bin, pad *gst.Pad, name str
 	if !dtmfIn.FakeSink.SyncStateWithParent() {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state of fakesink element with parent for pad %s", name))
 	}
+
+	e.DtmfIn[name] = dtmfIn
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Successfully linked audio pad %s with rtpdtmfdepay element", name))
 
