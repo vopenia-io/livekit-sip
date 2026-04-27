@@ -63,28 +63,28 @@ func (e *SipCompositor) InstanceInit(instance *glib.Object) {
 	e.nvidia = false
 }
 
-func (e *SipCompositor) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
-	self := gst.ToGstBin(instance)
+// func (e *SipCompositor) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
+// 	self := gst.ToGstBin(instance)
 
-	if transition == gst.StateChangeReadyToNull {
-		sinks, err := self.GetSinkPads()
-		if err != nil {
-			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to get sink pads: %v", err))
-		} else {
-			for _, sink := range sinks {
-				e.ReleasePad(instance, sink)
-			}
-		}
+// 	if transition == gst.StateChangeReadyToNull {
+// 		sinks, err := self.GetSinkPads()
+// 		if err != nil {
+// 			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to get sink pads: %v", err))
+// 		} else {
+// 			for _, sink := range sinks {
+// 				e.ReleasePad(instance, sink)
+// 			}
+// 		}
 
-		e.mu.Lock()
-		e.cleanupMicrophone(self)
-		e.cleanupCamera(self)
-		e.cleanupScreenshare(self)
-		e.mu.Unlock()
-	}
+// 		e.mu.Lock()
+// 		e.cleanupMicrophone(self)
+// 		e.cleanupCamera(self)
+// 		e.cleanupScreenshare(self)
+// 		e.mu.Unlock()
+// 	}
 
-	return self.ParentChangeState(transition)
-}
+// 	return self.ParentChangeState(transition)
+// }
 
 func (e *SipCompositor) Finalize(instance *glib.Object) {
 	self := gst.ToGstBin(instance)

@@ -97,8 +97,37 @@ func (e *SipCompositor) releaseMicrophoneSinkPad(self *gst.Bin, gpad *gst.GhostP
 		return
 	}
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Released microphone sink pad %s", gpad.GetName()))
+
+	sinks, err := e.SipCompositorMicrophone.AudioMixer.GetSinkPads()
+	if err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to get sink pads from audiomixer: %v", err))
+		return
+	}
+	if len(sinks) <= 0 {
+		self.Log(CAT, gst.LevelInfo, "No more sink pads on audiomixer, cleaning up microphone compositor")
+		e.cleanupMicrophone(self)
+	}
 }
 
 func (e *SipCompositor) cleanupMicrophone(self *gst.Bin) {
-	return
+	if e.SipCompositorMicrophone == nil {
+		return
+	}
+
+	if err := e.SipCompositorMicrophone.AudioMixer.SetState(gst.StateNull); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set state of audiomixer to NULL during microphone cleanup: %v", err))
+	}
+	if err := self.Remove(e.SipCompositorMicrophone.AudioMixer); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove audiomixer from bin during microphone cleanup: %v", err))
+	}
+
+	gpad := self.GetStaticPad(fmt.Sprintf("src_%d", livekit.TrackSource_MICROPHONE))
+	if gpad != nil {
+		if !self.RemovePad(gpad) {
+			self.Log(CAT, gst.LevelWarning, "Failed to remove ghost pad for microphone source from bin during cleanup")
+		}
+	}
+
+	e.SipCompositorMicrophone = nil
+	self.Log(CAT, gst.LevelInfo, "Cleaned up microphone compositor")
 }
