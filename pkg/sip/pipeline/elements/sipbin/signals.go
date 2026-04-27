@@ -32,12 +32,12 @@ func (e *SipBin) OnAckSDP(self *gst.Bin, b []byte) error {
 }
 
 func (e *SipBin) emitAvailableMedia(self *gst.Bin) {
-	microphone := e.Tracks[livekit.TrackSource_MICROPHONE] != nil
 	camera := e.Tracks[livekit.TrackSource_CAMERA] != nil
+	microphone := e.Tracks[livekit.TrackSource_MICROPHONE] != nil
 	screenShare := e.Tracks[livekit.TrackSource_SCREEN_SHARE] != nil
 	screenShareAudio := e.Tracks[livekit.TrackSource_SCREEN_SHARE_AUDIO] != nil
 
-	if _, err := self.Emit("available-media", microphone, camera, screenShare, screenShareAudio); err != nil {
+	if _, err := self.Emit("available-media", camera, microphone, screenShare, screenShareAudio); err != nil {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to emit available-media signal: %v", err))
 	}
 }
@@ -131,7 +131,7 @@ func (e *SipBin) onRtpBinPadAddedSendRtpSrc(self *gst.Bin, pad *gst.Pad) {
 		return
 	}
 
-	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Linked new pad %s from rtpbin to RTP sink for track source %d", pad.GetName(), kind))
+	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Linked new pad %s from rtpbin to RTP sink for track source %d", pad.GetName(), kind))
 
 	if e.RtpBin.GetStaticPad(fmt.Sprintf("send_rtcp_src_%d", session)) != nil {
 		return
@@ -166,7 +166,7 @@ func (e *SipBin) onRtpBinPadAddedSendRtpSrc(self *gst.Bin, pad *gst.Pad) {
 			return
 		}
 
-		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Linked RTCP pad %s from rtpbin to RTCP sink for track source %d", rtcpPad.GetName(), kind))
+		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Linked RTCP pad %s from rtpbin to RTCP sink for track source %d", rtcpPad.GetName(), kind))
 	}()
 }
 
