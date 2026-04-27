@@ -14,10 +14,12 @@ var CAT = gst.NewDebugCategory(
 )
 
 type AudioOpus struct {
-	Level      *gst.Element
-	OpusEnc    *gst.Element
-	RtpOpusPay *gst.Element
-	RtpFilter  *gst.Element
+	AudioConvert  *gst.Element
+	AudioResample *gst.Element
+	Level         *gst.Element
+	OpusEnc       *gst.Element
+	RtpOpusPay    *gst.Element
+	RtpFilter     *gst.Element
 }
 
 func (e *AudioOpus) New() glib.GoObjectSubclass {
@@ -51,6 +53,20 @@ func (e *AudioOpus) ClassInit(klass *glib.ObjectClass) {
 func (e *AudioOpus) InstanceInit(instance *glib.Object) {
 	self := gst.ToGstBin(instance)
 	var err error
+
+	e.AudioConvert, err = gst.NewElement("audioconvert")
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create audioconvert element: %v", err))
+		self.Error("Failed to create audioconvert element", err)
+		return
+	}
+
+	e.AudioResample, err = gst.NewElement("audioresample")
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create audioresample element: %v", err))
+		self.Error("Failed to create audioresample element", err)
+		return
+	}
 
 	e.Level, err = gst.NewElementWithProperties("level", map[string]interface{}{
 		"audio-level-meta": true,
@@ -89,6 +105,8 @@ func (e *AudioOpus) InstanceInit(instance *glib.Object) {
 	}
 
 	self.AddMany(
+		e.AudioConvert,
+		e.AudioResample,
 		e.Level,
 		e.OpusEnc,
 		e.RtpOpusPay,
@@ -96,6 +114,8 @@ func (e *AudioOpus) InstanceInit(instance *glib.Object) {
 	)
 
 	if err := gst.ElementLinkMany(
+		e.AudioConvert,
+		e.AudioResample,
 		e.Level,
 		e.OpusEnc,
 		e.RtpOpusPay,
@@ -108,7 +128,7 @@ func (e *AudioOpus) InstanceInit(instance *glib.Object) {
 
 	elemClass := gst.ToElementClass(self.Class())
 
-	ghostSink := gst.NewGhostPadFromTemplate("sink", e.Level.GetStaticPad("sink"), elemClass.GetPadTemplate("sink"))
+	ghostSink := gst.NewGhostPadFromTemplate("sink", e.AudioConvert.GetStaticPad("sink"), elemClass.GetPadTemplate("sink"))
 	self.AddPad(ghostSink.Pad)
 
 	ghostSrc := gst.NewGhostPadFromTemplate("src", e.RtpFilter.GetStaticPad("src"), elemClass.GetPadTemplate("src"))
@@ -119,6 +139,8 @@ func (e *AudioOpus) Finalize(instance *glib.Object) {
 	self := gst.ToGstBin(instance)
 	self.Log(CAT, gst.LevelDebug, "Finalizing AudioOpus element")
 
+	e.AudioConvert = nil
+	e.AudioResample = nil
 	e.Level = nil
 	e.OpusEnc = nil
 	e.RtpOpusPay = nil

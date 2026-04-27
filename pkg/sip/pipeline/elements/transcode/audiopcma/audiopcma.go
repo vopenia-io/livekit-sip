@@ -14,8 +14,10 @@ var CAT = gst.NewDebugCategory(
 )
 
 type AudioPcma struct {
-	ALawEnc    *gst.Element
-	RtpPcmaPay *gst.Element
+	AudioConvert  *gst.Element
+	AudioResample *gst.Element
+	ALawEnc       *gst.Element
+	RtpPcmaPay    *gst.Element
 }
 
 func (e *AudioPcma) New() glib.GoObjectSubclass {
@@ -31,14 +33,11 @@ func (e *AudioPcma) ClassInit(klass *glib.ObjectClass) {
 		"Roomkit <roomkit-visio@numerique.gouv.fr>",
 	)
 
-	// PCMA RTP (RFC 3551) is fixed at 8kHz mono. Hardcode the constraint so
-	// upstream audioconvert/audioresample negotiate to the only format that
-	// can actually flow through the alawenc → rtppcmapay chain.
 	class.AddPadTemplate(gst.NewPadTemplate(
 		"sink",
 		gst.PadDirectionSink,
 		gst.PadPresenceAlways,
-		gst.NewCapsFromString("audio/x-raw, format=(string)S16LE, layout=(string)interleaved, rate=(int)8000, channels=(int)1"),
+		gst.NewCapsFromString("audio/x-raw"),
 	))
 
 	class.AddPadTemplate(gst.NewPadTemplate(
@@ -52,6 +51,20 @@ func (e *AudioPcma) ClassInit(klass *glib.ObjectClass) {
 func (e *AudioPcma) InstanceInit(instance *glib.Object) {
 	self := gst.ToGstBin(instance)
 	var err error
+
+	e.AudioConvert, err = gst.NewElement("audioconvert")
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create audioconvert element: %v", err))
+		self.Error("Failed to create audioconvert element", err)
+		return
+	}
+
+	e.AudioResample, err = gst.NewElement("audioresample")
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create audioresample element: %v", err))
+		self.Error("Failed to create audioresample element", err)
+		return
+	}
 
 	e.ALawEnc, err = gst.NewElementWithProperties("alawenc", map[string]interface{}{})
 	if err != nil {
@@ -68,6 +81,8 @@ func (e *AudioPcma) InstanceInit(instance *glib.Object) {
 	}
 
 	if err := self.AddMany(
+		e.AudioConvert,
+		e.AudioResample,
 		e.ALawEnc,
 		e.RtpPcmaPay,
 	); err != nil {
@@ -77,6 +92,8 @@ func (e *AudioPcma) InstanceInit(instance *glib.Object) {
 	}
 
 	if err := gst.ElementLinkMany(
+		e.AudioConvert,
+		e.AudioResample,
 		e.ALawEnc,
 		e.RtpPcmaPay,
 	); err != nil {
@@ -87,7 +104,7 @@ func (e *AudioPcma) InstanceInit(instance *glib.Object) {
 
 	elemClass := gst.ToElementClass(self.Class())
 
-	ghostSink := gst.NewGhostPadFromTemplate("sink", e.ALawEnc.GetStaticPad("sink"), elemClass.GetPadTemplate("sink"))
+	ghostSink := gst.NewGhostPadFromTemplate("sink", e.AudioConvert.GetStaticPad("sink"), elemClass.GetPadTemplate("sink"))
 	self.AddPad(ghostSink.Pad)
 
 	ghostSrc := gst.NewGhostPadFromTemplate("src", e.RtpPcmaPay.GetStaticPad("src"), elemClass.GetPadTemplate("src"))
@@ -98,6 +115,8 @@ func (e *AudioPcma) Finalize(instance *glib.Object) {
 	self := gst.ToGstBin(instance)
 	self.Log(CAT, gst.LevelDebug, "Finalizing AudioPCMA element")
 
+	e.AudioConvert = nil
+	e.AudioResample = nil
 	e.ALawEnc = nil
 	e.RtpPcmaPay = nil
 }

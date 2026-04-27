@@ -14,8 +14,10 @@ var CAT = gst.NewDebugCategory(
 )
 
 type AudioPcmu struct {
-	MuLawEnc   *gst.Element
-	RtpPcmuPay *gst.Element
+	AudioConvert  *gst.Element
+	AudioResample *gst.Element
+	MuLawEnc      *gst.Element
+	RtpPcmuPay    *gst.Element
 }
 
 func (e *AudioPcmu) New() glib.GoObjectSubclass {
@@ -31,14 +33,11 @@ func (e *AudioPcmu) ClassInit(klass *glib.ObjectClass) {
 		"Roomkit <roomkit-visio@numerique.gouv.fr>",
 	)
 
-	// PCMU RTP (RFC 3551) is fixed at 8kHz mono. Hardcode the constraint so
-	// upstream audioconvert/audioresample negotiate to the only format that
-	// can actually flow through the mulawenc → rtppcmupay chain.
 	class.AddPadTemplate(gst.NewPadTemplate(
 		"sink",
 		gst.PadDirectionSink,
 		gst.PadPresenceAlways,
-		gst.NewCapsFromString("audio/x-raw, format=(string)S16LE, layout=(string)interleaved, rate=(int)8000, channels=(int)1"),
+		gst.NewCapsFromString("audio/x-raw"),
 	))
 
 	class.AddPadTemplate(gst.NewPadTemplate(
@@ -52,6 +51,20 @@ func (e *AudioPcmu) ClassInit(klass *glib.ObjectClass) {
 func (e *AudioPcmu) InstanceInit(instance *glib.Object) {
 	self := gst.ToGstBin(instance)
 	var err error
+
+	e.AudioConvert, err = gst.NewElement("audioconvert")
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create audioconvert element: %v", err))
+		self.Error("Failed to create audioconvert element", err)
+		return
+	}
+
+	e.AudioResample, err = gst.NewElement("audioresample")
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create audioresample element: %v", err))
+		self.Error("Failed to create audioresample element", err)
+		return
+	}
 
 	e.MuLawEnc, err = gst.NewElementWithProperties("mulawenc", map[string]interface{}{})
 	if err != nil {
@@ -68,6 +81,8 @@ func (e *AudioPcmu) InstanceInit(instance *glib.Object) {
 	}
 
 	if err := self.AddMany(
+		e.AudioConvert,
+		e.AudioResample,
 		e.MuLawEnc,
 		e.RtpPcmuPay,
 	); err != nil {
@@ -77,6 +92,8 @@ func (e *AudioPcmu) InstanceInit(instance *glib.Object) {
 	}
 
 	if err := gst.ElementLinkMany(
+		e.AudioConvert,
+		e.AudioResample,
 		e.MuLawEnc,
 		e.RtpPcmuPay,
 	); err != nil {
@@ -87,7 +104,7 @@ func (e *AudioPcmu) InstanceInit(instance *glib.Object) {
 
 	elemClass := gst.ToElementClass(self.Class())
 
-	ghostSink := gst.NewGhostPadFromTemplate("sink", e.MuLawEnc.GetStaticPad("sink"), elemClass.GetPadTemplate("sink"))
+	ghostSink := gst.NewGhostPadFromTemplate("sink", e.AudioConvert.GetStaticPad("sink"), elemClass.GetPadTemplate("sink"))
 	self.AddPad(ghostSink.Pad)
 
 	ghostSrc := gst.NewGhostPadFromTemplate("src", e.RtpPcmuPay.GetStaticPad("src"), elemClass.GetPadTemplate("src"))
@@ -98,6 +115,8 @@ func (e *AudioPcmu) Finalize(instance *glib.Object) {
 	self := gst.ToGstBin(instance)
 	self.Log(CAT, gst.LevelDebug, "Finalizing AudioPCMU element")
 
+	e.AudioConvert = nil
+	e.AudioResample = nil
 	e.MuLawEnc = nil
 	e.RtpPcmuPay = nil
 }
