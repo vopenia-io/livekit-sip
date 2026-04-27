@@ -307,14 +307,12 @@ func (sio *SipIo) binPadRemoved(_ *gst.Element, pad *gst.Pad) {
 func (sio *SipIo) onAvailableMedia(camera, microphone, screenshare, screenshareAudio bool) {
 	screenshareAudio = screenshareAudio || (microphone && screenshare)
 
-	err := errors.Join(
-		sio.pipeline.WebrtcIo.LivekitBin.SetProperty("camera", camera),
+	if err := errors.Join(
 		sio.pipeline.WebrtcIo.LivekitBin.SetProperty("microphone", microphone),
+		sio.pipeline.WebrtcIo.LivekitBin.SetProperty("camera", camera),
 		sio.pipeline.WebrtcIo.LivekitBin.SetProperty("screenshare", screenshare),
 		// sio.pipeline.WebrtcIo.LivekitBin.SetProperty("screenshare-audio", screenshareAudio),
-	)
-
-	if err != nil {
+	); err != nil {
 		sio.log.Errorw("Failed to set available media properties on LiveKit bin", err, "camera", camera, "microphone", microphone, "screenshare", screenshare, "screenshareAudio", screenshareAudio)
 	} else {
 		sio.log.Infow("Set available media properties on LiveKit bin", "camera", camera, "microphone", microphone, "screenshare", screenshare, "screenshareAudio", screenshareAudio)

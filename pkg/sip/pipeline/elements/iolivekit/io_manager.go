@@ -89,5 +89,7 @@ func (e *IoManagerLivekit) SetProperty(instance *glib.Object, id uint, value *gl
 			return
 		}
 		e.nvidia = val
+	default:
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown property ID %d", id))
 	}
 }
