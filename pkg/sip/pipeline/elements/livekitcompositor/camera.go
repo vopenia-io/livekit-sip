@@ -11,120 +11,6 @@ import (
 	"github.com/samber/lo"
 )
 
-type LivekitCompositorCameraFallbackCPU struct {
-	FakeVideoSrc   *gst.Element
-	FallbackFilter *gst.Element
-}
-
-func (f *LivekitCompositorCameraFallbackCPU) Create(e *LivekitCompositor, self *gst.Bin) (*gst.Pad, error) {
-	var err error
-
-	f.FakeVideoSrc, err = gst.NewElementWithProperties("videotestsrc", map[string]interface{}{
-		"pattern": int(2), // black
-		"is-live": true,
-	})
-	if err != nil {
-		return nil, err
-	}
-	f.FallbackFilter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-		"caps": gst.NewCapsFromString("video/x-raw,format=I420,width=1280,height=720,framerate=24/1"),
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	if err := self.AddMany(
-		f.FakeVideoSrc,
-		f.FallbackFilter,
-	); err != nil {
-		return nil, err
-	}
-
-	if err := gst.ElementLinkMany(f.FakeVideoSrc, f.FallbackFilter); err != nil {
-		return nil, err
-	}
-
-	return f.FallbackFilter.GetStaticPad("src"), nil
-}
-
-func (f *LivekitCompositorCameraFallbackCPU) Sync(e *LivekitCompositor, self *gst.Bin) {
-
-	if !f.FakeVideoSrc.SyncStateWithParent() {
-		self.Log(CAT, gst.LevelWarning, "Failed to sync state of fake video source with parent")
-	}
-	if !f.FallbackFilter.SyncStateWithParent() {
-		self.Log(CAT, gst.LevelWarning, "Failed to sync state of fallback filter with parent")
-	}
-}
-
-func (f *LivekitCompositorCameraFallbackCPU) Cleanup(e *LivekitCompositor, self *gst.Bin) {
-	f.FakeVideoSrc = nil
-	f.FallbackFilter = nil
-}
-
-type LivekitCompositorCameraFallbackNVidia struct {
-	FakeVideoSrc       *gst.Element
-	FallbackCudaUpload *gst.Element
-	FallbackFilter     *gst.Element
-}
-
-func (f *LivekitCompositorCameraFallbackNVidia) Create(e *LivekitCompositor, self *gst.Bin) (*gst.Pad, error) {
-	var err error
-
-	f.FakeVideoSrc, err = gst.NewElementWithProperties("videotestsrc", map[string]interface{}{
-		"pattern":     int(2), // black
-		"is-live":     true,
-		"num-buffers": 1,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	f.FallbackCudaUpload, err = gst.NewElementWithProperties("cudaupload", map[string]interface{}{})
-	if err != nil {
-		return nil, err
-	}
-
-	f.FallbackFilter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-		"caps": gst.NewCapsFromString(fmt.Sprintf("video/x-raw(memory:CUDAMemory),width=%d,height=%d,format=NV12", e.videoWidth, e.videoHeight)),
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	if err := self.AddMany(
-		f.FakeVideoSrc,
-		f.FallbackCudaUpload,
-		f.FallbackFilter,
-	); err != nil {
-		return nil, err
-	}
-
-	if err := gst.ElementLinkMany(f.FakeVideoSrc, f.FallbackCudaUpload, f.FallbackFilter); err != nil {
-		return nil, err
-	}
-
-	return f.FallbackFilter.GetStaticPad("src"), nil
-}
-
-func (f *LivekitCompositorCameraFallbackNVidia) Sync(e *LivekitCompositor, self *gst.Bin) {
-	if !f.FakeVideoSrc.SyncStateWithParent() {
-		self.Log(CAT, gst.LevelWarning, "Failed to sync state of fake video source with parent")
-	}
-	if !f.FallbackCudaUpload.SyncStateWithParent() {
-		self.Log(CAT, gst.LevelWarning, "Failed to sync state of fallback CUDA upload with parent")
-	}
-	if !f.FallbackFilter.SyncStateWithParent() {
-		self.Log(CAT, gst.LevelWarning, "Failed to sync state of fallback filter with parent")
-	}
-}
-
-func (f *LivekitCompositorCameraFallbackNVidia) Cleanup(e *LivekitCompositor, self *gst.Bin) {
-	f.FakeVideoSrc = nil
-	f.FallbackCudaUpload = nil
-	f.FallbackFilter = nil
-}
-
 type LivekitCompositorCameraFallback interface {
 	Create(e *LivekitCompositor, self *gst.Bin) (*gst.Pad, error)
 	Sync(e *LivekitCompositor, self *gst.Bin)
@@ -132,7 +18,7 @@ type LivekitCompositorCameraFallback interface {
 }
 
 type LivekitCompositorCamera struct {
-	Fallback LivekitCompositorCameraFallback
+	Fallback *VideoFallback
 
 	Compositor *gst.Element
 	Filter     *gst.Element
@@ -148,12 +34,11 @@ func (e *LivekitCompositor) initCamera(self *gst.Bin) error {
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Initializing camera compositor with driver %s", lo.Ternary(e.nvidia, "nvidia", "cpu")))
 	e.LivekitCompositorCamera = &LivekitCompositorCamera{}
 	if e.nvidia {
-		e.LivekitCompositorCamera.Fallback = &LivekitCompositorCameraFallbackNVidia{}
 		e.LivekitCompositorCamera.Format = "video/x-raw(memory:CUDAMemory)"
 	} else {
-		e.LivekitCompositorCamera.Fallback = &LivekitCompositorCameraFallbackCPU{}
 		e.LivekitCompositorCamera.Format = "video/x-raw"
 	}
+	e.LivekitCompositorCamera.Fallback = &VideoFallback{}
 
 	fallbackPad, err := e.LivekitCompositorCamera.Fallback.Create(e, self)
 	if err != nil {
@@ -224,7 +109,9 @@ func (e *LivekitCompositor) initCamera(self *gst.Bin) error {
 		return fmt.Errorf("failed to add ghost pad for camera source to bin")
 	}
 
-	e.LivekitCompositorCamera.Fallback.Sync(e, self)
+	if err := e.LivekitCompositorCamera.Fallback.Sync(); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync fallback elements with parent: %v", err))
+	}
 
 	if !e.LivekitCompositorCamera.Compositor.SyncStateWithParent() {
 		self.Log(CAT, gst.LevelWarning, "Failed to sync state of compositor with parent")

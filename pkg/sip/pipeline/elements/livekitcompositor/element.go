@@ -36,6 +36,9 @@ type LivekitCompositor struct {
 	videoWidth  uint
 	videoHeight uint
 	nvidia      bool
+	microphone  bool
+	camera      bool
+	screenshare bool
 
 	*LivekitCompositorMicrophone
 	*LivekitCompositorCamera
@@ -262,6 +265,28 @@ func (e *LivekitCompositor) releaseSinkPad(self *gst.Bin, gpad *gst.GhostPad) {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown track source in released pad name: %s", gpad.GetName()))
 		return
 	}
+}
+
+func (e *LivekitCompositor) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
+	self := gst.ToGstBin(instance)
+
+	switch transition {
+	case gst.StateChangePausedToReady:
+		e.mu.Lock()
+		defer e.mu.Unlock()
+
+		if e.microphone {
+			e.stopMicrophoneFallback(self)
+		}
+		// if e.camera {
+		// 	e.stopCameraFallback(self)
+		// }
+		// if e.screenshare {
+		// 	e.stopScreenshareFallback(self)
+		// }
+	}
+
+	return self.ParentChangeState(transition)
 }
 
 func (e *LivekitCompositor) Finalize(instance *glib.Object) {
