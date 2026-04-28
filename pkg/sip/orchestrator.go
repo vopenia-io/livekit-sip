@@ -15,7 +15,6 @@ import (
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/sip/pkg/sip/pipeline"
 	"github.com/livekit/sipgo/sip"
-	"github.com/vopenia-io/go-pjmedia/pj"
 )
 
 var (
@@ -76,8 +75,6 @@ type MediaOrchestrator struct {
 	dispatchCH chan dispatchOperation
 	dispatchOK atomic.Bool
 	wg         sync.WaitGroup
-
-	pjpool *pj.PjPool
 
 	pipeline *pipeline.Pipeline
 	// bfcp     *BFCPManager
