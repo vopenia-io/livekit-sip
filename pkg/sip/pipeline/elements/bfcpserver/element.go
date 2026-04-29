@@ -126,9 +126,18 @@ func (e *BFCPServer) Constructed(instance *glib.Object) {
 	e.bfcpServer = bfcp.NewServer(config)
 
 	if err := e.bfcpServer.Listen(); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to start BFCP server: %v", err))
-		self.Error("Failed to start BFCP server", err)
-		return
+		fallbackConfig := config
+		fallbackConfig.Address = ":0"
+		fallbackServer := bfcp.NewServer(fallbackConfig)
+		if fallbackServer.Listen() == nil {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to bind BFCP server to %s, but successfully bound to %s. Using fallback address.", addr, fallbackConfig.Address))
+			e.bfcpConfig = fallbackConfig
+			e.bfcpServer = fallbackServer
+		} else {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to start BFCP server: %v", err))
+			self.Error("Failed to start BFCP server", err)
+			return
+		}
 	}
 
 	host, portStr, err := net.SplitHostPort(e.bfcpServer.Addr().String())
