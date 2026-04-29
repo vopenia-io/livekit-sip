@@ -147,9 +147,12 @@ func (sio *SipIo) Create() error {
 		gst.NewCapsFromString("application/x-rtp,media=audio,encoding-name=PCMU,clock-rate=8000"),
 		gst.NewCapsFromString("application/x-rtp,media=audio,encoding-name=PCMA,clock-rate=8000"),
 		gst.NewCapsFromString("application/x-rtp,media=audio,encoding-name=TELEPHONE-EVENT,clock-rate=8000"),
-		makeH264HighCaps(),
-		makeH264MainCaps(),
+		// Prefer Baseline → Main → High. Baseline has no B-frames and tolerates
+		// packet jitter much better; High allows B-frames and CABAC, which break
+		// avdec_h264 when our jitterbuffer reorders or drops late packets.
 		makeH264BaselineCaps(),
+		makeH264MainCaps(),
+		makeH264HighCaps(),
 		gst.NewCapsFromString("application/x-rtp,media=video,packetization-mode=(string)1,encoding-name=H264,clock-rate=90000"),
 		gst.NewCapsFromString("application/x-rtp,media=video,encoding-name=H264,clock-rate=90000"),
 	}

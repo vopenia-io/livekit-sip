@@ -201,6 +201,14 @@ func (t *SipTrack) Init(e *SipBin, self *gst.Bin, media *gstsdp.Media, session *
 		return fmt.Errorf("failed to link RTCP source to RTCP sink: %v", ret)
 	}
 
+	sendRtcpSrc := e.RtpBin.GetRequestPad(fmt.Sprintf("send_rtcp_src_%d", t.Kind))
+	if sendRtcpSrc == nil {
+		return fmt.Errorf("failed to get request pad for outbound RTCP source")
+	}
+	if ret := sendRtcpSrc.Link(t.RtcpSink.GetStaticPad("sink")); ret != gst.PadLinkOK {
+		return fmt.Errorf("failed to link outbound RTCP source to RTCP sink: %v", ret)
+	}
+
 	// recvRtpSrc := e.RtpBin.GetRequestPad(fmt.Sprintf("send_rtp_sink_%d", t.Kind))
 	// if recvRtpSrc == nil {
 	// 	return fmt.Errorf("failed to get request pad for RTP source")

@@ -106,7 +106,8 @@ func (e *H264Video) Constructed(instance *glib.Object) {
 	}
 
 	e.H264Dec, err = gst.NewElementWithProperties("avdec_h264", map[string]interface{}{
-		"max-threads": int(4),
+		"max-threads":    int(4),
+		"output-corrupt": false,
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create avdec_h264 element: %v", err))
