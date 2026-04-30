@@ -1,21 +1,5 @@
 package h264rtppaybin
 
-// /*
-// #cgo pkg-config: gstreamer-1.0 gstreamer-base-1.0
-// #include <gst/gst.h>
-// #include <gst/base/gstbasetransform.h>
-
-// void capsfilter_set_prefer_passthrough(GstElement *capsfilter, gboolean prefer_passthrough) {
-// 	GstBaseTransform *transform = GST_BASE_TRANSFORM(capsfilter);
-// 	if (transform == NULL) {
-// 		g_printerr("Failed to cast capsfilter to GstBaseTransform\n");
-// 		return;
-// 	}
-// 	gst_base_transform_set_prefer_passthrough(transform, prefer_passthrough);
-// }
-// */
-// import "C"
-
 import (
 	"fmt"
 	"weak"
@@ -108,7 +92,6 @@ func (e *H264RtpPayBin) Constructed(instance *glib.Object) {
 		self.Error("Failed to create profile capsfilter", err)
 		return
 	}
-	// C.capsfilter_set_prefer_passthrough((*C.GstElement)(unsafe.Pointer(e.ProfileCapsFilter.Instance())), C.gboolean(1))
 	if _, err := e.ProfileCapsFilter.GetStaticPad("src").Connect("notify::caps", func(pad *gst.Pad, _ *glib.ParamSpec) {
 		self := gst.ToGstBin(wself.Get())
 		e := ewaek.Value()
@@ -117,7 +100,6 @@ func (e *H264RtpPayBin) Constructed(instance *glib.Object) {
 		}
 		caps := pad.CurrentCaps()
 		if caps == nil || caps.IsEmpty() {
-			self.Log(CAT, gst.LevelWarning, "caps are empty")
 			return
 		}
 		e.setMaxResolution(self, caps)

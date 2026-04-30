@@ -186,12 +186,10 @@ func (e *VideoH264) Constructed(instance *glib.Object) {
 		}
 		caps := pad.CurrentCaps()
 		if caps == nil || caps.IsEmpty() {
-			self.Log(CAT, gst.LevelWarning, "RTP codec filter sink caps are empty")
 			return
 		}
 		bitrateStr, err := caps.GetStructureAt(0).GetString("max-br")
 		if err != nil {
-			self.Log(CAT, gst.LevelWarning, "RTP codec filter sink caps missing max-br")
 			return
 		}
 		bitrate, err := strconv.Atoi(bitrateStr)
