@@ -318,6 +318,14 @@ func (s *SrcTrack) pushRtcp(self *gst.Bin, rtcpPad *gst.Pad, pkt rtcp.Packet) {
 
 func (s *SrcTrack) onRtcp(self *gst.Bin, rtcpPad *gst.Pad) func(p rtcp.Packet) {
 	return func(p rtcp.Packet) {
+		switch p.(type) {
+		case *rtcp.Goodbye:
+			self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Sending RTCP BYE for track %s(%d) of participant %s", s.Pub.Source(), s.Track.SSRC(), s.Rp.Identity()))
+		case *rtcp.PictureLossIndication, *rtcp.FullIntraRequest:
+			self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Sending RTCP PLI/FIR for track %s(%d) of participant %s", s.Pub.Source(), s.Track.SSRC(), s.Rp.Identity()))
+		default:
+			self.Log(CAT, gst.LevelTrace, fmt.Sprintf("Pushing RTCP packet: %T:\n%+v", p, p))
+		}
 
 		if _, ok := p.(*rtcp.Goodbye); ok {
 			return

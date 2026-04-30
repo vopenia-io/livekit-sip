@@ -242,8 +242,8 @@ func TestIoLivekit_TwoPlayAudio(t *testing.T) {
 	t.Logf("first play-wav-fd: duration=%s rtp_buffers=%d", dur1, count1)
 	dumpDot(t, pipeline, "02-after-first-play")
 
-	t.Log("waiting 5s between plays")
-	time.Sleep(5 * time.Second)
+	t.Log("waiting 2s between plays")
+	time.Sleep(2 * time.Second)
 	dumpDot(t, pipeline, "03-before-second-play")
 
 	t.Log("emitting second play-wav-fd")
@@ -256,6 +256,8 @@ func TestIoLivekit_TwoPlayAudio(t *testing.T) {
 	count2 := rtpBufferCount.Load() - count1
 	t.Logf("second play-wav-fd: duration=%s rtp_buffers=%d", dur2, count2)
 	dumpDot(t, pipeline, "04-after-second-play")
+
+	time.Sleep(1 * time.Second)
 
 	if err := pipeline.SetState(gst.StateNull); err != nil {
 		t.Fatal("failed to set pipeline to NULL:", err)
