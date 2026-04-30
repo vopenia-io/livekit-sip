@@ -85,6 +85,14 @@ func (e *SipBin) ClassInit(klass *glib.ObjectClass) {
 		glib.TYPE_STRING,
 	)
 
+	gst.SignalNew(
+		class.Type(),
+		"toggle-screenshare",
+		gst.SignalRunLast,
+		glib.TYPE_NONE,
+		glib.TYPE_BOOLEAN,
+	)
+
 	// request signals
 	SignalSendOfferSdpID = gst.SignalNew(
 		class.Type(),
@@ -189,6 +197,19 @@ func (e *SipBin) InstanceInit(instance *glib.Object) {
 	}); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to connect ack-sdp signal: %v", err))
 		self.Error("failed to connect ack-sdp signal", err)
+		return
+	}
+
+	if _, err := self.Connect("toggle-screenshare", func(instance *gst.Element, enable bool) {
+		e := eweak.Value()
+		if e == nil {
+			return
+		}
+		self := gst.ToGstBin(instance)
+		e.ToggleScreenshare(self, enable)
+	}); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to connect toggle-screenshare signal: %v", err))
+		self.Error("failed to connect toggle-screenshare signal", err)
 		return
 	}
 
@@ -382,7 +403,6 @@ func (e *SipBin) requestNewPadSendRtpSink(self *gst.Bin, templ *gst.PadTemplate,
 		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Created new RTP sink pad for camera track: %s", gpad.GetName()))
 	case livekit.TrackSource_SCREEN_SHARE:
 		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Created new RTP sink pad for screen share track: %s", gpad.GetName()))
-		e.bfcpStartScreenshare(self)
 	case livekit.TrackSource_MICROPHONE:
 		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Created new RTP sink pad for microphone track: %s", gpad.GetName()))
 	case livekit.TrackSource_SCREEN_SHARE_AUDIO:
@@ -453,7 +473,6 @@ func (e *SipBin) releasePadSendRtpSink(self *gst.Bin, pad *gst.Pad) {
 		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Released RTP sink pad for camera track: %s", name))
 	case livekit.TrackSource_SCREEN_SHARE:
 		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Released RTP sink pad for screen share track: %s", name))
-		e.bfcpStopScreenshare(self)
 	case livekit.TrackSource_MICROPHONE:
 		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Released RTP sink pad for microphone track: %s", name))
 	case livekit.TrackSource_SCREEN_SHARE_AUDIO:

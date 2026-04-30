@@ -167,6 +167,12 @@ func (c *IOManager) handleLivekitCompositorPadRemoved(_ *gst.Element, pad *gst.P
 	c.log.Infow("Released request pad on SIP bin", "pad", destPad.GetName())
 }
 
+func (c *IOManager) toggleScreenshare(e *gst.Element, hasScreenshare bool) {
+	if _, err := c.pipeline.SipIo.SipBin.Emit("toggle-screenshare", hasScreenshare); err != nil {
+		c.log.Errorw("Failed to emit toggle-screenshare signal", err)
+	}
+}
+
 func (c *IOManager) Link() error {
 	cweak := weak.Make(c)
 
@@ -201,6 +207,16 @@ func (c *IOManager) Link() error {
 		}
 		ptr.handleLivekitCompositorPadRemoved(e, pad)
 	})
+
+	if _, err := c.LivekitController.Connect("has-screenshare", func(e *gst.Element, hasScreenshare bool) {
+		ptr := cweak.Value()
+		if ptr == nil {
+			return
+		}
+		ptr.toggleScreenshare(e, hasScreenshare)
+	}); err != nil {
+		return fmt.Errorf("failed to connect to has-screenshare signal: %w", err)
+	}
 
 	return nil
 }

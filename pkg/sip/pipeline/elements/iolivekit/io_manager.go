@@ -39,6 +39,34 @@ var properties = []*glib.ParamSpec{
 		false,
 		glib.ParameterWritable|glib.ParameterConstructOnly,
 	),
+	glib.NewBoolParam(
+		"microphone",
+		"Microphone",
+		"Whether to subscribe to microphone tracks",
+		false,
+		glib.ParameterWritable,
+	),
+	glib.NewBoolParam(
+		"camera",
+		"Camera",
+		"Whether to subscribe to camera tracks",
+		false,
+		glib.ParameterWritable,
+	),
+	glib.NewBoolParam(
+		"screenshare",
+		"Screen Share",
+		"Whether to subscribe to screenshare tracks",
+		false,
+		glib.ParameterWritable,
+	),
+	glib.NewBoolParam(
+		"screenshare-audio",
+		"Screen Share Audio",
+		"Whether to subscribe to screenshare audio tracks",
+		false,
+		glib.ParameterWritable,
+	),
 }
 
 func (e *IoManagerLivekit) SetProperty(instance *glib.Object, id uint, value *glib.Value) {
@@ -89,6 +117,30 @@ func (e *IoManagerLivekit) SetProperty(instance *glib.Object, id uint, value *gl
 			return
 		}
 		e.nvidia = val
+	case "microphone":
+		self.Log(CAT, gst.LevelDebug, "Setting microphone property")
+		if err := e.Fallback.SetPropertyValue("microphone", value); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error setting microphone property on fallback element: %v", err))
+		}
+		self.Log(CAT, gst.LevelDebug, "Finished setting microphone property")
+	case "camera":
+		self.Log(CAT, gst.LevelDebug, "Setting camera property")
+		if err := e.Fallback.SetPropertyValue("camera", value); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error setting camera property on fallback element: %v", err))
+		}
+		self.Log(CAT, gst.LevelDebug, "Finished setting camera property")
+	case "screenshare":
+		self.Log(CAT, gst.LevelDebug, "Setting screenshare property")
+		if err := e.Fallback.SetPropertyValue("screenshare", value); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error setting screenshare property on fallback element: %v", err))
+		}
+		self.Log(CAT, gst.LevelDebug, "Finished setting screenshare property")
+	case "screenshare-audio":
+		self.Log(CAT, gst.LevelDebug, "Setting screenshare-audio property")
+		if err := e.Fallback.SetPropertyValue("screenshare-audio", value); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error setting screenshare-audio property on fallback element: %v", err))
+		}
+		self.Log(CAT, gst.LevelDebug, "Finished setting screenshare-audio property")
 	default:
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown property ID %d", id))
 	}

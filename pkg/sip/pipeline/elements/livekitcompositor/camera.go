@@ -11,15 +11,7 @@ import (
 	"github.com/samber/lo"
 )
 
-type LivekitCompositorCameraFallback interface {
-	Create(e *LivekitCompositor, self *gst.Bin) (*gst.Pad, error)
-	Sync(e *LivekitCompositor, self *gst.Bin)
-	Cleanup(e *LivekitCompositor, self *gst.Bin)
-}
-
 type LivekitCompositorCamera struct {
-	Fallback *VideoFallback
-
 	Compositor *gst.Element
 	Filter     *gst.Element
 
@@ -38,13 +30,8 @@ func (e *LivekitCompositor) initCamera(self *gst.Bin) error {
 	} else {
 		e.LivekitCompositorCamera.Format = "video/x-raw"
 	}
-	e.LivekitCompositorCamera.Fallback = &VideoFallback{}
 
-	fallbackPad, err := e.LivekitCompositorCamera.Fallback.Create(e, self)
-	if err != nil {
-		return err
-	}
-
+	var err error
 	if e.nvidia {
 		e.LivekitCompositorCamera.Compositor, err = gst.NewElementWithProperties("cudacompositor", map[string]interface{}{
 			"force-live":           true,
@@ -54,7 +41,7 @@ func (e *LivekitCompositor) initCamera(self *gst.Bin) error {
 		e.LivekitCompositorCamera.Compositor, err = gst.NewElementWithProperties("compositor", map[string]interface{}{
 			"force-live":           true,
 			"ignore-inactive-pads": true,
-			"background":           int(1), // black
+			"background": int(1), // black
 		})
 	}
 	if err != nil {
@@ -78,24 +65,20 @@ func (e *LivekitCompositor) initCamera(self *gst.Bin) error {
 		return err
 	}
 
-	sink0 := e.LivekitCompositorCamera.Compositor.GetRequestPad("sink_0")
-	if sink0 == nil {
-		return fmt.Errorf("failed to request new sink pad from compositor")
-	}
-	if err := errors.Join(
-		sink0.SetProperty("xpos", 0),
-		sink0.SetProperty("ypos", 0),
-		sink0.SetProperty("width", int(e.videoWidth)),
-		sink0.SetProperty("height", int(e.videoHeight)),
-		sink0.SetProperty("max-last-buffer-repeat", uint64(math.MaxUint64)),
-		sink0.SetProperty("repeat-after-eos", true),
-	); err != nil {
-		return fmt.Errorf("failed to set position and size for compositor sink pad for fallback video: %w", err)
-	}
-
-	if ret := fallbackPad.Link(sink0); ret != gst.PadLinkOK {
-		return fmt.Errorf("failed to link fallback filter to patchbay: %v", ret)
-	}
+	// sink0 := e.LivekitCompositorCamera.Compositor.GetRequestPad("sink_0")
+	// if sink0 == nil {
+	// 	return fmt.Errorf("failed to request new sink pad from compositor")
+	// }
+	// if err := errors.Join(
+	// 	sink0.SetProperty("xpos", 0),
+	// 	sink0.SetProperty("ypos", 0),
+	// 	sink0.SetProperty("width", int(e.videoWidth)),
+	// 	sink0.SetProperty("height", int(e.videoHeight)),
+	// 	sink0.SetProperty("max-last-buffer-repeat", uint64(math.MaxUint64)),
+	// 	sink0.SetProperty("repeat-after-eos", true),
+	// ); err != nil {
+	// 	return fmt.Errorf("failed to set position and size for compositor sink pad for fallback video: %w", err)
+	// }
 
 	class := gst.ToElementClass(self.Class())
 	gpad := gst.NewGhostPadFromTemplate(fmt.Sprintf("src_%d", livekit.TrackSource_CAMERA), e.LivekitCompositorCamera.Filter.GetStaticPad("src"), class.GetPadTemplate("src_%u"))
@@ -107,10 +90,6 @@ func (e *LivekitCompositor) initCamera(self *gst.Bin) error {
 	}
 	if !self.AddPad(gpad.Pad) {
 		return fmt.Errorf("failed to add ghost pad for camera source to bin")
-	}
-
-	if err := e.LivekitCompositorCamera.Fallback.Sync(); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync fallback elements with parent: %v", err))
 	}
 
 	if !e.LivekitCompositorCamera.Compositor.SyncStateWithParent() {
@@ -207,6 +186,8 @@ func (e *LivekitCompositor) releaseCameraSinkPad(self *gst.Bin, gpad *gst.GhostP
 	}
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Released camera sink pad %s", gpad.GetName()))
+
+	e.cleanupCamera(self)
 }
 
 func (e *LivekitCompositor) findPadForParticipant(self *gst.Bin, sid string, kind livekit.TrackSource) (*gst.Pad, livekittracks.TrackSourceInfo, bool) {
@@ -324,4 +305,32 @@ func (e *LivekitCompositor) cleanupCamera(self *gst.Bin) {
 	if e.LivekitCompositorCamera == nil {
 		return
 	}
+
+	sinks, err := e.LivekitCompositorCamera.Compositor.GetSinkPads()
+	if err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to get sink pads while handling pad-removed signal: %v", err))
+		return
+	}
+	if len(sinks) > 0 {
+		return
+	}
+
+	if err := e.LivekitCompositorCamera.Compositor.SetState(gst.StateNull); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set camera compositor state to null during cleanup: %v", err))
+	}
+	if err := e.LivekitCompositorCamera.Filter.SetState(gst.StateNull); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set camera filter state to null during cleanup: %v", err))
+	}
+	if err := self.RemoveMany(e.LivekitCompositorCamera.Compositor, e.LivekitCompositorCamera.Filter); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove camera compositor and filter from bin during cleanup: %v", err))
+	}
+
+	if pad := self.GetStaticPad(fmt.Sprintf("src_%d", livekit.TrackSource_CAMERA)); pad != nil {
+		if !self.RemovePad(pad) {
+			self.Log(CAT, gst.LevelWarning, "Failed to remove ghost pad for camera source from bin during cleanup")
+		}
+	}
+
+	e.LivekitCompositorCamera = nil
+	self.Log(CAT, gst.LevelInfo, "Cleaned up camera compositor")
 }

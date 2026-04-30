@@ -16,7 +16,9 @@ type IoManagerLivekit struct {
 	inMu  sync.Mutex
 	outMu sync.Mutex
 
-	Compositor  *gst.Element
+	Compositor *gst.Element
+	Fallback   *gst.Element
+
 	videoWidth  uint
 	videoHeight uint
 	nvidia      bool
@@ -101,6 +103,14 @@ func (e *IoManagerLivekit) ClassInit(klass *glib.ObjectClass) {
 		gst.TypeStructure, // TrackSourceInfo
 	)
 
+	gst.SignalNew(
+		class.Type(),
+		"has-screenshare",
+		gst.SignalRunLast,
+		glib.TYPE_NONE,
+		glib.TYPE_BOOLEAN,
+	)
+
 	class.AddPadTemplate(gst.NewPadTemplate(
 		"recv_rtp_sink_%u_%u_%u",
 		gst.PadDirectionSink,
@@ -175,7 +185,40 @@ func (e *IoManagerLivekit) Constructed(instance *glib.Object) {
 		return
 	}
 
-	if err := self.Add(e.Compositor); err != nil {
+	e.Fallback, err = gst.NewElementWithProperties("trackfallback", map[string]interface{}{
+		"video-width":  e.videoWidth,
+		"video-height": e.videoHeight,
+		"nvidia":       e.nvidia,
+	})
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create trackfallback element: %v", err))
+		self.Error("Failed to create trackfallback element", err)
+		return
+	}
+	if _, err := e.Fallback.Connect("pad-added", func(instance *gst.Element, pad *gst.Pad) {
+		e := eweak.Value()
+		self := gst.ToGstBin(wself.Get())
+		if e != nil && self != nil && self.Instance() != nil {
+			e.fallbackPadAdded(self, pad)
+		}
+	}); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to connect to pad-added signal of track_fallback: %v", err))
+		self.Error("Failed to connect to pad-added signal of track_fallback", err)
+		return
+	}
+	if _, err := e.Fallback.Connect("pad-removed", func(instance *gst.Element, pad *gst.Pad) {
+		e := eweak.Value()
+		self := gst.ToGstBin(wself.Get())
+		if e != nil && self != nil && self.Instance() != nil {
+			e.fallbackPadRemoved(self, pad)
+		}
+	}); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to connect to pad-removed signal of track_fallback: %v", err))
+		self.Error("Failed to connect to pad-removed signal of track_fallback", err)
+		return
+	}
+
+	if err := self.AddMany(e.Compositor, e.Fallback); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add livekit_compositor element to SIP IO element: %v", err))
 		self.Error("Failed to add livekit_compositor element to SIP IO element", err)
 		return
@@ -735,6 +778,77 @@ func (e *IoManagerLivekit) releasePadScreenShareIn(self *gst.Bin, _ *gst.GhostPa
 }
 
 func (e *IoManagerLivekit) compositorPadAdded(self *gst.Bin, pad *gst.Pad) {
+	templ := pad.Template()
+	if templ == nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Pad %s has no template, cannot determine type", pad.GetName()))
+		return
+	}
+
+	if templ.Name() != "src_%u" {
+		return
+	}
+
+	var session int
+	if _, err := fmt.Sscanf(pad.GetName(), "src_%d", &session); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to parse compositor pad name %s: %v", pad.GetName(), err))
+		return
+	}
+
+	sink := e.Fallback.GetRequestPad(fmt.Sprintf("sink_%d", session))
+	if sink == nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get request pad from fallback for compositor pad %s", pad.GetName()))
+		return
+	}
+
+	if ret := pad.Link(sink); ret != gst.PadLinkOK {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link compositor pad %s to fallback sink pad: %v", pad.GetName(), ret))
+		return
+	}
+
+	if livekit.TrackSource(session) == livekit.TrackSource_SCREEN_SHARE {
+		if _, err := self.Emit("has-screenshare", true); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to emit has-screenshare signal for compositor pad %s: %v", pad.GetName(), err))
+		}
+	}
+
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Linked compositor pad %s to fallback sink pad", pad.GetName()))
+}
+
+func (e *IoManagerLivekit) compositorPadRemoved(self *gst.Bin, pad *gst.Pad) {
+	templ := pad.Template()
+	if templ == nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Pad %s has no template, cannot determine type", pad.GetName()))
+		return
+	}
+
+	if templ.Name() != "src_%u" {
+		return
+	}
+
+	var session int
+	if _, err := fmt.Sscanf(pad.GetName(), "src_%d", &session); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to parse compositor pad name %s: %v", pad.GetName(), err))
+		return
+	}
+
+	sink := e.Fallback.GetStaticPad(fmt.Sprintf("sink_%d", session))
+	if sink == nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get static pad from fallback for compositor pad %s", pad.GetName()))
+		return
+	}
+
+	e.Fallback.ReleaseRequestPad(sink)
+
+	if livekit.TrackSource(session) == livekit.TrackSource_SCREEN_SHARE {
+		if _, err := self.Emit("has-screenshare", false); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to emit has-screenshare signal for compositor pad %s: %v", pad.GetName(), err))
+		}
+	}
+
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Released fallback sink pad for compositor pad %s", pad.GetName()))
+}
+
+func (e *IoManagerLivekit) fallbackPadAdded(self *gst.Bin, pad *gst.Pad) {
 	pname := pad.GetName()
 
 	if !strings.HasPrefix(pname, "src_") {
@@ -1012,7 +1126,7 @@ func (e *IoManagerLivekit) padAddedScreenShareOut(self *gst.Bin, pad *gst.Pad, n
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Successfully added screen share output pad %s", pad.GetName()))
 }
 
-func (e *IoManagerLivekit) compositorPadRemoved(self *gst.Bin, pad *gst.Pad) {
+func (e *IoManagerLivekit) fallbackPadRemoved(self *gst.Bin, pad *gst.Pad) {
 	pname := pad.GetName()
 
 	if !strings.HasPrefix(pname, "src_") {
@@ -1021,7 +1135,7 @@ func (e *IoManagerLivekit) compositorPadRemoved(self *gst.Bin, pad *gst.Pad) {
 
 	var session int
 	if _, err := fmt.Sscanf(pname, "src_%d", &session); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to parse compositor pad name %s: %v", pname, err))
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to parse fallback pad name %s: %v", pname, err))
 		return
 	}
 

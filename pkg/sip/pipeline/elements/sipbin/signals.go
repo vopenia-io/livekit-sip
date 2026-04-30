@@ -31,6 +31,14 @@ func (e *SipBin) OnAckSDP(self *gst.Bin, b []byte) error {
 	return nil
 }
 
+func (e *SipBin) ToggleScreenshare(self *gst.Bin, enable bool) {
+	if enable {
+		e.bfcpStartScreenshare(self)
+	} else {
+		e.bfcpStopScreenshare(self)
+	}
+}
+
 func (e *SipBin) emitAvailableMedia(self *gst.Bin) {
 	camera := e.Tracks[livekit.TrackSource_CAMERA] != nil
 	microphone := e.Tracks[livekit.TrackSource_MICROPHONE] != nil

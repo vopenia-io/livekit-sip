@@ -60,6 +60,7 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/samplewriter"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipbin"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipcompositor"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/trackfallback"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audioopus"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audiopcma"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audiopcmu"
@@ -104,6 +105,10 @@ func init() {
 
 	if !livekitbin.Register() {
 		panic("Failed to register livekitbin")
+	}
+
+	if !trackfallback.Register() {
+		panic("Failed to register trackfallback")
 	}
 
 	if !iolivekit.Register() {
