@@ -296,5 +296,19 @@ func (e *SipBin) makeTrackMedia(self *gst.Bin, track *SipTrack, caps *gst.Caps) 
 		}
 	}
 
+	if !track.recv && !track.send {
+		if ret := media.AddAttribute("inactive", ""); ret != gstsdp.SDPResultOk {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to add inactive attribute to media: %v", ret))
+		}
+	} else if track.recv && !track.send {
+		if ret := media.AddAttribute("recvonly", ""); ret != gstsdp.SDPResultOk {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to add direction attribute to media: %v", ret))
+		}
+	} else if !track.recv && track.send {
+		if ret := media.AddAttribute("sendonly", ""); ret != gstsdp.SDPResultOk {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to add direction attribute to media: %v", ret))
+		}
+	}
+
 	return media, nil
 }

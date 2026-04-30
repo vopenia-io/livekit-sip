@@ -29,6 +29,8 @@ type SipTrack struct {
 	initialized bool
 	Idx         int
 	Kind        livekit.TrackSource
+	recv        bool
+	send        bool
 	Proto       string
 	Label       string
 	Caps        *gst.Caps
@@ -93,10 +95,10 @@ func (e *SipBin) NewTrack(self *gst.Bin, idx int, kind livekit.TrackSource, prot
 	rtpSink, err := gst.NewElementWithProperties("udpsink", map[string]interface{}{
 		"socket":       grtpSocket,
 		"close-socket": false,
-		"clients":      "",
-		"async":        false,
-		"sync":         false,
-		"qos":          false,
+		// "clients":      "",
+		"async": false,
+		"sync":  false,
+		"qos":   false,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create RTP sink element: %w", err)
@@ -105,10 +107,10 @@ func (e *SipBin) NewTrack(self *gst.Bin, idx int, kind livekit.TrackSource, prot
 	rtcpSink, err := gst.NewElementWithProperties("udpsink", map[string]interface{}{
 		"socket":       grtcpSocket,
 		"close-socket": false,
-		"clients":      "",
-		"async":        false,
-		"sync":         false,
-		"qos":          false,
+		// "clients":      "",
+		"async": false,
+		"sync":  false,
+		"qos":   false,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create RTCP sink element: %w", err)
@@ -118,11 +120,6 @@ func (e *SipBin) NewTrack(self *gst.Bin, idx int, kind livekit.TrackSource, prot
 	if err != nil {
 		return nil, fmt.Errorf("failed to create RTP filter element: %w", err)
 	}
-
-	// rtpCut, err := gst.NewElementWithProperties("media-cut", map[string]interface{}{})
-	// if err != nil {
-	// 	return nil, fmt.Errorf("failed to create RTP cut element: %w", err)
-	// }
 
 	if err := self.AddMany(rtpSrc, rtcpSrc, rtpSink, rtcpSink, rtpFilter); err != nil {
 		return nil, fmt.Errorf("failed to add track elements to bin: %w", err)
@@ -142,6 +139,29 @@ func (e *SipBin) NewTrack(self *gst.Bin, idx int, kind livekit.TrackSource, prot
 		RtpFilter:   rtpFilter,
 		// RtpCut:      rtpCut,
 	}, nil
+}
+
+func (t *SipTrack) parseDirection(media *gstsdp.Media) {
+	t.recv = true
+	t.send = true
+	if dir := media.GetAttributeVal("direction"); dir != "" {
+		switch dir {
+		case "sendonly":
+			t.recv = false
+		case "recvonly":
+			t.send = false
+		case "inactive":
+			t.recv = false
+			t.send = false
+		}
+	} else if media.HasAttribute("sendonly") {
+		t.recv = false
+	} else if media.HasAttribute("recvonly") {
+		t.send = false
+	} else if media.HasAttribute("inactive") {
+		t.recv = false
+		t.send = false
+	}
 }
 
 func (t *SipTrack) Init(e *SipBin, self *gst.Bin, media *gstsdp.Media, session *gstsdp.Message, caps *gst.Caps) error {
@@ -201,14 +221,13 @@ func (t *SipTrack) Init(e *SipBin, self *gst.Bin, media *gstsdp.Media, session *
 		return fmt.Errorf("failed to link RTCP source to RTCP sink: %v", ret)
 	}
 
-	// recvRtpSrc := e.RtpBin.GetRequestPad(fmt.Sprintf("send_rtp_sink_%d", t.Kind))
-	// if recvRtpSrc == nil {
-	// 	return fmt.Errorf("failed to get request pad for RTP source")
-	// }
-
-	// if ret := t.RtpFilter.GetStaticPad("src").Link(recvRtpSrc); ret != gst.PadLinkOK {
-	// 	return fmt.Errorf("failed to link RTP filter to RTP source: %v", ret)
-	// }
+	sendRtcpSrc := e.RtpBin.GetRequestPad(fmt.Sprintf("send_rtcp_src_%d", t.Kind))
+	if sendRtcpSrc == nil {
+		return fmt.Errorf("failed to get request pad for RTCP source")
+	}
+	if ret := sendRtcpSrc.Link(t.RtcpSink.GetStaticPad("sink")); ret != gst.PadLinkOK {
+		return fmt.Errorf("failed to link RTCP source to RTCP sink: %v", ret)
+	}
 
 	var errs []error
 	for _, elem := range [](*gst.Element){t.RtpSrc, t.RtcpSrc, t.RtpSink, t.RtcpSink, t.RtpFilter} {
@@ -307,7 +326,9 @@ func (e *SipBin) NewBfcpTrack(self *gst.Bin, idx int, proto string) (*BfcpTrack,
 		if self == nil || self.Instance() == nil || e == nil {
 			return
 		}
-		e.bfcpClearScreenshare(self)
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		e.clearTrack(self, livekit.TrackSource_SCREEN_SHARE)
 	}); err != nil {
 		return nil, fmt.Errorf("failed to connect on-floor-released signal: %w", err)
 	}

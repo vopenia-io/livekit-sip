@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"weak"
 
@@ -46,7 +47,7 @@ func (e *SipBin) handleOfferSdp(self *gst.Bin, offerData []byte) ([]byte, error)
 
 	medias := make([]*gstsdp.Media, offer.MediasLen())
 	for i, media := range offer.Medias() {
-		if media.GetPort() == 0 || media.GetAttributeVal("direction") == "inactive" {
+		if media.GetPort() == 0 {
 			self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Media %d is disabled in answer, skipping", i))
 			continue
 		}
@@ -58,6 +59,7 @@ func (e *SipBin) handleOfferSdp(self *gst.Bin, offerData []byte) ([]byte, error)
 					continue
 				} else {
 					self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Received duplicate media for track source %d, media index %d", kind, i))
+					e.Tracks[kind].parseDirection(media)
 					localMedia, err := e.makeTrackMedia(self, e.Tracks[kind], e.Tracks[kind].Caps)
 					if err != nil {
 						self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to make answer media for duplicate media index %d: %v", i, err))
@@ -78,6 +80,7 @@ func (e *SipBin) handleOfferSdp(self *gst.Bin, offerData []byte) ([]byte, error)
 				self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to create track for media %d: %v", i, err))
 				continue
 			}
+			track.parseDirection(media)
 			if ret := media.SetProto(track.Proto); ret != gstsdp.SDPResultOk {
 				self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set proto on media %d: %v", i, ret))
 				continue
@@ -164,6 +167,16 @@ func (e *SipBin) handleOfferSdp(self *gst.Bin, offerData []byte) ([]byte, error)
 		}
 	}
 
+	for i, track := range e.Tracks {
+		if track != nil && (track.Idx >= len(medias) || medias[track.Idx].GetPort() == 0) {
+			self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Cleaning up track for media index %d because it is disabled", i))
+			if err := e.CleanupTrack(self, track); err != nil {
+				self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to cleanup track for media index %d: %v", i, err))
+			}
+			e.Tracks[i] = nil
+		}
+	}
+
 	if answer.MediasLen() != offer.MediasLen() { // if you see that, then i did something very wrong in the code above
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Number of media in answer does not match offer: %d vs %d", answer.MediasLen(), offer.MediasLen()))
 		self.Error("number of media in answer does not match offer", fmt.Errorf("%d vs %d", answer.MediasLen(), offer.MediasLen()))
@@ -181,9 +194,16 @@ func (e *SipBin) handleOfferSdp(self *gst.Bin, offerData []byte) ([]byte, error)
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Generated answer SDP:\n%s", answerData))
 
+	self.Log(CAT, gst.LevelInfo, "Emitting available media")
 	e.emitAvailableMedia(self)
 
+	self.Log(CAT, gst.LevelInfo, "Scheduling early reinvite if needed")
 	e.earlyReinvite(self)
+
+	self.Log(CAT, gst.LevelInfo, "Scheduling track cleanup for inactive tracks")
+	e.clearTracks(self)
+
+	self.Log(CAT, gst.LevelInfo, "Offer SDP processing complete")
 
 	return []byte(answerData), nil
 }
@@ -222,7 +242,7 @@ func (e *SipBin) handleAnswerSdp(self *gst.Bin, answerData []byte) error {
 			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Received more media than expected in answer: media index %d exceeds expected media count %d, disabling media", i, len(e.Medias)))
 			continue
 		}
-		if media.GetPort() == 0 || media.GetAttributeVal("direction") == "inactive" {
+		if media.GetPort() == 0 {
 			self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Media %d is disabled in answer, skipping", i))
 			continue
 		}
@@ -237,7 +257,7 @@ func (e *SipBin) handleAnswerSdp(self *gst.Bin, answerData []byte) error {
 				self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to select caps for media %d: %v", i, err))
 				continue
 			}
-
+			e.Tracks[kind].parseDirection(media)
 			localMedia, err := e.makeTrackMedia(self, e.Tracks[kind], caps)
 			if err != nil {
 				self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to make answer media for media index %d: %v", i, err))
@@ -282,24 +302,36 @@ func (e *SipBin) handleAnswerSdp(self *gst.Bin, answerData []byte) error {
 		}
 	}
 
-	if len(e.Medias) > len(medias) {
-		tracks := lo.Filter(e.Tracks[:], func(t *SipTrack, _ int) bool { return t != nil && t.Idx >= len(medias) })
-		var errs []error
-		for _, track := range tracks {
+	for i, track := range e.Tracks {
+		if track != nil && (track.Idx >= len(medias) || medias[track.Idx].GetPort() == 0) {
+			self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Cleaning up track for media index %d because it is disabled in answer", i))
 			if err := e.CleanupTrack(self, track); err != nil {
-				errs = append(errs, err)
+				self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to cleanup track for media index %d: %v", i, err))
 			}
-		}
-		if len(errs) > 0 {
-			return fmt.Errorf("failed to cleanup tracks: %v", errs)
+			e.Tracks[i] = nil
 		}
 	}
+
+	// if len(e.Medias) > len(medias) {
+	// 	tracks := lo.Filter(e.Tracks[:], func(t *SipTrack, _ int) bool { return t != nil && t.Idx >= len(medias) })
+	// 	var errs []error
+	// 	for _, track := range tracks {
+	// 		if err := e.CleanupTrack(self, track); err != nil {
+	// 			errs = append(errs, err)
+	// 		}
+	// 	}
+	// 	if len(errs) > 0 {
+	// 		return fmt.Errorf("failed to cleanup tracks: %v", errs)
+	// 	}
+	// }
 
 	e.Medias = medias
 
 	self.Log(CAT, gst.LevelInfo, "Answer SDP processed successfully")
 
 	e.emitAvailableMedia(self)
+
+	e.clearTracks(self)
 
 	return nil
 }
@@ -444,7 +476,7 @@ func disableMedia(media *gstsdp.Media, answer *gstsdp.Message) (*gstsdp.Media, e
 		i--
 		attr := newMedia.GetAttribute(i)
 		switch attr.Key() {
-		case "direction", "recvonly", "sendrecv", "sendonly":
+		case "direction", "recvonly", "sendrecv", "sendonly", "inactive":
 			if ret := newMedia.RemoveAttribute(i); ret != gstsdp.SDPResultOk {
 				return nil, fmt.Errorf("could not remove attribute %s from media %s: %v", attr.Key(), media.GetMedia(), ret)
 			}
@@ -561,5 +593,53 @@ func (e *SipBin) earlyReinvite(self *gst.Bin) {
 		}
 		e.transaction.SetPending(TransactionPendingKindAnswer)
 		self.Log(CAT, gst.LevelInfo, "Early reinvite offer sent successfully")
+	}()
+}
+
+func (e *SipBin) clearTracks(self *gst.Bin) {
+	var toClear []*SipTrack
+	for _, track := range e.Tracks {
+		if track != nil && !track.recv {
+			toClear = append(toClear, track)
+		}
+	}
+
+	if len(toClear) <= 0 {
+		return
+	}
+
+	transactionID := e.transactionID.Load() + 1
+
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		unlock, err := e.transaction.WaitReady()
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to start SIP transaction for sending offer: %v", err))
+			return
+		}
+		defer unlock()
+
+		e.mu.Lock()
+		defer e.mu.Unlock()
+
+		if e.transactionID.Load() != transactionID {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Not cleaning up tracks because transaction ID has changed: current %d, expected %d", e.transactionID.Load(), transactionID))
+			return
+		}
+		e.transactionID.Add(1)
+
+		wg := sync.WaitGroup{}
+		for _, track := range toClear {
+			if track == nil {
+				continue
+			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				e.clearTrack(self, track.Kind)
+			}()
+		}
+		wg.Wait()
 	}()
 }

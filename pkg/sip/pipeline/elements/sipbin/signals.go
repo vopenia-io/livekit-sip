@@ -40,11 +40,13 @@ func (e *SipBin) ToggleScreenshare(self *gst.Bin, enable bool) {
 }
 
 func (e *SipBin) emitAvailableMedia(self *gst.Bin) {
-	camera := e.Tracks[livekit.TrackSource_CAMERA] != nil
-	microphone := e.Tracks[livekit.TrackSource_MICROPHONE] != nil
-	screenShare := e.Tracks[livekit.TrackSource_SCREEN_SHARE] != nil
-	screenShareAudio := e.Tracks[livekit.TrackSource_SCREEN_SHARE_AUDIO] != nil
+	camera := e.Tracks[livekit.TrackSource_CAMERA] != nil && e.Tracks[livekit.TrackSource_CAMERA].send
+	microphone := e.Tracks[livekit.TrackSource_MICROPHONE] != nil && e.Tracks[livekit.TrackSource_MICROPHONE].send
+	screenShare := e.Tracks[livekit.TrackSource_SCREEN_SHARE] != nil && e.Tracks[livekit.TrackSource_SCREEN_SHARE].send
+	screenShareAudio := e.Tracks[livekit.TrackSource_SCREEN_SHARE_AUDIO] != nil && e.Tracks[livekit.TrackSource_SCREEN_SHARE_AUDIO].send
 
+	e.mu.Unlock()
+	defer e.mu.Lock()
 	if _, err := self.Emit("available-media", camera, microphone, screenShare, screenShareAudio); err != nil {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to emit available-media signal: %v", err))
 	}
@@ -140,42 +142,6 @@ func (e *SipBin) onRtpBinPadAddedSendRtpSrc(self *gst.Bin, pad *gst.Pad) {
 	}
 
 	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Linked new pad %s from rtpbin to RTP sink for track source %d", pad.GetName(), kind))
-
-	if e.RtpBin.GetStaticPad(fmt.Sprintf("send_rtcp_src_%d", session)) != nil {
-		return
-	}
-
-	e.wg.Add(1)
-	go func() {
-		defer e.wg.Done()
-
-		e.mu.Lock()
-		defer e.mu.Unlock()
-
-		if e.RtpBin == nil {
-			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("RtpBin is nil when trying to link RTCP pad for new RTP pad %s", pad.GetName()))
-			return
-		}
-
-		ti := e.Tracks[kind]
-		if ti == nil || ti.RtcpSink == nil {
-			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Track info for track source %d not found when linking RTCP pad after new RTP pad %s added", kind, pad.GetName()))
-			return
-		}
-
-		rtcpPad := e.RtpBin.GetRequestPad(fmt.Sprintf("send_rtcp_src_%d", session))
-		if rtcpPad == nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get request pad for RTCP source for track source %d", kind))
-			return
-		}
-		if ret := rtcpPad.Link(ti.RtcpSink.GetStaticPad("sink")); ret != gst.PadLinkOK {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link RTCP pad %s to RTCP sink for track source %d: %v", rtcpPad.GetName(), kind, ret))
-			self.Error(fmt.Sprintf("Failed to link RTCP pad %s to RTCP sink for track source %d", rtcpPad.GetName(), kind), fmt.Errorf("link failed: %v", ret))
-			return
-		}
-
-		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Linked RTCP pad %s from rtpbin to RTCP sink for track source %d", rtcpPad.GetName(), kind))
-	}()
 }
 
 func (e *SipBin) onRtpBinPadAddedRecvRtpSrc(self *gst.Bin, pad *gst.Pad) {
