@@ -79,7 +79,7 @@ func (e *BFCPServer) SetupSignals(self *gst.Element) {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Floor not found for floorID=%d", floorID))
 			return false
 		}
-		if floor.IsGranted() {
+		if floor.IsGranted() && floor.GetOwner() != userID {
 			self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Floor %d is already granted, rejecting request from userID=%d", floorID, userID))
 			return false
 		}

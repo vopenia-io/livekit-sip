@@ -190,7 +190,7 @@ func (e *BFCPServer) broadcast() {
 func (e *BFCPServer) ChangeState(self *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
 	if transition == gst.StateChangeReadyToPaused && !e.started {
 		e.bfcpServer.Serve()
-		e.broadcast()
+		// e.broadcast()
 		e.started = true
 	}
 
