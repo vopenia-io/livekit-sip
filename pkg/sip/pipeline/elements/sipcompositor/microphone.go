@@ -20,7 +20,10 @@ func (e *SipCompositor) initMicrophone(self *gst.Bin) error {
 	e.SipCompositorMicrophone = &SipCompositorMicrophone{}
 
 	var err error
-	e.SipCompositorMicrophone.AudioMixer, err = gst.NewElementWithProperties("audiomixer", map[string]interface{}{})
+	e.SipCompositorMicrophone.AudioMixer, err = gst.NewElementWithProperties("audiomixer", map[string]interface{}{
+		"force-live":           true,
+		"ignore-inactive-pads": true,
+	})
 	if err != nil {
 		return err
 	}

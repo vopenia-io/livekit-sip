@@ -36,7 +36,9 @@ func (e *SipCompositor) initScreenshare(self *gst.Bin) error {
 	e.SipCompositorScreenshare.priority.Store(math.MaxInt64)
 
 	var err error
-	e.SipCompositorScreenshare.FallbackSwitch, err = gst.NewElementWithProperties("fallbackswitch", map[string]interface{}{})
+	e.SipCompositorScreenshare.FallbackSwitch, err = gst.NewElementWithProperties("fallbackswitch", map[string]interface{}{
+		"timeout": uint64(10_000_000_000),
+	})
 	if err != nil {
 		return err
 	}
