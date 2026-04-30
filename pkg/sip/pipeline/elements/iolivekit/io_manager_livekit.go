@@ -1250,6 +1250,12 @@ func (e *IoManagerLivekit) playWavFd(self *gst.Bin, fd int) bool {
 	self.Log(CAT, gst.LevelInfo, "playWavFd: got compositor pad, getting wav src pad")
 
 	srcPad := filter.GetStaticPad("src")
+	clock := self.GetClock()
+	if clock != nil {
+		now := clock.GetTime() - self.GetBaseTime()
+		srcPad.SetOffset(int64(now))
+		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Set offset of new microphone sink pad to %d based on clock time", now))
+	}
 	self.Log(CAT, gst.LevelInfo, "playWavFd: linking pads")
 
 	if ret := srcPad.Link(compositorPad); ret != gst.PadLinkOK {
@@ -1258,7 +1264,7 @@ func (e *IoManagerLivekit) playWavFd(self *gst.Bin, fd int) bool {
 	}
 
 	eosCh := make(chan struct{}, 1)
-	probeID := srcPad.AddProbe(gst.PadProbeTypeEventDownstream, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+	srcPad.AddProbe(gst.PadProbeTypeEventDownstream, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
 		evt := info.GetEvent()
 
 		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("playWavFd: pad probe got event of type %s", evt.Type().String()))
@@ -1287,7 +1293,6 @@ func (e *IoManagerLivekit) playWavFd(self *gst.Bin, fd int) bool {
 	<-eosCh
 	self.Log(CAT, gst.LevelInfo, "playWavFd: got EOS, tearing down")
 
-	srcPad.RemoveProbe(probeID)
 	if err := wavSrc.SetState(gst.StateNull); err != nil {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set wavsource to NULL: %v", err))
 	}

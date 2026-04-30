@@ -88,7 +88,7 @@ func (p *Pipeline) ConnectRoom(wsUrl, token string, attributes map[string]string
 }
 
 func (p *Pipeline) PlayAudio(ctx context.Context, fd int) error {
-	return nil
+	// return nil
 	playFd, err := unix.Open(
 		fmt.Sprintf("/proc/self/fd/%d", fd),
 		unix.O_RDONLY|unix.O_CLOEXEC,
