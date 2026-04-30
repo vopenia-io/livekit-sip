@@ -88,13 +88,17 @@ func (e *OpusAudio) InstanceInit(instance *glib.Object) {
 		return
 	}
 
-	self.AddMany(
+	if err := self.AddMany(
 		e.RtpOpusDepay,
 		e.OpusDec,
 		e.AudioConvert,
 		e.AudioResample,
 		e.AudioRate,
-	)
+	); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add elements to bin: %v", err))
+		self.Error("Failed to add elements to bin", err)
+		return
+	}
 
 	if err := gst.ElementLinkMany(
 		e.RtpOpusDepay,
