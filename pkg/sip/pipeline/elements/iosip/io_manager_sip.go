@@ -901,6 +901,8 @@ func (e *IoManagerSip) padAddedCameraOut(self *gst.Bin, pad *gst.Pad, name strin
 	}
 	cameraOut.VideoRTP, err = gst.NewElementWithProperties("factorybin", map[string]interface{}{
 		"factories": glib.NewStrv([]string{
+			"nv-video-vp9",
+			"video-vp9",
 			"nv-video-vp8",
 			"video-vp8",
 		}),
@@ -996,6 +998,8 @@ func (e *IoManagerSip) padAddedScreenshareOut(self *gst.Bin, pad *gst.Pad, name 
 	}
 	screenshareOut.VideoRTP, err = gst.NewElementWithProperties("factorybin", map[string]interface{}{
 		"factories": glib.NewStrv([]string{
+			"nv-video-vp9",
+			"video-vp9",
 			"nv-video-vp8",
 			"video-vp8",
 		}),

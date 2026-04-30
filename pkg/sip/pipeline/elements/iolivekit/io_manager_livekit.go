@@ -406,6 +406,8 @@ func (e *IoManagerLivekit) requestNewPadCameraIn(self *gst.Bin, templ *gst.PadTe
 	}
 	cameraIn.RTPVideo, err = gst.NewElementWithProperties("factorybin", map[string]interface{}{
 		"factories": glib.NewStrv([]string{
+			"nv-vp9-video",
+			"vp9-video",
 			"nv-vp8-video",
 			"vp8-video",
 		}),
@@ -504,6 +506,8 @@ func (e *IoManagerLivekit) requestNewPadScreenShareIn(self *gst.Bin, templ *gst.
 	}
 	screenShareIn.RTPVideo, err = gst.NewElementWithProperties("factorybin", map[string]interface{}{
 		"factories": glib.NewStrv([]string{
+			"nv-vp9-video",
+			"vp9-video",
 			"nv-vp8-video",
 			"vp8-video",
 		}),
