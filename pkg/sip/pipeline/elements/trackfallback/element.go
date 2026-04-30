@@ -2,9 +2,7 @@ package trackfallback
 
 import (
 	"fmt"
-	"math"
 	"sync"
-	"sync/atomic"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
@@ -27,11 +25,12 @@ type TrackFallback struct {
 	nvidia      bool
 
 	Tracks [NbTracks]struct {
+		initialized bool
 		enabled     bool
 		fallback    Fallback
 		fallbackPad *gst.Pad
 		element     *gst.Element
-		priority    atomic.Int64
+		// clockSync   *gst.Element
 	}
 }
 
@@ -69,35 +68,6 @@ func (e *TrackFallback) InstanceInit(instance *glib.Object) {
 	e.videoWidth = 1280
 	e.videoHeight = 720
 	e.nvidia = false
-
-	for i := range e.Tracks {
-		e.Tracks[i].priority.Store(math.MaxUint32 - 1)
-	}
-}
-
-func (e *TrackFallback) Constructed(instance *glib.Object) {
-	// self := gst.ToGstBin(instance)
-	// eweak := weak.Make(e)
-	// wself := glib.WeakRefInit(self)
-}
-
-func (e *TrackFallback) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
-	self := gst.ToGstBin(instance)
-
-	switch transition {
-	case gst.StateChangeReadyToPaused:
-		for i := range e.Tracks {
-			if e.Tracks[i].enabled {
-				e.startTrackFallback(self, livekit.TrackSource(i))
-			}
-		}
-	case gst.StateChangePausedToReady:
-		for i := range e.Tracks {
-			e.stopTrackFallback(self, livekit.TrackSource(i))
-		}
-	}
-
-	return self.ParentChangeState(transition)
 }
 
 func (e *TrackFallback) Finalize(instance *glib.Object) {
@@ -158,7 +128,7 @@ func (e *TrackFallback) RequestNewPad(instance *gst.Element, templ *gst.PadTempl
 		return nil
 	}
 
-	if err := sink.SetProperty("priority", uint32(e.Tracks[kind].priority.Add(-1))); err != nil {
+	if err := sink.SetProperty("priority", uint32(0)); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set priority property on %s fallback pad %s: %v", kind.String(), name, err))
 		self.Error(fmt.Sprintf("Failed to set priority property on %s fallback pad for pad %s", kind.String(), name), err)
 		return nil
@@ -259,7 +229,7 @@ func (e *TrackFallback) ReleasePad(instance *gst.Element, pad *gst.Pad) {
 }
 
 func (e *TrackFallback) initTrack(self *gst.Bin, kind livekit.TrackSource) error {
-	if e.Tracks[kind].element != nil {
+	if e.Tracks[kind].initialized {
 		return nil
 	}
 
@@ -272,9 +242,6 @@ func (e *TrackFallback) initTrack(self *gst.Bin, kind livekit.TrackSource) error
 		return fmt.Errorf("failed to add %s fallback switch to bin: %w", kind.String(), err)
 	}
 
-	if !element.SyncStateWithParent() {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state of %s fallback switch with parent", kind.String()))
-	}
 
 	class := gst.ToElementClass(self.Class())
 	gpad := gst.NewGhostPadFromTemplate(fmt.Sprintf("src_%d", kind), element.GetStaticPad("src"), class.GetPadTemplate("src_%u"))
@@ -288,12 +255,20 @@ func (e *TrackFallback) initTrack(self *gst.Bin, kind livekit.TrackSource) error
 		return fmt.Errorf("failed to add ghost pad for %s fallback to bin", kind.String())
 	}
 
+	if !element.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state of %s fallback switch with parent", kind.String()))
+	}
+
 	e.Tracks[kind].element = element
+	e.Tracks[kind].initialized = true
+
+	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Initialized %s fallback", kind.String()))
+
 	return nil
 }
 
 func (e *TrackFallback) cleanupTrack(self *gst.Bin, kind livekit.TrackSource) error {
-	if e.Tracks[kind].element == nil || e.Tracks[kind].fallback != nil {
+	if !e.Tracks[kind].initialized || e.Tracks[kind].fallback != nil {
 		return nil
 	}
 
@@ -320,6 +295,9 @@ func (e *TrackFallback) cleanupTrack(self *gst.Bin, kind livekit.TrackSource) er
 	}
 
 	e.Tracks[kind].element = nil
+	e.Tracks[kind].initialized = false
+
+	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Cleaned up %s fallback", kind.String()))
 
 	return nil
 }
@@ -361,7 +339,7 @@ func (e *TrackFallback) startTrackFallback(self *gst.Bin, kind livekit.TrackSour
 		return
 	}
 
-	if err := sink.SetProperty("priority", uint32(math.MaxUint32)); err != nil {
+	if err := sink.SetProperty("priority", uint32(1)); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set priority property on %s fallback pad: %v", kind.String(), err))
 		self.Error(fmt.Sprintf("Failed to set priority property on %s fallback pad", kind.String()), err)
 		return
@@ -379,6 +357,8 @@ func (e *TrackFallback) startTrackFallback(self *gst.Bin, kind livekit.TrackSour
 
 	e.Tracks[kind].fallback = fallback
 	e.Tracks[kind].fallbackPad = sink
+
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Started %s fallback", kind.String()))
 }
 
 func (e *TrackFallback) stopTrackFallback(self *gst.Bin, kind livekit.TrackSource) {
