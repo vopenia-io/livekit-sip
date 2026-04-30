@@ -8,8 +8,10 @@ import (
 )
 
 type LivekitCompositorMicrophone struct {
-	AudioMixer *gst.Element
-	ClockSync  *gst.Element
+	SilenceSrc    *gst.Element
+	SilenceFilter *gst.Element
+	SilencePad    *gst.Pad
+	AudioMixer    *gst.Element
 }
 
 func (e *LivekitCompositor) initMicrophone(self *gst.Bin) error {
@@ -21,6 +23,22 @@ func (e *LivekitCompositor) initMicrophone(self *gst.Bin) error {
 	compositorMicrophone := &LivekitCompositorMicrophone{}
 
 	var err error
+
+	compositorMicrophone.SilenceSrc, err = gst.NewElementWithProperties("audiotestsrc", map[string]interface{}{
+		"is-live": true,
+		"wave":    int(4), // silence
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create microphone silence source: %w", err)
+	}
+
+	compositorMicrophone.SilenceFilter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
+		"caps": gst.NewCapsFromString("audio/x-raw,format=S16LE,rate=16000,channels=1,layout=interleaved"),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create microphone silence filter: %w", err)
+	}
+
 	compositorMicrophone.AudioMixer, err = gst.NewElementWithProperties("audiomixer", map[string]interface{}{
 		"force-live":           true,
 		"ignore-inactive-pads": true,
@@ -29,21 +47,24 @@ func (e *LivekitCompositor) initMicrophone(self *gst.Bin) error {
 		return err
 	}
 
-	compositorMicrophone.ClockSync, err = gst.NewElement("clocksync")
-	if err != nil {
-		return fmt.Errorf("failed to create microphone clocksync: %w", err)
+	if err := self.AddMany(compositorMicrophone.SilenceSrc, compositorMicrophone.SilenceFilter, compositorMicrophone.AudioMixer); err != nil {
+		return fmt.Errorf("failed to add microphone elements to bin: %w", err)
 	}
 
-	if err := self.AddMany(compositorMicrophone.AudioMixer, compositorMicrophone.ClockSync); err != nil {
-		return fmt.Errorf("failed to add microphone audiomixer to bin: %w", err)
+	if err := gst.ElementLinkMany(compositorMicrophone.SilenceSrc, compositorMicrophone.SilenceFilter); err != nil {
+		return fmt.Errorf("failed to link microphone elements: %w", err)
 	}
 
-	if err := gst.ElementLinkMany(compositorMicrophone.AudioMixer, compositorMicrophone.ClockSync); err != nil {
-		return fmt.Errorf("failed to link microphone audiomixer to clocksync: %w", err)
+	compositorMicrophone.SilencePad = compositorMicrophone.AudioMixer.GetRequestPad("sink_0")
+	if compositorMicrophone.SilencePad == nil {
+		return fmt.Errorf("failed to get request pad from microphone audiomixer")
+	}
+	if ret := compositorMicrophone.SilenceFilter.GetStaticPad("src").Link(compositorMicrophone.SilencePad); ret != gst.PadLinkOK {
+		return fmt.Errorf("failed to link microphone silence filter to audiomixer: %v", ret)
 	}
 
 	class := gst.ToElementClass(self.Class())
-	gpad := gst.NewGhostPadFromTemplate(fmt.Sprintf("src_%d", livekit.TrackSource_MICROPHONE), compositorMicrophone.ClockSync.GetStaticPad("src"), class.GetPadTemplate("src_%u"))
+	gpad := gst.NewGhostPadFromTemplate(fmt.Sprintf("src_%d", livekit.TrackSource_MICROPHONE), compositorMicrophone.AudioMixer.GetStaticPad("src"), class.GetPadTemplate("src_%u"))
 	if gpad == nil {
 		return fmt.Errorf("failed to create ghost pad for microphone source")
 	}
@@ -57,8 +78,11 @@ func (e *LivekitCompositor) initMicrophone(self *gst.Bin) error {
 	if !compositorMicrophone.AudioMixer.SyncStateWithParent() {
 		self.Log(CAT, gst.LevelWarning, "Failed to sync microphone audiomixer state with parent")
 	}
-	if !compositorMicrophone.ClockSync.SyncStateWithParent() {
-		self.Log(CAT, gst.LevelWarning, "Failed to sync microphone clocksync state with parent")
+	if !compositorMicrophone.SilenceFilter.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, "Failed to sync microphone silence filter state with parent")
+	}
+	if !compositorMicrophone.SilenceSrc.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, "Failed to sync microphone silence source state with parent")
 	}
 
 	e.LivekitCompositorMicrophone = compositorMicrophone
@@ -73,7 +97,7 @@ func (e *LivekitCompositor) cleanupMicrophone(self *gst.Bin) {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to get sink pads while handling pad-removed signal: %v", err))
 		return
 	}
-	if len(sinks) > 0 {
+	if len(sinks) > 1 {
 		return
 	}
 
@@ -82,14 +106,14 @@ func (e *LivekitCompositor) cleanupMicrophone(self *gst.Bin) {
 	if err := e.LivekitCompositorMicrophone.AudioMixer.SetState(gst.StateNull); err != nil {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set microphone audiomixer state to null during cleanup: %v", err))
 	}
-	if err := e.LivekitCompositorMicrophone.ClockSync.SetState(gst.StateNull); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set microphone clocksync state to null during cleanup: %v", err))
+	if err := e.LivekitCompositorMicrophone.SilenceFilter.SetState(gst.StateNull); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set microphone silence filter state to null during cleanup: %v", err))
 	}
-	if err := self.Remove(e.LivekitCompositorMicrophone.AudioMixer); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove microphone audiomixer from bin during cleanup: %v", err))
+	if err := e.LivekitCompositorMicrophone.SilenceSrc.SetState(gst.StateNull); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set microphone silence source state to null during cleanup: %v", err))
 	}
-	if err := self.Remove(e.LivekitCompositorMicrophone.ClockSync); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove microphone clocksync from bin during cleanup: %v", err))
+	if err := self.RemoveMany(e.LivekitCompositorMicrophone.AudioMixer, e.LivekitCompositorMicrophone.SilenceFilter, e.LivekitCompositorMicrophone.SilenceSrc); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove microphone elements from bin during cleanup: %v", err))
 	}
 
 	if pad := self.GetStaticPad(fmt.Sprintf("src_%d", livekit.TrackSource_MICROPHONE)); pad != nil {
