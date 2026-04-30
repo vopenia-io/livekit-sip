@@ -339,8 +339,7 @@ func (e *LivekitBin) deferLinkPadSendRtp(kind livekit.TrackSource) {
 
 	pub := e.publications[kind]
 	if pub == nil || pub.initialized {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid publication state for track source %s while linking pad: publication is nil or already initialized", kind.String()))
-		self.Error(fmt.Sprintf("Invalid publication state for track source %s while linking pad: publication is nil or already initialized", kind.String()), fmt.Errorf("publication error"))
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Invalid publication state for track source %s while linking pad: publication is nil or already initialized", kind.String()))
 		return
 	}
 
@@ -779,14 +778,6 @@ func (e *LivekitBin) releasePadSendRtpSink(self *gst.Bin, pad *gst.Pad) {
 
 	if pad := e.RtpBin.GetStaticPad(fmt.Sprintf("send_rtp_sink_%d", session)); pad != nil {
 		e.RtpBin.ReleaseRequestPad(pad)
-	}
-
-	if e.rtcp.initialized && e.rtcp.sessions[kind] {
-		pad := e.rtcp.RtcpFunnel.GetStaticPad(fmt.Sprintf("sink_%d", session))
-		if pad != nil {
-			e.rtcp.RtcpFunnel.ReleaseRequestPad(pad)
-		}
-		e.rtcp.sessions[kind] = false
 	}
 
 	sid := ""

@@ -261,18 +261,6 @@ func (e *LivekitBin) OnTrackMuted(publication lksdk.TrackPublication, participan
 
 	ssrc := pub.TrackRemote().SSRC()
 
-	srcTrack, err := self.GetElementByName(livekittracks.SrcTrackName(pub.SID()))
-	if err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("No source element found for track %s of participant %s: %v", pub.SID(), participant.SID(), err))
-		return
-	}
-
-	if err := srcTrack.SetProperty("mute", true); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set mute property for track %s of participant %s: %v", pub.SID(), participant.SID(), err))
-		self.Error(fmt.Sprintf("Failed to set mute property for track %s of participant %s", pub.SID(), participant.SID()), err)
-		return
-	}
-
 	if _, err := e.RtpBin.Emit("clear-ssrc", uint32(pub.Source()), uint(ssrc)); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error emitting clear-ssrc signal for track %s of participant %s: %v", pub.SID(), participant.SID(), err))
 		self.Error(fmt.Sprintf("Error emitting clear-ssrc signal for track %s of participant %s", pub.SID(), participant.SID()), err)
@@ -291,18 +279,6 @@ func (e *LivekitBin) OnTrackUnmuted(publication lksdk.TrackPublication, particip
 	pub, ok := publication.(*lksdk.RemoteTrackPublication)
 	if !ok {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Track publication is not a remote track publication for participant %s: %v", participant.Identity(), publication))
-		return
-	}
-
-	srcTrack, err := self.GetElementByName(livekittracks.SrcTrackName(pub.SID()))
-	if err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("No source element found for track %s of participant %s: %v", pub.SID(), participant.SID(), err))
-		return
-	}
-
-	if err := srcTrack.SetProperty("mute", false); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set mute property for track %s of participant %s: %v", pub.SID(), participant.SID(), err))
-		self.Error(fmt.Sprintf("Failed to set mute property for track %s of participant %s", pub.SID(), participant.SID()), err)
 		return
 	}
 
