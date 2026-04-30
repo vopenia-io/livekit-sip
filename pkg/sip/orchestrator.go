@@ -149,7 +149,7 @@ func (o *MediaOrchestrator) okStates(allowed ...MediaState) error {
 	return fmt.Errorf("invalid state: %s, expected one of %v: %w", o.state, allowed, ErrWrongState)
 }
 
-const DispatchTimeout = 20 * time.Second
+const DispatchTimeout = 200 * time.Second
 
 func (o *MediaOrchestrator) dispatch(fn func() error) error {
 	if !o.dispatchOK.Load() {

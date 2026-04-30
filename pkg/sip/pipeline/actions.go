@@ -3,13 +3,9 @@ package pipeline
 import (
 	"context"
 	"fmt"
-	"time"
-	"weak"
 
-	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
-	msdk "github.com/livekit/media-sdk"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/samplewriter"
+	"golang.org/x/sys/unix"
 )
 
 func (p *Pipeline) EmitOfferSDP(offer string) (string, error) {
@@ -91,86 +87,20 @@ func (p *Pipeline) ConnectRoom(wsUrl, token string, attributes map[string]string
 	return nil
 }
 
-func (p *Pipeline) PlayAudio(ctx context.Context, sampleDur time.Duration, rate int, frames []msdk.PCM16Sample) error {
-	ctx, cancel := context.WithTimeout(ctx, sampleDur*time.Duration(len(frames))*2)
-
-	writer, err := samplewriter.NewSampleWriter(ctx, sampleDur, rate, frames)
+func (p *Pipeline) PlayAudio(ctx context.Context, fd int) error {
+	return nil
+	playFd, err := unix.Open(
+		fmt.Sprintf("/proc/self/fd/%d", fd),
+		unix.O_RDONLY|unix.O_CLOEXEC,
+		0,
+	)
 	if err != nil {
-		return fmt.Errorf("failed to create sample writer: %w", err)
-	}
-	writerSrc := writer.GetStaticPad("src")
-
-	done := make(chan struct{})
-	weakWriter := glib.WeakRefInit(writer)
-	weakP := weak.Make(p)
-	writerSrc.AddProbe(gst.PadProbeTypeEventDownstream, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
-		event := info.GetEvent()
-		if event == nil {
-			return gst.PadProbePass
-		}
-		if event.Type() != gst.EventTypeEOS {
-			return gst.PadProbePass
-		}
-
-		pad.RemoveProbe(uint64(info.ID()))
-		close(done)
-
-		glib.IdleAdd(func() {
-			cleanupSampleWriter(weakP, weakWriter)
-			cancel()
-		})
-
-		return gst.PadProbeDrop
-	})
-
-	if err := p.Pipeline().Add(writer); err != nil {
-		return fmt.Errorf("failed to add sample writer to pipeline: %w", err)
+		return fmt.Errorf("failed to open per-call fd from master fd %d: %w", fd, err)
 	}
 
-	if ret := writerSrc.Link(p.IOManager.LivekitController.GetRequestPad("raw_sink_%u")); ret != gst.PadLinkOK {
-		return fmt.Errorf("failed to link sample writer to livekitbin: %v", ret)
-	}
-
-	if !writer.SyncStateWithParent() {
-		p.Log.Warnw("Failed to sync sample writer state with parent", nil)
-	}
-
-	select {
-	case <-done:
-		time.Sleep(100 * time.Millisecond) // give some time for the EOS to propagate and cleanup to happen
-	case <-ctx.Done():
-		if ctx.Err() == context.Canceled {
-			return nil
-		}
-		return ctx.Err()
+	if _, err := p.IOManager.LivekitController.Emit("play-wav-fd", playFd); err != nil {
+		return fmt.Errorf("failed to emit play-wav-fd: %w", err)
 	}
 
 	return nil
-}
-
-func cleanupSampleWriter(weakP weak.Pointer[Pipeline], weakWriter *glib.WeakRef) {
-	p := weakP.Value()
-	if p == nil {
-		fmt.Printf("Pipeline has been garbage collected, stopping EOS probe\n")
-		return
-	}
-	writer := gst.ToElement(weakWriter.Get())
-	if writer == nil || writer.Instance() == nil {
-		fmt.Printf("SampleWriter has been garbage collected, stopping EOS probe\n")
-		return
-	}
-	p.Log.Debugw("Received EOS from sample writer, removing from pipeline")
-	pad := writer.GetStaticPad("src")
-
-	peer := pad.GetPeer()
-
-	if err := writer.SetState(gst.StateNull); err != nil {
-		p.Log.Warnw("Failed to set sample writer to null state", err)
-	}
-	if err := p.Pipeline().Remove(writer); err != nil {
-		p.Log.Warnw("Failed to remove sample writer from pipeline", err)
-	}
-	if peer != nil {
-		p.IOManager.LivekitController.ReleaseRequestPad(peer)
-	}
 }

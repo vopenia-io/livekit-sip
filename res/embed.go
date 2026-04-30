@@ -18,6 +18,15 @@ var RoomJoinOgg []byte
 //go:embed wrong_pin.ogg
 var WrongPinOgg []byte
 
+//go:embed enter_pin.wav
+var EnterPinWav []byte
+
+//go:embed room_join.wav
+var RoomJoinWav []byte
+
+//go:embed wrong_pin.wav
+var WrongPinWav []byte
+
 const SampleRate = 48000
 
 func ReadOggAudioFile(data []byte) []msdk.PCM16Sample {

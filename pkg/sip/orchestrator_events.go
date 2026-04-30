@@ -2,10 +2,8 @@ package sip
 
 import (
 	"context"
-	"time"
 
 	"github.com/go-gst/go-gst/gst"
-	msdk "github.com/livekit/media-sdk"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/sip"
 	"github.com/livekit/sip/pkg/config"
@@ -124,6 +122,6 @@ func (o *MediaOrchestrator) RoomName() string {
 	return roomName
 }
 
-func (o *MediaOrchestrator) PlayAudio(ctx context.Context, sampleDur time.Duration, rate int, frames []msdk.PCM16Sample) error {
-	return o.pipeline.PlayAudio(ctx, sampleDur, rate, frames)
+func (o *MediaOrchestrator) PlayAudio(ctx context.Context, fd int) error {
+	return o.pipeline.PlayAudio(ctx, fd)
 }

@@ -15,6 +15,8 @@
 package sip
 
 import (
+	"fmt"
+
 	msdk "github.com/livekit/media-sdk"
 
 	"github.com/livekit/sip/res"
@@ -24,10 +26,25 @@ type mediaRes struct {
 	enterPin []msdk.PCM16Sample
 	roomJoin []msdk.PCM16Sample
 	wrongPin []msdk.PCM16Sample
+
+	enterPinFd int
+	roomJoinFd int
+	wrongPinFd int
 }
 
 func (s *Server) initMediaRes() {
 	s.res.enterPin = res.ReadOggAudioFile(res.EnterPinOgg)
 	s.res.roomJoin = res.ReadOggAudioFile(res.RoomJoinOgg)
 	s.res.wrongPin = res.ReadOggAudioFile(res.WrongPinOgg)
+
+	var err error
+	if s.res.enterPinFd, err = res.MemfdFromBytes("enter-pin", res.EnterPinWav); err != nil {
+		panic(fmt.Errorf("failed to memfd enter_pin.wav: %w", err))
+	}
+	if s.res.roomJoinFd, err = res.MemfdFromBytes("room-join", res.RoomJoinWav); err != nil {
+		panic(fmt.Errorf("failed to memfd room_join.wav: %w", err))
+	}
+	if s.res.wrongPinFd, err = res.MemfdFromBytes("wrong-pin", res.WrongPinWav); err != nil {
+		panic(fmt.Errorf("failed to memfd wrong_pin.wav: %w", err))
+	}
 }

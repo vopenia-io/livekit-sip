@@ -10,6 +10,7 @@ import (
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/livekit"
+	"golang.org/x/sys/unix"
 )
 
 const AudioCaps = "audio/x-raw,format=S16LE,rate=16000,channels=1,layout=interleaved"
@@ -25,9 +26,6 @@ type IoManagerLivekit struct {
 	videoHeight uint
 	nvidia      bool
 
-	RawIn        map[string]*RawInTranscode
-	RawInCounter uint
-
 	AudioIn  map[string]*AudioInTranscode
 	AudioOut *AudioOutTranscode
 
@@ -36,12 +34,6 @@ type IoManagerLivekit struct {
 
 	ScreenShareIn  map[string]*ScreenShareInTranscode
 	ScreenShareOut *ScreenShareOutTranscode
-}
-
-type RawInTranscode struct {
-	gpad       *gst.GhostPad
-	Pcm16Audio *gst.Element
-	pad        *gst.Pad
 }
 
 type AudioInTranscode struct {
@@ -115,18 +107,19 @@ func (e *IoManagerLivekit) ClassInit(klass *glib.ObjectClass) {
 		glib.TYPE_BOOLEAN,
 	)
 
+	gst.SignalNew(
+		class.Type(),
+		"play-wav-fd",
+		gst.SignalRunLast|gst.SignalAction,
+		glib.TYPE_BOOLEAN,
+		glib.TYPE_INT,
+	)
+
 	class.AddPadTemplate(gst.NewPadTemplate(
 		"recv_rtp_sink_%u_%u_%u",
 		gst.PadDirectionSink,
 		gst.PadPresenceRequest,
 		gst.NewCapsFromString("application/x-rtp"),
-	))
-
-	class.AddPadTemplate(gst.NewPadTemplate(
-		"raw_sink_%u",
-		gst.PadDirectionSink,
-		gst.PadPresenceRequest,
-		gst.NewCapsFromString("audio/x-raw, format=S16LE"),
 	))
 
 	class.AddPadTemplate(gst.NewPadTemplate(
@@ -141,7 +134,6 @@ func (e *IoManagerLivekit) ClassInit(klass *glib.ObjectClass) {
 }
 
 func (e *IoManagerLivekit) InstanceInit(instance *glib.Object) {
-	e.RawIn = make(map[string]*RawInTranscode)
 	e.AudioIn = make(map[string]*AudioInTranscode)
 	e.CameraIn = make(map[string]*CameraInTranscode)
 	e.ScreenShareIn = make(map[string]*ScreenShareInTranscode)
@@ -242,6 +234,20 @@ func (e *IoManagerLivekit) Constructed(instance *glib.Object) {
 		self.Error("Failed to connect to active-speakers-changed signal", err)
 		return
 	}
+
+	if _, err := self.Connect("play-wav-fd", func(instance *gst.Element, fd int) bool {
+		e := eweak.Value()
+		self := gst.ToGstBin(wself.Get())
+		if e == nil || self == nil || self.Instance() == nil {
+			unix.Close(fd)
+			return false
+		}
+		return e.playWavFd(self, fd)
+	}); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to connect to play-wav-fd signal: %v", err))
+		self.Error("Failed to connect to play-wav-fd signal", err)
+		return
+	}
 }
 
 func (e *IoManagerLivekit) Finalize(instance *gst.Element) {
@@ -251,7 +257,6 @@ func (e *IoManagerLivekit) Finalize(instance *gst.Element) {
 	defer e.outMu.Unlock()
 
 	e.Compositor = nil
-	e.RawIn = nil
 	e.AudioIn = nil
 	e.AudioOut = nil
 	e.CameraIn = nil
@@ -269,8 +274,6 @@ func (e *IoManagerLivekit) RequestNewPad(instance *gst.Element, templ *gst.PadTe
 	}
 
 	switch templ.Name() {
-	case "raw_sink_%u":
-		return e.requestNewPadRawIn(self, templ)
 	case "recv_rtp_sink_%u_%u_%u":
 		var session, ssrc, pt int
 		if _, err := fmt.Sscanf(name, "recv_rtp_sink_%d_%d_%d", &session, &ssrc, &pt); err != nil {
@@ -298,68 +301,6 @@ func (e *IoManagerLivekit) RequestNewPad(instance *gst.Element, templ *gst.PadTe
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unknown pad template %s for pad %s", templ.Name(), name))
 		return nil
 	}
-}
-
-func (e *IoManagerLivekit) requestNewPadRawIn(self *gst.Bin, templ *gst.PadTemplate) *gst.Pad {
-	e.inMu.Lock()
-	defer e.inMu.Unlock()
-
-	id := e.RawInCounter
-	e.RawInCounter++
-
-	name := fmt.Sprintf("raw_sink_%d", id)
-
-	rawIn := &RawInTranscode{}
-
-	var err error
-	rawIn.Pcm16Audio, err = gst.NewElementWithProperties("pcm16-audio", map[string]interface{}{})
-	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create pcm16-audio element for pad %s: %v", name, err))
-		self.Error(fmt.Sprintf("Failed to create pcm16-audio element for pad %s", name), err)
-		return nil
-	}
-	if err := self.Add(rawIn.Pcm16Audio); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add pcm16-audio element to SIP IO element for pad %s: %v", name, err))
-		self.Error(fmt.Sprintf("Failed to add pcm16-audio element to SIP IO element for pad %s", name), err)
-		return nil
-	}
-
-	rawIn.pad = e.Compositor.GetRequestPad("raw_sink_%u")
-	if rawIn.pad == nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get request pad from compositor for pad %s", name))
-		self.Error(fmt.Sprintf("Failed to get request pad from compositor for pad %s", name), fmt.Errorf("compositor returned nil pad"))
-		return nil
-	}
-
-	if ret := rawIn.Pcm16Audio.GetStaticPad("src").Link(rawIn.pad); ret != gst.PadLinkOK {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link pcm16-audio src pad to compositor pad for pad %s: %v", name, ret))
-		self.Error(fmt.Sprintf("Failed to link pcm16-audio src pad to compositor pad for pad %s", name), fmt.Errorf("failed to link pads"))
-		return nil
-	}
-
-	rawIn.gpad = gst.NewGhostPadFromTemplate(name, rawIn.Pcm16Audio.GetStaticPad("sink"), templ)
-	if rawIn.gpad == nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create ghost pad for pad %s", name))
-		self.Error(fmt.Sprintf("Failed to create ghost pad for pad %s", name), fmt.Errorf("gst.NewGhostPadFromTemplate returned nil"))
-		return nil
-	}
-	if !rawIn.gpad.SetActive(true) {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to activate ghost pad for pad %s", name))
-	}
-	if !self.AddPad(rawIn.gpad.Pad) {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add ghost pad to SIP IO element for pad %s", name))
-		self.Error(fmt.Sprintf("Failed to add ghost pad to SIP IO element for pad %s", name), fmt.Errorf("self.AddPad returned false"))
-		return nil
-	}
-
-	if !rawIn.Pcm16Audio.SyncStateWithParent() {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state of pcm16-audio element with parent for pad %s", name))
-	}
-
-	e.RawIn[name] = rawIn
-
-	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Successfully created new raw audio input pad %s", name))
-	return rawIn.gpad.Pad
 }
 
 func (e *IoManagerLivekit) requestNewPadAudioIn(self *gst.Bin, templ *gst.PadTemplate, name string, session int, ssrc int, pt int) *gst.Pad {
@@ -656,8 +597,6 @@ func (e *IoManagerLivekit) ReleasePad(instance *gst.Element, pad *gst.Pad) {
 	}
 
 	switch templ.Name() {
-	case "raw_sink_%u":
-		e.releasePadRawIn(self, gpad, pname)
 	case "recv_rtp_sink_%u_%u_%u":
 		var session, ssrc, pt int
 		if _, err := fmt.Sscanf(pname, "recv_rtp_sink_%d_%d_%d", &session, &ssrc, &pt); err != nil {
@@ -691,31 +630,6 @@ func (e *IoManagerLivekit) ReleasePad(instance *gst.Element, pad *gst.Pad) {
 	}
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Successfully released pad %s", pname))
-}
-
-func (e *IoManagerLivekit) releasePadRawIn(self *gst.Bin, gpad *gst.GhostPad, pname string) {
-	e.inMu.Lock()
-	defer e.inMu.Unlock()
-
-	rawIn, exists := e.RawIn[pname]
-	if !exists {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("No raw input pad found with name %s", pname))
-		return
-	}
-
-	if err := rawIn.Pcm16Audio.SetState(gst.StateNull); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set pcm16-audio element to NULL state for pad %s: %v", pname, err))
-	}
-
-	e.Compositor.ReleaseRequestPad(rawIn.pad)
-
-	if err := self.Remove(rawIn.Pcm16Audio); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove pcm16-audio element from SIP IO element for pad %s: %v", pname, err))
-	}
-
-	delete(e.RawIn, pname)
-
-	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Successfully released raw input pad %s", pname))
 }
 
 func (e *IoManagerLivekit) releasePadAudioIn(self *gst.Bin, _ *gst.GhostPad, pname string, session int, _ int, _ int) {
@@ -1283,4 +1197,104 @@ func (e *IoManagerLivekit) padRemovedScreenShareOut(self *gst.Bin, pad *gst.Pad,
 	e.ScreenShareOut = nil
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Removed screen share output pad %s", pad.GetName()))
+}
+
+func (e *IoManagerLivekit) playWavFd(self *gst.Bin, fd int) bool {
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("playWavFd creating wavsource with fd=%d", fd))
+
+	wavSrc, err := gst.NewElementWithProperties("wavsource", map[string]interface{}{
+		"fd": fd,
+	})
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create wavsource: %v", err))
+		self.Error("Failed to create wavsource", err)
+		unix.Close(fd)
+		return false
+	}
+
+	filter, err := gst.NewElementWithProperties("capsfilter", map[string]interface{}{
+		"caps": gst.NewCapsFromString(AudioCaps),
+	})
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create capsfilter for wavsource: %v", err))
+		self.Error("Failed to create capsfilter for wavsource", err)
+		return false
+	}
+
+	self.Log(CAT, gst.LevelInfo, "playWavFd: wavsource created, adding to bin")
+
+	if err := self.AddMany(wavSrc, filter); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add wavsource to io_manager_livekit: %v", err))
+		return false
+	}
+
+	if err := wavSrc.Link(filter); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link wavsource to capsfilter: %v", err))
+		self.Error("Failed to link wavsource to capsfilter", err)
+		return false
+	}
+
+	self.Log(CAT, gst.LevelInfo, "playWavFd: added to bin, getting compositor pad")
+
+	compositorPad := e.Compositor.GetRequestPad("raw_sink_%u")
+	if compositorPad == nil {
+		self.Log(CAT, gst.LevelError, "Failed to get raw_sink request pad from compositor")
+		return false
+	}
+	defer e.Compositor.ReleaseRequestPad(compositorPad)
+
+	self.Log(CAT, gst.LevelInfo, "playWavFd: got compositor pad, getting wav src pad")
+
+	srcPad := filter.GetStaticPad("src")
+	self.Log(CAT, gst.LevelInfo, "playWavFd: linking pads")
+
+	if ret := srcPad.Link(compositorPad); ret != gst.PadLinkOK {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link wavsource src to compositor pad: %v", ret))
+		return false
+	}
+
+	eosCh := make(chan struct{}, 1)
+	probeID := srcPad.AddProbe(gst.PadProbeTypeEventDownstream, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+		evt := info.GetEvent()
+
+		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("playWavFd: pad probe got event of type %s", evt.Type().String()))
+
+		if evt != nil && evt.Type() == gst.EventTypeEOS {
+			select {
+			case eosCh <- struct{}{}:
+			default:
+			}
+			return gst.PadProbeRemove
+		}
+		return gst.PadProbeOK
+	})
+
+	self.Log(CAT, gst.LevelInfo, "playWavFd: syncing state with parent")
+
+	if !wavSrc.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, "Failed to sync wavsource state with parent")
+	}
+	if !filter.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, "Failed to sync capsfilter state with parent")
+	}
+
+	self.Log(CAT, gst.LevelInfo, "playWavFd: waiting for EOS")
+
+	<-eosCh
+	self.Log(CAT, gst.LevelInfo, "playWavFd: got EOS, tearing down")
+
+	srcPad.RemoveProbe(probeID)
+	if err := wavSrc.SetState(gst.StateNull); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set wavsource to NULL: %v", err))
+	}
+	if err := filter.SetState(gst.StateNull); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set capsfilter to NULL: %v", err))
+	}
+
+	if err := self.RemoveMany(wavSrc, filter); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove elements from io_manager_livekit: %v", err))
+	}
+
+	self.Log(CAT, gst.LevelInfo, "Successfully played WAV fd")
+	return true
 }

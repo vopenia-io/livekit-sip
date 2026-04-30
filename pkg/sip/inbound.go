@@ -31,9 +31,7 @@ import (
 	"github.com/icholy/digest"
 	"github.com/pkg/errors"
 
-	msdk "github.com/livekit/media-sdk"
 	"github.com/livekit/media-sdk/dtmf"
-	"github.com/livekit/media-sdk/rtp"
 	"github.com/livekit/media-sdk/sdp"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
@@ -47,7 +45,6 @@ import (
 
 	"github.com/livekit/sip/pkg/config"
 	"github.com/livekit/sip/pkg/stats"
-	"github.com/livekit/sip/res"
 )
 
 const (
@@ -1212,7 +1209,7 @@ func (c *inboundCall) pinPrompt(ctx context.Context, trunkID string) (disp CallD
 	defer span.End()
 	c.log().Infow("Requesting Pin for SIP call")
 	const pinLimit = 16
-	c.playAudio(ctx, c.s.res.enterPin)
+	c.playAudio(ctx, c.s.res.enterPinFd)
 	pin := ""
 	noPin := false
 	for {
@@ -1256,17 +1253,17 @@ func (c *inboundCall) pinPrompt(ctx context.Context, trunkID string) (disp CallD
 				}
 				if disp.Result != DispatchAccept || disp.Room.RoomName == "" {
 					c.log().Infow("Rejecting call", "pin", pin, "noPin", noPin)
-					c.playAudio(ctx, c.s.res.wrongPin)
+					c.playAudio(ctx, c.s.res.wrongPinFd)
 					c.close(false, callDropped, "wrong-pin")
 					return disp, false, psrpc.NewErrorf(psrpc.PermissionDenied, "wrong pin")
 				}
-				c.playAudio(ctx, c.s.res.roomJoin)
+				c.playAudio(ctx, c.s.res.roomJoinFd)
 				return disp, true, nil
 			}
 			// Gather pin numbers
 			pin += string(b.Digit)
 			if len(pin) > pinLimit {
-				c.playAudio(ctx, c.s.res.wrongPin)
+				c.playAudio(ctx, c.s.res.wrongPinFd)
 				c.close(false, callDropped, "wrong-pin")
 				return disp, false, psrpc.NewErrorf(psrpc.PermissionDenied, "wrong pin")
 			}
@@ -1490,8 +1487,8 @@ func (c *inboundCall) joinRoom(ctx context.Context, rconf RoomConfig, status Cal
 	return nil
 }
 
-func (c *inboundCall) playAudio(ctx context.Context, frames []msdk.PCM16Sample) {
-	if err := c.medias.PlayAudio(ctx, rtp.DefFrameDur, res.SampleRate, frames); err != nil {
+func (c *inboundCall) playAudio(ctx context.Context, fd int) {
+	if err := c.medias.PlayAudio(ctx, fd); err != nil {
 		c.log().Errorw("Cannot play audio", err)
 	}
 	// t := c.lkRoom.NewTrack()

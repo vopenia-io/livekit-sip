@@ -57,7 +57,6 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitcompositor"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/rtpcapscodecfilter"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/samplewriter"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipbin"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipcompositor"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/trackfallback"
@@ -77,7 +76,6 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvvp8video"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvvp9video"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/opusaudio"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/pcm16audio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/pcmaaudio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/pcmuaudio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videoav1"
@@ -86,6 +84,7 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videovp9"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/vp8video"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/vp9video"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/wavsource"
 )
 
 const QDataPadPeerKey = "livekitsip-pad-peer"
@@ -170,12 +169,8 @@ func init() {
 		panic("Failed to register dtmf-audio")
 	}
 
-	if !samplewriter.Register() {
-		panic("Failed to register samplewriter")
-	}
-
-	if !pcm16audio.Register() {
-		panic("Failed to register pcm16audio")
+	if !wavsource.Register() {
+		panic("Failed to register wavsource")
 	}
 
 	if !rtpcapscodecfilter.Register() {
