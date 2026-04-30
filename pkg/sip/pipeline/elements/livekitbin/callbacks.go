@@ -85,26 +85,26 @@ func (e *LivekitBin) callabcks() *lksdk.RoomCallback {
 				}
 			},
 			OnTrackPublished: e.OnTrackPublished,
-			OnTrackMuted: func(pub lksdk.TrackPublication, p lksdk.Participant) {
-				e.livekitMu.Lock()
-				if _, err := glib.IdleAdd(func() {
-					defer e.livekitMu.Unlock()
-					e.OnTrackMuted(pub, p)
-				}); err != nil {
-					e.livekitMu.Unlock()
-					CAT.Log(gst.LevelError, fmt.Sprintf("Failed to add track muted to main loop: %v", err))
-				}
-			},
-			OnTrackUnmuted: func(pub lksdk.TrackPublication, p lksdk.Participant) {
-				e.livekitMu.Lock()
-				if _, err := glib.IdleAdd(func() {
-					defer e.livekitMu.Unlock()
-					e.OnTrackUnmuted(pub, p)
-				}); err != nil {
-					e.livekitMu.Unlock()
-					CAT.Log(gst.LevelError, fmt.Sprintf("Failed to add track unmuted to main loop: %v", err))
-				}
-			},
+			// OnTrackMuted: func(pub lksdk.TrackPublication, p lksdk.Participant) {
+			// 	e.livekitMu.Lock()
+			// 	if _, err := glib.IdleAdd(func() {
+			// 		defer e.livekitMu.Unlock()
+			// 		e.OnTrackMuted(pub, p)
+			// 	}); err != nil {
+			// 		e.livekitMu.Unlock()
+			// 		CAT.Log(gst.LevelError, fmt.Sprintf("Failed to add track muted to main loop: %v", err))
+			// 	}
+			// },
+			// OnTrackUnmuted: func(pub lksdk.TrackPublication, p lksdk.Participant) {
+			// 	e.livekitMu.Lock()
+			// 	if _, err := glib.IdleAdd(func() {
+			// 		defer e.livekitMu.Unlock()
+			// 		e.OnTrackUnmuted(pub, p)
+			// 	}); err != nil {
+			// 		e.livekitMu.Unlock()
+			// 		CAT.Log(gst.LevelError, fmt.Sprintf("Failed to add track unmuted to main loop: %v", err))
+			// 	}
+			// },
 		},
 		OnActiveSpeakersChanged: func(p []lksdk.Participant) {
 			e.livekitMu.Lock()
