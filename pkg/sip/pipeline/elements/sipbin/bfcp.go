@@ -9,6 +9,7 @@ import (
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/gstsdp"
 	"github.com/livekit/protocol/livekit"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/bfcpserver"
 )
 
 func (e *SipBin) NewBfcpTrack(self *gst.Bin, idx int, proto string) (*BfcpTrack, error) {
@@ -35,6 +36,9 @@ func (e *SipBin) NewBfcpTrack(self *gst.Bin, idx int, proto string) (*BfcpTrack,
 
 	eweak := weak.Make(e)
 	if _, err := bfcpServer.Connect("on-floor-released", func(instance *gst.Element, floorID, userID int) {
+		if uint16(userID) == bfcpserver.VirtualClientID {
+			return
+		}
 		e := eweak.Value()
 		if e == nil {
 			return
@@ -42,6 +46,19 @@ func (e *SipBin) NewBfcpTrack(self *gst.Bin, idx int, proto string) (*BfcpTrack,
 		e.onPeerScreenshareStopped(self)
 	}); err != nil {
 		return nil, fmt.Errorf("failed to connect on-floor-released signal: %w", err)
+	}
+
+	if _, err := bfcpServer.Connect("on-floor-granted", func(instance *gst.Element, floorID, userID, requestID int) {
+		if uint16(userID) == bfcpserver.VirtualClientID {
+			return
+		}
+		e := eweak.Value()
+		if e == nil {
+			return
+		}
+		e.onPeerScreenshareStarted(self)
+	}); err != nil {
+		return nil, fmt.Errorf("failed to connect on-floor-granted signal: %w", err)
 	}
 
 	return &BfcpTrack{

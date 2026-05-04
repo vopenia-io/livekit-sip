@@ -94,6 +94,14 @@ func (e *SipBin) ClassInit(klass *glib.ObjectClass) {
 		glib.TYPE_BOOLEAN,
 	)
 
+	gst.SignalNew(
+		class.Type(),
+		"peer-screenshare-active",
+		gst.SignalRunLast,
+		glib.TYPE_NONE,
+		glib.TYPE_BOOLEAN,
+	)
+
 	// request signals
 	SignalSendOfferSdpID = gst.SignalNew(
 		class.Type(),

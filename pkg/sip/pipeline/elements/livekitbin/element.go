@@ -52,6 +52,7 @@ type LivekitBinTrack struct {
 
 type LivekitBinPublication struct {
 	initialized  bool
+	published    bool
 	probeID      uint64
 	TrackSink    *gst.Element
 	FormatFilter *gst.Element
@@ -139,6 +140,22 @@ func (e *LivekitBin) ClassInit(klass *glib.ObjectClass) {
 		glib.TYPE_NONE,
 	)
 
+	gst.SignalNew(
+		class.Type(),
+		"unpublish-kind",
+		gst.SignalRunLast,
+		glib.TYPE_NONE,
+		glib.TYPE_INT,
+	)
+
+	gst.SignalNew(
+		class.Type(),
+		"republish-kind",
+		gst.SignalRunLast,
+		glib.TYPE_NONE,
+		glib.TYPE_INT,
+	)
+
 	class.AddPadTemplate(gst.NewPadTemplate(
 		"recv_rtp_src_%u_%u_%u",
 		gst.PadDirectionSource,
@@ -215,6 +232,30 @@ func (e *LivekitBin) Constructed(instance *glib.Object) {
 	}); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to connect to connect signal: %v", err))
 		self.Error("Failed to connect to connect signal", err)
+		return
+	}
+
+	if _, err := self.Connect("unpublish-kind", func(instance *gst.Element, kind int) {
+		ptr := eweak.Value()
+		if ptr == nil {
+			return
+		}
+		ptr.unpublishKind(gst.ToGstBin(instance), livekit.TrackSource(kind))
+	}); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to connect to unpublish-kind signal: %v", err))
+		self.Error("Failed to connect to unpublish-kind signal", err)
+		return
+	}
+
+	if _, err := self.Connect("republish-kind", func(instance *gst.Element, kind int) {
+		ptr := eweak.Value()
+		if ptr == nil {
+			return
+		}
+		ptr.republishKind(gst.ToGstBin(instance), livekit.TrackSource(kind))
+	}); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to connect to republish-kind signal: %v", err))
+		self.Error("Failed to connect to republish-kind signal", err)
 		return
 	}
 }

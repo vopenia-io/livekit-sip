@@ -75,9 +75,68 @@ func (p *LivekitBinPublication) Init(e *LivekitBin, self *gst.Bin, kind livekit.
 	}
 
 	p.TrackSink = element
+	p.Track = track
 	p.initialized = true
+	p.published = true
 
 	return nil
+}
+
+func (e *LivekitBin) unpublishKind(self *gst.Bin, kind livekit.TrackSource) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	pub := e.publications[kind]
+	if pub == nil || !pub.published {
+		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("unpublishKind: no active publication for kind %s", kind.String()))
+		return
+	}
+	if e.room == nil || e.room.LocalParticipant == nil {
+		return
+	}
+	tp := e.room.LocalParticipant.GetTrackPublication(kind)
+	if tp == nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("unpublishKind: no LiveKit publication for kind %s", kind.String()))
+		pub.published = false
+		return
+	}
+	sid := tp.SID()
+	if sid == "" {
+		pub.published = false
+		return
+	}
+	if err := e.room.LocalParticipant.UnpublishTrack(sid); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("unpublishKind: failed to unpublish track for kind %s sid %s: %v", kind.String(), sid, err))
+	} else {
+		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("unpublishKind: unpublished track for kind %s sid %s", kind.String(), sid))
+	}
+	pub.published = false
+}
+
+func (e *LivekitBin) republishKind(self *gst.Bin, kind livekit.TrackSource) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	pub := e.publications[kind]
+	if pub == nil || pub.Track == nil {
+		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("republishKind: no publication slot for kind %s", kind.String()))
+		return
+	}
+	if pub.published {
+		return
+	}
+	if e.room == nil || e.room.LocalParticipant == nil {
+		return
+	}
+	if _, err := e.room.LocalParticipant.PublishTrack(pub.Track, &lksdk.TrackPublicationOptions{
+		Name:   fmt.Sprintf("%s_%s", e.room.LocalParticipant.Identity(), kind.String()),
+		Source: kind,
+	}); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("republishKind: failed to publish track for kind %s: %v", kind.String(), err))
+		return
+	}
+	pub.published = true
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("republishKind: re-published track for kind %s", kind.String()))
 }
 
 func (e *LivekitBin) onRtpBinPadAddedSendRtp(self *gst.Bin, pad *gst.Pad, pname string) {

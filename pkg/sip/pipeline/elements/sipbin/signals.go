@@ -77,29 +77,16 @@ func (e *SipBin) onRtpBinRequestPtMap(self *gst.Bin, session int, pt uint8) *gst
 }
 
 func (e *SipBin) onPeerScreenshareStopped(self *gst.Bin) {
-	kind := livekit.TrackSource_SCREEN_SHARE
-	session := uint(kind)
-
-	e.mu.Lock()
-	ssrcs := make([]uint, 0, len(e.activePts[kind]))
-	for ssrc := range e.activePts[kind] {
-		ssrcs = append(ssrcs, ssrc)
+	self.Log(CAT, gst.LevelInfo, "Peer released screenshare floor, emitting peer-screenshare-active=false")
+	if _, err := self.Emit("peer-screenshare-active", false); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to emit peer-screenshare-active: %v", err))
 	}
-	for _, ssrc := range ssrcs {
-		delete(e.activePts[kind], ssrc)
-	}
-	rtpbin := e.RtpBin
-	e.mu.Unlock()
+}
 
-	if rtpbin == nil || len(ssrcs) == 0 {
-		return
-	}
-
-	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Peer released screenshare floor, clearing %d ssrc(s) for track source %d", len(ssrcs), kind))
-	for _, ssrc := range ssrcs {
-		if _, err := rtpbin.Emit("clear-ssrc", session, ssrc); err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to emit clear-ssrc on screenshare floor release for ssrc %d: %v", ssrc, err))
-		}
+func (e *SipBin) onPeerScreenshareStarted(self *gst.Bin) {
+	self.Log(CAT, gst.LevelInfo, "Peer granted screenshare floor, emitting peer-screenshare-active=true")
+	if _, err := self.Emit("peer-screenshare-active", true); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to emit peer-screenshare-active: %v", err))
 	}
 }
 

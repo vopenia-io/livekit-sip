@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
+	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/hop"
 	"github.com/samber/lo"
@@ -373,7 +374,28 @@ func (sio *SipIo) Link() error {
 		return fmt.Errorf("failed to connect available-media signal: %w", err)
 	}
 
+	if _, err := sio.SipBin.Connect("peer-screenshare-active", func(_ *gst.Element, active bool) {
+		ptr := siow.Value()
+		if ptr == nil {
+			return
+		}
+		ptr.onPeerScreenshareActive(active)
+	}); err != nil {
+		return fmt.Errorf("failed to connect peer-screenshare-active signal: %w", err)
+	}
+
 	return nil
+}
+
+func (sio *SipIo) onPeerScreenshareActive(active bool) {
+	signal := "republish-kind"
+	if !active {
+		signal = "unpublish-kind"
+	}
+	sio.log.Infow("peer screenshare state change", "active", active, "signal", signal)
+	if _, err := sio.pipeline.WebrtcIo.LivekitBin.Emit(signal, int(livekit.TrackSource_SCREEN_SHARE)); err != nil {
+		sio.log.Errorw("failed to emit kind publish signal on LiveKit bin", err, "signal", signal)
+	}
 }
 
 // Close implements [GstChain].
