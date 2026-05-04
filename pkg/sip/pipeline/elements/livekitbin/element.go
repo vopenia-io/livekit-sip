@@ -52,11 +52,12 @@ type LivekitBinTrack struct {
 
 type LivekitBinPublication struct {
 	initialized  bool
-	published    bool
+	muted        bool
 	probeID      uint64
 	TrackSink    *gst.Element
 	FormatFilter *gst.Element
 	Track        *webrtc.TrackLocalStaticRTP
+	Pub          *lksdk.LocalTrackPublication
 }
 
 type LivekitBinTrackFunnel struct {
