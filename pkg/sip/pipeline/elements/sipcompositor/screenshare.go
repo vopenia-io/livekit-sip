@@ -37,14 +37,14 @@ func (e *SipCompositor) initScreenshare(self *gst.Bin) error {
 
 	var err error
 	e.SipCompositorScreenshare.FallbackSwitch, err = gst.NewElementWithProperties("fallbackswitch", map[string]interface{}{
-		"timeout": uint64(10_000_000_000),
+		"timeout": uint64(1_500_000_000),
 	})
 	if err != nil {
 		return err
 	}
 
 	e.SipCompositorScreenshare.Filter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-		"caps": gst.NewCapsFromString(fmt.Sprintf("%s, width=(int)%d, height=(int)%d", e.SipCompositorScreenshare.Format, e.videoWidth, e.videoHeight)),
+		"caps": gst.NewCapsFromString(fmt.Sprintf("%s", e.SipCompositorScreenshare.Format)),
 	})
 	if err != nil {
 		return err
