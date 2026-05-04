@@ -940,6 +940,7 @@ func (c *inboundCall) handleInvite(ctx context.Context, tid traceid.ID, req *sip
 		if ok, err = acceptCall(answerData); !ok {
 			return err // could be success if the caller hung up
 		}
+		time.Sleep(1 * time.Second)
 		disp, ok, err = c.pinPrompt(ctx, trunkID)
 		if !ok {
 			return err // already sent a response. Could be success if user hung up
