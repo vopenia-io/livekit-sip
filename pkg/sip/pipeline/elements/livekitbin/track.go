@@ -627,14 +627,21 @@ func (e *LivekitBin) onRtpBinPadAddedRecvRtp(self *gst.Bin, pad *gst.Pad, pname 
 		return
 	}
 
-	sid, exists := e.sidBySsrc[uint32(ssrc)]
-	if !exists {
+	e.mu.Lock()
+	sid, sidExists := e.sidBySsrc[uint32(ssrc)]
+	var track *LivekitBinTrack
+	var trackOk bool
+	if sidExists {
+		track, trackOk = e.tracks[sid]
+	}
+	e.mu.Unlock()
+
+	if !sidExists {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to find track SID for pad name: %s", pname))
 		self.Error(fmt.Sprintf("Failed to find track SID for pad name: %s", pname), fmt.Errorf("track error"))
 		return
 	}
-	track, ok := e.tracks[sid]
-	if !ok {
+	if !trackOk {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to find track for SID %s in pad name: %s", sid, pname))
 		self.Error(fmt.Sprintf("Failed to find track for SID %s in pad name: %s", sid, pname), fmt.Errorf("track error"))
 		return

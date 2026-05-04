@@ -86,7 +86,7 @@ func (e *NvH264Video) Constructed(instance *glib.Object) {
 
 	e.H264Depay, err = gst.NewElementWithProperties("rtph264depay", map[string]interface{}{
 		"request-keyframe":  true,
-		"wait-for-keyframe": true,
+		"wait-for-keyframe": false,
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create rtph264depay element: %v", err))
