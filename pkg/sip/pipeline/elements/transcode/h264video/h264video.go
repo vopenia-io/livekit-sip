@@ -1,7 +1,49 @@
 package h264video
 
+/*
+#cgo pkg-config: gstreamer-1.0 gstreamer-video-1.0
+#include <gst/gst.h>
+#include <gst/video/video.h>
+
+static GstPadProbeReturn
+h264_video_probe_bad_buffers(GstPad *pad, GstPadProbeInfo *info, gpointer user_data) {
+	GstBuffer *buf = GST_PAD_PROBE_INFO_BUFFER(info);
+	if (G_UNLIKELY(buf == NULL))
+		return GST_PAD_PROBE_OK;
+
+	guint flags = 0;
+	if (GST_BUFFER_FLAG_IS_SET(buf, GST_BUFFER_FLAG_DISCONT))
+		flags |= 1;
+	if (GST_BUFFER_FLAG_IS_SET(buf, GST_BUFFER_FLAG_CORRUPTED))
+		flags |= 2;
+	if (G_LIKELY(flags == 0))
+		return GST_PAD_PROBE_OK;
+
+	GstClockTime *last = (GstClockTime *)user_data;
+	GstClockTime now = gst_util_get_timestamp();
+
+	if (*last == GST_CLOCK_TIME_NONE || now - *last > 5 * GST_SECOND) {
+		gst_pad_send_event(pad,
+			gst_video_event_new_upstream_force_key_unit(
+				GST_CLOCK_TIME_NONE, FALSE, 0));
+		*last = now;
+	}
+	return GST_PAD_PROBE_OK;
+}
+
+static void
+h264_video_add_probe_bad_buffers(GstPad *pad) {
+	GstClockTime *last = g_new(GstClockTime, 1);
+	*last = GST_CLOCK_TIME_NONE;
+	gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER,
+		h264_video_probe_bad_buffers, last, g_free);
+}
+*/
+import "C"
+
 import (
 	"fmt"
+	"unsafe"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
@@ -106,13 +148,15 @@ func (e *H264Video) Constructed(instance *glib.Object) {
 	}
 
 	e.H264Dec, err = gst.NewElementWithProperties("avdec_h264", map[string]interface{}{
-		"max-threads": int(4),
+		"max-threads":                   int(4),
+		"automatic-request-sync-points": true,
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create avdec_h264 element: %v", err))
 		self.Error("Failed to create avdec_h264 element", err)
 		return
 	}
+	C.h264_video_add_probe_bad_buffers((*C.GstPad)(unsafe.Pointer(e.H264Dec.GetStaticPad("src").Instance())))
 
 	e.VideoConvert, err = gst.NewElementWithProperties("videoconvert", map[string]interface{}{})
 	if err != nil {
