@@ -5,38 +5,55 @@ package h264video
 #include <gst/gst.h>
 #include <gst/video/video.h>
 
+typedef struct {
+    GstClockTime last_request;   // monotonic ns; GST_CLOCK_TIME_NONE = never
+    GstClockTime last_pts;       // PTS of previous output buffer
+} h264_video_probe_state;
+
 static GstPadProbeReturn
 h264_video_probe_bad_buffers(GstPad *pad, GstPadProbeInfo *info, gpointer user_data) {
-	GstBuffer *buf = GST_PAD_PROBE_INFO_BUFFER(info);
-	if (G_UNLIKELY(buf == NULL))
-		return GST_PAD_PROBE_OK;
+    GstBuffer *buf = GST_PAD_PROBE_INFO_BUFFER(info);
+    if (G_UNLIKELY(buf == NULL))
+        return GST_PAD_PROBE_OK;
 
-	guint flags = 0;
-	if (GST_BUFFER_FLAG_IS_SET(buf, GST_BUFFER_FLAG_DISCONT))
-		flags |= 1;
-	if (GST_BUFFER_FLAG_IS_SET(buf, GST_BUFFER_FLAG_CORRUPTED))
-		flags |= 2;
-	if (G_LIKELY(flags == 0))
-		return GST_PAD_PROBE_OK;
+    h264_video_probe_state *st = (h264_video_probe_state *)user_data;
 
-	GstClockTime *last = (GstClockTime *)user_data;
-	GstClockTime now = gst_util_get_timestamp();
+    guint flags = 0;
+    if (GST_BUFFER_FLAG_IS_SET(buf, GST_BUFFER_FLAG_DISCONT))
+        flags |= 1;
+    if (GST_BUFFER_FLAG_IS_SET(buf, GST_BUFFER_FLAG_CORRUPTED))
+        flags |= 2;
 
-	if (*last == GST_CLOCK_TIME_NONE || now - *last > 5 * GST_SECOND) {
-		gst_pad_send_event(pad,
-			gst_video_event_new_upstream_force_key_unit(
-				GST_CLOCK_TIME_NONE, FALSE, 0));
-		*last = now;
-	}
-	return GST_PAD_PROBE_OK;
+    GstClockTime pts = GST_BUFFER_PTS(buf);
+    if (GST_CLOCK_TIME_IS_VALID(pts) &&
+        GST_CLOCK_TIME_IS_VALID(st->last_pts) &&
+        pts <= st->last_pts) {
+        flags |= 4;
+    }
+    if (GST_CLOCK_TIME_IS_VALID(pts))
+        st->last_pts = pts;
+
+    if (G_LIKELY(flags == 0))
+        return GST_PAD_PROBE_OK;
+
+    GstClockTime now = gst_util_get_timestamp();
+    if (st->last_request == GST_CLOCK_TIME_NONE ||
+        now - st->last_request > 5 * GST_SECOND) {
+        gst_pad_send_event(pad,
+            gst_video_event_new_upstream_force_key_unit(
+                GST_CLOCK_TIME_NONE, FALSE, 0));
+        st->last_request = now;
+    }
+    return GST_PAD_PROBE_OK;
 }
 
 static void
 h264_video_add_probe_bad_buffers(GstPad *pad) {
-	GstClockTime *last = g_new(GstClockTime, 1);
-	*last = GST_CLOCK_TIME_NONE;
-	gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER,
-		h264_video_probe_bad_buffers, last, g_free);
+    h264_video_probe_state *st = g_new(h264_video_probe_state, 1);
+    st->last_request = GST_CLOCK_TIME_NONE;
+    st->last_pts     = GST_CLOCK_TIME_NONE;
+    gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER,
+        h264_video_probe_bad_buffers, st, g_free);
 }
 */
 import "C"
@@ -150,6 +167,8 @@ func (e *H264Video) Constructed(instance *glib.Object) {
 	e.H264Dec, err = gst.NewElementWithProperties("avdec_h264", map[string]interface{}{
 		"max-threads":                   int(4),
 		"automatic-request-sync-points": true,
+		"min-force-key-unit-interval":   uint64(0),
+		"discard-corrupted-frames":      false,
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create avdec_h264 element: %v", err))
