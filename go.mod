@@ -27,7 +27,7 @@ require (
 	github.com/samber/lo v1.52.0
 	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.11.1
-	github.com/vopenia-io/bfcp v0.0.0-20260423133321-eb87c81c5da4
+	github.com/vopenia-io/bfcp v0.0.0-20260428104619-de0bcc21f650
 	golang.org/x/exp v0.0.0-20260212183809-81e46e3db34a
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/hraban/opus.v2 v2.0.0-20230925203106-0188a62cb302
@@ -152,6 +152,6 @@ require (
 
 replace github.com/livekit/media-sdk => github.com/vopenia-io/media-sdk v0.0.0-20251229153245-6b76cc17de47
 
-replace github.com/go-gst/go-gst => github.com/vopenia-io/go-gst v0.0.0-20260423153000-794c5f3fd5b5
+replace github.com/go-gst/go-gst => github.com/vopenia-io/go-gst v0.0.0-20260424144932-924a7df29a08
 
 replace github.com/go-gst/go-glib => github.com/vopenia-io/go-glib v0.0.0-20260423152829-ee34a834fbd7
