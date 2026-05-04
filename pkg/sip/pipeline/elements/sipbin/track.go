@@ -75,9 +75,16 @@ func (e *SipBin) NewTrack(self *gst.Bin, idx int, kind livekit.TrackSource, prot
 		return nil, fmt.Errorf("failed to create GSocket from RTCP UDP connection: %w", err)
 	}
 
+	bufferSize := 0
+	switch kind {
+	case livekit.TrackSource_CAMERA, livekit.TrackSource_SCREEN_SHARE:
+		bufferSize = 8 * 1024 * 1024 // 8MB for camera and screen share tracks
+	}
+
 	rtpSrc, err := gst.NewElementWithProperties("udpsrc", map[string]interface{}{
 		"socket":       grtpSocket,
 		"close-socket": false,
+		"buffer-size":  int(bufferSize),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create RTP source element: %w", err)
