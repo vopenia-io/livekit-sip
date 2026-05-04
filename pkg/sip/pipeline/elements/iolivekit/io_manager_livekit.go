@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 	"weak"
 
 	"github.com/go-gst/go-glib/glib"
@@ -1225,8 +1226,6 @@ func (e *IoManagerLivekit) playWavFd(self *gst.Bin, fd int) bool {
 		return false
 	}
 
-	self.Log(CAT, gst.LevelInfo, "playWavFd: wavsource created, adding to bin")
-
 	if err := self.AddMany(wavSrc, filter); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add wavsource to io_manager_livekit: %v", err))
 		return false
@@ -1238,16 +1237,12 @@ func (e *IoManagerLivekit) playWavFd(self *gst.Bin, fd int) bool {
 		return false
 	}
 
-	self.Log(CAT, gst.LevelInfo, "playWavFd: added to bin, getting compositor pad")
-
 	compositorPad := e.Compositor.GetRequestPad("raw_sink_%u")
 	if compositorPad == nil {
 		self.Log(CAT, gst.LevelError, "Failed to get raw_sink request pad from compositor")
 		return false
 	}
 	defer e.Compositor.ReleaseRequestPad(compositorPad)
-
-	self.Log(CAT, gst.LevelInfo, "playWavFd: got compositor pad, getting wav src pad")
 
 	srcPad := filter.GetStaticPad("src")
 	clock := self.GetClock()
@@ -1256,7 +1251,6 @@ func (e *IoManagerLivekit) playWavFd(self *gst.Bin, fd int) bool {
 		srcPad.SetOffset(int64(now))
 		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Set offset of new microphone sink pad to %d based on clock time", now))
 	}
-	self.Log(CAT, gst.LevelInfo, "playWavFd: linking pads")
 
 	if ret := srcPad.Link(compositorPad); ret != gst.PadLinkOK {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link wavsource src to compositor pad: %v", ret))
@@ -1266,9 +1260,6 @@ func (e *IoManagerLivekit) playWavFd(self *gst.Bin, fd int) bool {
 	eosCh := make(chan struct{}, 1)
 	srcPad.AddProbe(gst.PadProbeTypeEventDownstream, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
 		evt := info.GetEvent()
-
-		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("playWavFd: pad probe got event of type %s", evt.Type().String()))
-
 		if evt != nil && evt.Type() == gst.EventTypeEOS {
 			select {
 			case eosCh <- struct{}{}:
@@ -1279,8 +1270,6 @@ func (e *IoManagerLivekit) playWavFd(self *gst.Bin, fd int) bool {
 		return gst.PadProbeOK
 	})
 
-	self.Log(CAT, gst.LevelInfo, "playWavFd: syncing state with parent")
-
 	if !wavSrc.SyncStateWithParent() {
 		self.Log(CAT, gst.LevelWarning, "Failed to sync wavsource state with parent")
 	}
@@ -1288,10 +1277,14 @@ func (e *IoManagerLivekit) playWavFd(self *gst.Bin, fd int) bool {
 		self.Log(CAT, gst.LevelWarning, "Failed to sync capsfilter state with parent")
 	}
 
-	self.Log(CAT, gst.LevelInfo, "playWavFd: waiting for EOS")
+	self.Log(CAT, gst.LevelDebug, "playWavFd: waiting for EOS")
 
-	<-eosCh
-	self.Log(CAT, gst.LevelInfo, "playWavFd: got EOS, tearing down")
+	select {
+	case <-eosCh:
+		self.Log(CAT, gst.LevelDebug, "playWavFd: got EOS, tearing down")
+	case <-time.After(30 * time.Second):
+		self.Log(CAT, gst.LevelWarning, "playWavFd: timed out waiting for EOS, tearing down anyway")
+	}
 
 	if err := wavSrc.SetState(gst.StateNull); err != nil {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set wavsource to NULL: %v", err))
