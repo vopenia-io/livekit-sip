@@ -285,6 +285,10 @@ func (e *SipBin) makeTrackMedia(self *gst.Bin, track *SipTrack, caps *gst.Caps) 
 		}
 	}
 
+	if ret := media.AddAttribute("rtcp", strconv.Itoa(track.rtcpConn.LocalAddr().(*net.UDPAddr).Port)); ret != gstsdp.SDPResultOk {
+		return nil, fmt.Errorf("failed to add rtcp attribute to media: %v", err)
+	}
+
 	switch track.Kind {
 	case livekit.TrackSource_SCREEN_SHARE, livekit.TrackSource_SCREEN_SHARE_AUDIO:
 		if ret := media.AddAttribute("content", "slides"); ret != gstsdp.SDPResultOk {
