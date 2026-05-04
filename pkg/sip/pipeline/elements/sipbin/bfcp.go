@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"weak"
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/gstsdp"
@@ -32,20 +33,16 @@ func (e *SipBin) NewBfcpTrack(self *gst.Bin, idx int, proto string) (*BfcpTrack,
 		return nil, fmt.Errorf("failed to create BFCP server element: %w", err)
 	}
 
-	// wself := glib.WeakRefInit(self)
-	// eweak := weak.Make(e)
-	// if _, err := bfcpServer.Connect("on-floor-released", func(instance *gst.Element, floorID, userID int) {
-	// 	self := gst.ToGstBin(wself.Get())
-	// 	e := eweak.Value()
-	// 	if self == nil || self.Instance() == nil || e == nil {
-	// 		return
-	// 	}
-	// 	e.mu.Lock()
-	// 	defer e.mu.Unlock()
-	// 	e.clearTrack(self, livekit.TrackSource_SCREEN_SHARE)
-	// }); err != nil {
-	// 	return nil, fmt.Errorf("failed to connect on-floor-released signal: %w", err)
-	// }
+	eweak := weak.Make(e)
+	if _, err := bfcpServer.Connect("on-floor-released", func(instance *gst.Element, floorID, userID int) {
+		e := eweak.Value()
+		if e == nil {
+			return
+		}
+		e.onPeerScreenshareStopped(self)
+	}); err != nil {
+		return nil, fmt.Errorf("failed to connect on-floor-released signal: %w", err)
+	}
 
 	return &BfcpTrack{
 		Idx:         idx,
