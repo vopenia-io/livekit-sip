@@ -46,7 +46,7 @@ func (p *LivekitBinPublication) Init(e *LivekitBin, self *gst.Bin, kind livekit.
 		return fmt.Errorf("failed to create new local track: %w", err)
 	}
 
-	publication, err := e.room.LocalParticipant.PublishTrack(track, &lksdk.TrackPublicationOptions{
+	pub, err := e.room.LocalParticipant.PublishTrack(track, &lksdk.TrackPublicationOptions{
 		Name:   fmt.Sprintf("%s_%s", e.room.LocalParticipant.Identity(), kind.String()),
 		Source: kind,
 	})
@@ -54,7 +54,7 @@ func (p *LivekitBinPublication) Init(e *LivekitBin, self *gst.Bin, kind livekit.
 		return fmt.Errorf("failed to create sink track: %w", err)
 	}
 
-	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Published camera track with SID %s", publication.SID()))
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Published camera track with SID %s", pub.SID()))
 
 	element, err := gst.NewElementWithProperties("livekitbin_sinktrack", map[string]interface{}{
 		"track": glib.ArbitraryValue{Data: track},
@@ -76,45 +76,57 @@ func (p *LivekitBinPublication) Init(e *LivekitBin, self *gst.Bin, kind livekit.
 
 	p.TrackSink = element
 	p.Track = track
-	p.Pub = publication
 	p.initialized = true
 	p.muted = false
 
 	return nil
 }
 
-func (e *LivekitBin) unpublishKind(self *gst.Bin, kind livekit.TrackSource) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+func (e *LivekitBin) lookupLocalPublication(kind livekit.TrackSource) *lksdk.LocalTrackPublication {
+	if e.room == nil || e.room.LocalParticipant == nil {
+		return nil
+	}
+	tp := e.room.LocalParticipant.GetTrackPublication(kind)
+	if tp == nil {
+		return nil
+	}
+	ltp, ok := tp.(*lksdk.LocalTrackPublication)
+	if !ok {
+		return nil
+	}
+	return ltp
+}
 
+func (e *LivekitBin) setKindMuted(self *gst.Bin, kind livekit.TrackSource, muted bool) {
+	e.mu.Lock()
 	pub := e.publications[kind]
-	if pub == nil || pub.Pub == nil {
-		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("unpublishKind: no publication for kind %s", kind.String()))
+	if pub == nil || !pub.initialized {
+		e.mu.Unlock()
+		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("setKindMuted(%v): no publication slot for kind %s", muted, kind.String()))
 		return
 	}
-	if pub.muted {
+	if pub.muted == muted {
+		e.mu.Unlock()
 		return
 	}
-	pub.Pub.SetMuted(true)
-	pub.muted = true
-	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("unpublishKind: muted track for kind %s sid %s", kind.String(), pub.Pub.SID()))
+	pub.muted = muted
+	e.mu.Unlock()
+
+	ltp := e.lookupLocalPublication(kind)
+	if ltp == nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("setKindMuted(%v): no LiveKit publication for kind %s", muted, kind.String()))
+		return
+	}
+	ltp.SetMuted(muted)
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("setKindMuted: kind %s sid %s muted=%v", kind.String(), ltp.SID(), muted))
+}
+
+func (e *LivekitBin) unpublishKind(self *gst.Bin, kind livekit.TrackSource) {
+	e.setKindMuted(self, kind, true)
 }
 
 func (e *LivekitBin) republishKind(self *gst.Bin, kind livekit.TrackSource) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	pub := e.publications[kind]
-	if pub == nil || pub.Pub == nil {
-		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("republishKind: no publication for kind %s, will be created on first RTP", kind.String()))
-		return
-	}
-	if !pub.muted {
-		return
-	}
-	pub.Pub.SetMuted(false)
-	pub.muted = false
-	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("republishKind: unmuted track for kind %s sid %s", kind.String(), pub.Pub.SID()))
+	e.setKindMuted(self, kind, false)
 }
 
 func (e *LivekitBin) onRtpBinPadAddedSendRtp(self *gst.Bin, pad *gst.Pad, pname string) {
