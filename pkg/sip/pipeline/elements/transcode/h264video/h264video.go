@@ -166,7 +166,7 @@ func (e *H264Video) Constructed(instance *glib.Object) {
 
 	e.H264Dec, err = gst.NewElementWithProperties("avdec_h264", map[string]interface{}{
 		"max-threads":                   int(4),
-		"automatic-request-sync-points": true,
+		"automatic-request-sync-points": false,
 		"min-force-key-unit-interval":   uint64(0),
 		"discard-corrupted-frames":      false,
 	})
