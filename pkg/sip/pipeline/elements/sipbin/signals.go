@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/go-gst/go-gst/gst"
+	"github.com/go-gst/go-gst/gst/video"
 	"github.com/livekit/protocol/livekit"
 )
 
@@ -87,6 +88,10 @@ func (e *SipBin) onRtpBinSenderTimeout(self *gst.Bin, session, ssrc uint) {
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Sender timeout for track source %d, ssrc %d", kind, ssrc))
 
+	e.mu.Lock()
+	delete(e.activePts[kind], ssrc)
+	e.mu.Unlock()
+
 	if _, err := e.RtpBin.Emit("clear-ssrc", session, ssrc); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to emit clear-ssrc signal on rtpbin for session %d and ssrc %d: %v", session, ssrc, err))
 	}
@@ -166,12 +171,19 @@ func (e *SipBin) onRtpBinPadAddedRecvRtpSrc(self *gst.Bin, pad *gst.Pad) {
 	}
 
 	e.mu.Lock()
-	defer e.mu.Unlock()
 
 	if _, exist := e.PtMap[kind][uint8(pt)]; !exist {
+		e.mu.Unlock()
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Received new pad %s for payload type %d which was not in the original offer for track source %d", pad.GetName(), pt, kind))
 		return
 	}
+
+	ssrcKey := uint(ssrc)
+	prevPt, hadPrev := e.activePts[kind][ssrcKey]
+	e.activePts[kind][ssrcKey] = uint8(pt)
+	ptChanged := hadPrev && prevPt != uint8(pt)
+
+	e.mu.Unlock()
 
 	class := gst.ToElementClass(self.Class())
 
@@ -187,6 +199,18 @@ func (e *SipBin) onRtpBinPadAddedRecvRtpSrc(self *gst.Bin, pad *gst.Pad) {
 	if !gpad.SetActive(true) {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to activate ghost pad for new RTP source pad %s", pad.GetName()))
 		return
+	}
+
+	if ptChanged {
+		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Payload type change on track source %d ssrc %d: %d -> %d, requesting keyframe", kind, ssrc, prevPt, pt))
+		event := video.NewEventUpstreamForceKeyUnit(gst.ClockTimeNone, true, 0)
+		if event == nil {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to build force-key-unit event for new pad %s", pad.GetName()))
+			return
+		}
+		if !pad.SendEvent(event) {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to send force-key-unit event for new pad %s", pad.GetName()))
+		}
 	}
 }
 
@@ -224,6 +248,12 @@ func (e *SipBin) onRtpBinPadRemovedRecvRtpSrc(self *gst.Bin, pad *gst.Pad) {
 	}
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Pad %s removed from rtpbin for track source %d, ssrc %d, and payload type %d", pad.GetName(), kind, ssrc, pt))
+
+	e.mu.Lock()
+	if active, ok := e.activePts[kind][uint(ssrc)]; ok && active == uint8(pt) {
+		delete(e.activePts[kind], uint(ssrc))
+	}
+	e.mu.Unlock()
 
 	gpad := self.GetStaticPad(fmt.Sprintf("recv_rtp_src_%d_%d_%d", session, ssrc, pt))
 	if gpad == nil {

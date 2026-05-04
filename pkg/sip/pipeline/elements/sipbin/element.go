@@ -27,9 +27,10 @@ type SipBin struct {
 
 	RtpBin *gst.Element
 
-	PtMap  [NbTracks]map[uint8]*gst.Caps // indexed by livekit.TrackSource
-	Tracks [NbTracks]*SipTrack           // indexed by livekit.TrackSource
-	Medias []*gstsdp.Media
+	PtMap     [NbTracks]map[uint8]*gst.Caps // indexed by livekit.TrackSource
+	Tracks    [NbTracks]*SipTrack           // indexed by livekit.TrackSource
+	activePts [NbTracks]map[uint]uint8      // indexed by livekit.TrackSource, then ssrc
+	Medias    []*gstsdp.Media
 
 	Bfcp *BfcpTrack
 
@@ -140,6 +141,9 @@ func (e *SipBin) InstanceInit(instance *glib.Object) {
 
 	for i := range e.PtMap {
 		e.PtMap[i] = make(map[uint8]*gst.Caps)
+	}
+	for i := range e.activePts {
+		e.activePts[i] = make(map[uint]uint8)
 	}
 
 	e.sessionID = randID()
@@ -325,6 +329,10 @@ func (e *SipBin) Finalize(instance *glib.Object) {
 	e.PtMap = [NbTracks]map[uint8]*gst.Caps{}
 	for i := range e.PtMap {
 		e.PtMap[i] = make(map[uint8]*gst.Caps)
+	}
+	e.activePts = [NbTracks]map[uint]uint8{}
+	for i := range e.activePts {
+		e.activePts[i] = make(map[uint]uint8)
 	}
 	e.RtpBin = nil
 	e.Medias = nil
