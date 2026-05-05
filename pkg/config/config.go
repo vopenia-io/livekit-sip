@@ -62,6 +62,12 @@ type VideoConfig struct {
 	Nvidia bool `yaml:"nvidia"`
 }
 
+type GstConfig struct {
+	Debug   string `yaml:"debug"`
+	DumpDot bool   `yaml:"dump_dot"`
+	DumpDir string `yaml:"dump_dir"`
+}
+
 type Config struct {
 	Redis     *redis.RedisConfig `yaml:"redis"`      // required
 	ApiKey    string             `yaml:"api_key"`    // required (env LIVEKIT_API_KEY)
@@ -78,6 +84,7 @@ type Config struct {
 	TLS                *TLSConfig          `yaml:"tls"`
 	RTPPort            rtcconfig.PortRange `yaml:"rtp_port"`
 	Logging            logger.Config       `yaml:"logging"`
+	Gst                GstConfig           `yaml:"gst"`
 	ClusterID          string              `yaml:"cluster_id"` // cluster this instance belongs to
 	MaxCpuUtilization  float64             `yaml:"max_cpu_utilization"`
 
@@ -173,6 +180,10 @@ func (c *Config) Init() error {
 
 	if c.MaxActiveParticipants <= 0 {
 		c.MaxActiveParticipants = 6
+	}
+
+	if c.Gst.Debug == "" {
+		c.Gst.Debug = "sipbin:4"
 	}
 
 	if err := c.InitLogger(); err != nil {

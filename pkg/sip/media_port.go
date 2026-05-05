@@ -38,6 +38,7 @@ import (
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/protocol/utils/traceid"
 
+	"github.com/livekit/sip/pkg/config"
 	"github.com/livekit/sip/pkg/stats"
 )
 
@@ -226,6 +227,7 @@ type MediaOptions struct {
 	VideoHeight           uint
 	Nvidia                bool
 	MaxActiveParticipants int
+	Gst                   config.GstConfig
 }
 
 func NewMediaPort(tid traceid.ID, log logger.Logger, mon *stats.CallMonitor, opts *MediaOptions, sampleRate int) (*MediaPort, error) {

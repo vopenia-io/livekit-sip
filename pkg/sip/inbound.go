@@ -661,9 +661,9 @@ type inboundCall struct {
 	forwardDTMF atomic.Bool
 	done        atomic.Bool
 	started     core.Fuse
-	stats       Stats
-	jitterBuf   bool
-	projectID   string
+	// stats       Stats
+	jitterBuf bool
+	projectID string
 }
 
 func (s *Server) newInboundCall(
@@ -801,18 +801,19 @@ func (c *inboundCall) handleInvite(ctx context.Context, tid traceid.ID, req *sip
 	}
 
 	opts := &MediaOptions{
-		IP:                    c.s.sconf.MediaIP,
-		IPLocal:               c.s.sconf.MediaIPLocal,
-		Ports:                 conf.RTPPort,
-		MediaTimeoutInitial:   c.s.conf.MediaTimeoutInitial,
-		MediaTimeout:          c.s.conf.MediaTimeout,
-		EnableJitterBuffer:    c.jitterBuf,
-		Stats:                 &c.stats.Port,
+		IP:                  c.s.sconf.MediaIP,
+		IPLocal:             c.s.sconf.MediaIPLocal,
+		Ports:               conf.RTPPort,
+		MediaTimeoutInitial: c.s.conf.MediaTimeoutInitial,
+		MediaTimeout:        c.s.conf.MediaTimeout,
+		EnableJitterBuffer:  c.jitterBuf,
+		// Stats:                 &c.stats.Port,
 		NoInputResample:       !RoomResample,
 		VideoWidth:            uint(c.s.conf.Video.Width),
 		VideoHeight:           uint(c.s.conf.Video.Height),
 		Nvidia:                c.s.conf.Video.Nvidia,
 		MaxActiveParticipants: c.s.conf.MaxActiveParticipants,
+		Gst:                   c.s.conf.Gst,
 	}
 
 	orchestrator, err := NewMediaOrchestrator(c.log(), c.ctx, c.cc, opts)
@@ -1032,8 +1033,10 @@ func (c *inboundCall) handleInvite(ctx context.Context, tid traceid.ID, req *sip
 		case <-ticker.C:
 			c.log().Debugw("sending keep-alive")
 			c.state.ForceFlush(ctx)
-			c.stats.Update()
-			c.printStats(c.log())
+			if c.medias != nil {
+				c.medias.UpdateStats()
+			}
+			c.printStats(c.log(), c.medias)
 		case <-ctx.Done():
 			c.closeWithHangup()
 			return nil
@@ -1272,8 +1275,25 @@ func (c *inboundCall) pinPrompt(ctx context.Context, trunkID string) (disp CallD
 	}
 }
 
-func (c *inboundCall) printStats(log logger.Logger) {
-	c.stats.Log(log, c.callStart)
+func (c *inboundCall) printStats(log logger.Logger, medias *MediaOrchestrator) {
+	if medias == nil {
+		c.log().Warnw("call stats not available", nil)
+		return
+	}
+	stats := medias.Stats()
+	if stats == nil {
+		c.log().Warnw("call stats not available", nil)
+		return
+	}
+
+	c.log().Infow("call statistics",
+		"microphone", stats.Microphone,
+		"microphone-pt-caps", stats.MicrophonePtCaps,
+		"camera", stats.Camera,
+		"camera-pt-caps", stats.CameraPtCaps,
+		"screen-share", stats.ScreenShare,
+		"screen-share-pt-caps", stats.ScreenSharePtCaps,
+	)
 }
 
 // close should only be called from handleInvite.
@@ -1281,10 +1301,10 @@ func (c *inboundCall) close(error bool, status CallStatus, reason string) {
 	if !c.done.CompareAndSwap(false, true) {
 		return
 	}
-	c.stats.Closed.Store(true)
+	// c.stats.Closed.Store(true)
 	sipCode, sipStatus := status.SIPStatus()
 	log := c.log().WithValues("status", sipCode, "reason", reason)
-	defer c.printStats(log)
+	defer c.printStats(log, c.medias)
 	c.setStatus(status)
 	c.mon.CallTerminate(reason)
 	isWarn := error || status == callHangupMedia

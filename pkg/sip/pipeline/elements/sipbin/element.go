@@ -93,6 +93,13 @@ func (e *SipBin) ClassInit(klass *glib.ObjectClass) {
 		glib.TYPE_BOOLEAN,
 	)
 
+	gst.SignalNew(
+		class.Type(),
+		"stats",
+		gst.SignalRunLast,
+		gst.TypeStructure,
+	)
+
 	// request signals
 	SignalSendOfferSdpID = gst.SignalNew(
 		class.Type(),
@@ -210,6 +217,19 @@ func (e *SipBin) InstanceInit(instance *glib.Object) {
 	}); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to connect toggle-screenshare signal: %v", err))
 		self.Error("failed to connect toggle-screenshare signal", err)
+		return
+	}
+
+	if _, err := self.Connect("stats", func(instance *gst.Element) *gst.Structure {
+		e := eweak.Value()
+		if e == nil {
+			return nil
+		}
+		self := gst.ToGstBin(instance)
+		return e.DumpStats(self)
+	}); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to connect stats signal: %v", err))
+		self.Error("failed to connect stats signal", err)
 		return
 	}
 

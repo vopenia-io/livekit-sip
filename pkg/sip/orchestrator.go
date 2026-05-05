@@ -77,7 +77,8 @@ type MediaOrchestrator struct {
 	wg         sync.WaitGroup
 
 	pipeline *pipeline.Pipeline
-	// bfcp     *BFCPManager
+
+	stats atomic.Pointer[pipeline.CallStats]
 
 	state MediaState
 }
@@ -114,7 +115,7 @@ func (o *MediaOrchestrator) init() error {
 		return err
 	}
 
-	pipeline, err := pipeline.New(o.ctx, o.log, pipeline.SipOpt{
+	p, err := pipeline.New(o.ctx, o.log, pipeline.SipOpt{
 		IP:                    o.opts.IP.String(),
 		PortStart:             uint16(o.opts.Ports.Start),
 		PortEnd:               uint16(o.opts.Ports.End),
@@ -122,11 +123,15 @@ func (o *MediaOrchestrator) init() error {
 		VideoHeight:           o.opts.VideoHeight,
 		Nvidia:                o.opts.Nvidia,
 		MaxActiveParticipants: o.opts.MaxActiveParticipants,
-	})
+		Gst:                   o.opts.Gst,
+	}, o.inbound.sipCallID)
 	if err != nil {
 		return fmt.Errorf("could not create pipeline: %w", err)
 	}
-	o.pipeline = pipeline
+	o.pipeline = p
+	o.pipeline.OnStats(func(stats *pipeline.CallStats) {
+		o.stats.Store(stats)
+	})
 
 	o.wg.Add(1)
 	go o.sendOfferLoop()
@@ -138,6 +143,16 @@ func (o *MediaOrchestrator) init() error {
 	o.state = MediaStateOK
 
 	return nil
+}
+
+func (o *MediaOrchestrator) UpdateStats() {
+	if o.pipeline != nil && o.pipeline.Pipeline().GetCurrentState() == gst.StatePlaying {
+		o.pipeline.GetStats()
+	}
+}
+
+func (o *MediaOrchestrator) Stats() *pipeline.CallStats {
+	return o.stats.Load()
 }
 
 func (o *MediaOrchestrator) okStates(allowed ...MediaState) error {
@@ -234,7 +249,8 @@ func (o *MediaOrchestrator) Close() error {
 	o.wg.Wait()
 
 	log := o.log
-	*o = MediaOrchestrator{}
+	o.pipeline = nil
+	// *o = MediaOrchestrator{}
 	pipeline.ForceMemoryRelease()
 	log.Debugw("media orchestrator closed")
 
@@ -372,6 +388,20 @@ func (o *MediaOrchestrator) Start() (err error) {
 	}); err != nil {
 		return err
 	}
+
+	// o.wg.Add(1)
+	// go func() {
+	// 	defer o.wg.Done()
+	// 	for {
+	// 		select {
+	// 		case <-o.ctx.Done():
+	// 			return
+	// 		case <-time.After(10 * time.Second):
+	// 			o.pipeline.GetStats()
+	// 		}
+	// 	}
+	// }()
+
 	return nil
 }
 
@@ -410,7 +440,6 @@ func (o *MediaOrchestrator) DtmfHandler(h func(ev dtmf.Event)) {
 					Code:  byte(nb),
 					Digit: digit,
 				})
-				o.log.Infow("Handled DTMF event", "number", nb, "digit", digit)
 			}
 		}
 	}()

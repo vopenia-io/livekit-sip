@@ -18,7 +18,7 @@ func (p *Pipeline) SetupBus() {
 	p.Log.Debugw("Setting bus to non-flushing")
 	p.bus.SetFlushing(false)
 
-	go p.DumpDot()
+	p.DumpDotLoop()
 
 	pweak := weak.Make(p)
 	if !p.bus.AddWatch(func(msg *gst.Message) bool {
@@ -61,6 +61,7 @@ func (p *Pipeline) onMessage(msg *gst.Message) bool {
 	case gst.MessageError:
 		gErr := msg.ParseError()
 		p.Log.Errorw("Pipeline error", gErr, "debug", gErr.DebugString())
+		p.dumpCH <- true
 	case gst.MessageLatency:
 		p.Log.Debugw("Pipeline latency changed")
 		if !p.Pipeline().RecalculateLatency() {
@@ -72,12 +73,11 @@ func (p *Pipeline) onMessage(msg *gst.Message) bool {
 			p.Log.Warnw("Received element message with no structure", nil)
 			return true
 		}
-		if structure.Name() == "level" {
+		switch name := structure.Name(); name {
+		case "level":
 			// Ignore level messages to avoid log spam
 			return true
-		}
-		p.Log.Debugw("Received element message", "structure", structure.String())
-		if structure.Name() == "dtmf-event" {
+		case "dtmf-event":
 			nbVal, err := structure.GetValue("number")
 			if err != nil || nbVal == nil {
 				p.Log.Warnw("Received dtmf-event message with no number field", err, "nbVal", nbVal)
@@ -88,8 +88,12 @@ func (p *Pipeline) onMessage(msg *gst.Message) bool {
 				p.Log.Warnw("Received dtmf-event message with invalid number field", nil, "nbVal", fmt.Sprintf("%T=%v", nbVal, nbVal))
 				return true
 			}
-			p.Log.Infow("Received dtmf-event message", "number", nb)
+			p.Log.Debugw("Received dtmf-event message", "number", nb)
 			p.dtmfCh <- nb
+			return true
+		default:
+			p.Log.Debugw("Received element message", "name", name, "structure", structure.String())
+			return true
 		}
 	case gst.MessageStateChanged:
 		select {

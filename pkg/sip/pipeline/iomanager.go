@@ -109,6 +109,9 @@ func (c *IOManager) handleSipControllerPadRemoved(_ *gst.Element, pad *gst.Pad) 
 		return
 	}
 
+	if c.pipeline.WebrtcIo == nil || c.pipeline.WebrtcIo.LivekitBin == nil {
+		return
+	}
 	destPad := c.pipeline.WebrtcIo.LivekitBin.GetStaticPad(fmt.Sprintf("send_rtp_sink_%d", session))
 	if destPad == nil {
 		c.log.Warnw("Failed to get static pad", nil, "pad", fmt.Sprintf("send_rtp_sink_%d", session))
@@ -158,6 +161,9 @@ func (c *IOManager) handleLivekitCompositorPadRemoved(_ *gst.Element, pad *gst.P
 		return
 	}
 
+	if c.pipeline.SipIo == nil || c.pipeline.SipIo.SipBin == nil {
+		return
+	}
 	destPad := c.pipeline.SipIo.SipBin.GetStaticPad(fmt.Sprintf("send_rtp_sink_%d", session))
 	if destPad == nil {
 		c.log.Warnw("Failed to get static pad", nil, "pad", fmt.Sprintf("send_rtp_sink_%d", session))

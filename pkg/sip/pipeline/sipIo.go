@@ -11,6 +11,7 @@ import (
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/logger"
+	"github.com/livekit/sip/pkg/config"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/hop"
 	"github.com/samber/lo"
 )
@@ -33,6 +34,7 @@ type SipOpt struct {
 	VideoHeight           uint
 	Nvidia                bool
 	MaxActiveParticipants int
+	Gst                   config.GstConfig
 }
 
 type Hop struct {
