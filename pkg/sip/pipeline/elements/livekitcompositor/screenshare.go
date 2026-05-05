@@ -39,7 +39,7 @@ func (e *LivekitCompositor) initScreenshare(self *gst.Bin) error {
 	}
 
 	e.LivekitCompositorScreenshare.Filter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-		"caps": gst.NewCapsFromString(fmt.Sprintf("%s, width=(int)%d, height=(int)%d", e.LivekitCompositorScreenshare.Format, e.videoWidth, e.videoHeight)),
+		"caps": gst.NewCapsFromString(fmt.Sprintf("%s, width=(int)%d, height=(int)%d, framerate=24/1", e.LivekitCompositorScreenshare.Format, e.videoWidth, e.videoHeight)),
 	})
 	if err != nil {
 		return err
