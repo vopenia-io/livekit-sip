@@ -66,6 +66,7 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/av1video"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/dtmfaudio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/factorybin"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/flacsource"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/h264video"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvav1video"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvh264video"
@@ -84,7 +85,6 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videovp9"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/vp8video"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/vp9video"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/wavsource"
 )
 
 const QDataPadPeerKey = "livekitsip-pad-peer"
@@ -169,8 +169,8 @@ func init() {
 		panic("Failed to register dtmf-audio")
 	}
 
-	if !wavsource.Register() {
-		panic("Failed to register wavsource")
+	if !flacsource.Register() {
+		panic("Failed to register flacsource")
 	}
 
 	if !rtpcapscodecfilter.Register() {

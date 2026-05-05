@@ -18,14 +18,14 @@ var RoomJoinOgg []byte
 //go:embed wrong_pin.ogg
 var WrongPinOgg []byte
 
-//go:embed enter_pin.wav
-var EnterPinWav []byte
+//go:embed enter_pin.flac
+var EnterPinFlac []byte
 
-//go:embed room_join.wav
-var RoomJoinWav []byte
+//go:embed room_join.flac
+var RoomJoinFlac []byte
 
-//go:embed wrong_pin.wav
-var WrongPinWav []byte
+//go:embed wrong_pin.flac
+var WrongPinFlac []byte
 
 const SampleRate = 48000
 

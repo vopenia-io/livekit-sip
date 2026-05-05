@@ -38,13 +38,13 @@ func (s *Server) initMediaRes() {
 	s.res.wrongPin = res.ReadOggAudioFile(res.WrongPinOgg)
 
 	var err error
-	if s.res.enterPinFd, err = res.MemfdFromBytes("enter-pin", res.EnterPinWav); err != nil {
-		panic(fmt.Errorf("failed to memfd enter_pin.wav: %w", err))
+	if s.res.enterPinFd, err = res.MemfdFromBytes("enter-pin", res.EnterPinFlac); err != nil {
+		panic(fmt.Errorf("failed to memfd enter_pin.flac: %w", err))
 	}
-	if s.res.roomJoinFd, err = res.MemfdFromBytes("room-join", res.RoomJoinWav); err != nil {
-		panic(fmt.Errorf("failed to memfd room_join.wav: %w", err))
+	if s.res.roomJoinFd, err = res.MemfdFromBytes("room-join", res.RoomJoinFlac); err != nil {
+		panic(fmt.Errorf("failed to memfd room_join.flac: %w", err))
 	}
-	if s.res.wrongPinFd, err = res.MemfdFromBytes("wrong-pin", res.WrongPinWav); err != nil {
-		panic(fmt.Errorf("failed to memfd wrong_pin.wav: %w", err))
+	if s.res.wrongPinFd, err = res.MemfdFromBytes("wrong-pin", res.WrongPinFlac); err != nil {
+		panic(fmt.Errorf("failed to memfd wrong_pin.flac: %w", err))
 	}
 }

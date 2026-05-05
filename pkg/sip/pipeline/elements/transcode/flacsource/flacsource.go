@@ -1,23 +1,24 @@
-package wavsource
+package flacsource
 
 import (
 	"fmt"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
+	"golang.org/x/sys/unix"
 )
 
 var CAT = gst.NewDebugCategory(
-	"wavsource",
+	"flacsource",
 	gst.DebugColorNone,
-	"wavsource Element",
+	"flacsource Element",
 )
 
 var properties = []*glib.ParamSpec{
 	glib.NewIntParam(
 		"fd",
 		"FD",
-		"File descriptor to read the WAV bytes from. The bin closes this fd in Finalize.",
+		"File descriptor to read the FLAC bytes from. The bin closes this fd in Finalize.",
 		-1,
 		0x7FFFFFFF,
 		-1,
@@ -25,23 +26,23 @@ var properties = []*glib.ParamSpec{
 	),
 }
 
-type WavSource struct {
+type FlacSource struct {
 	fd int
 
 	FdSrc         *gst.Element
 	Queue         *gst.Element
-	WavParse      *gst.Element
-	ClockSync     *gst.Element
+	FlacParse     *gst.Element
+	FlacDec       *gst.Element
 	AudioConvert  *gst.Element
 	AudioResample *gst.Element
 	AudioRate     *gst.Element
 }
 
-func (e *WavSource) New() glib.GoObjectSubclass {
-	return &WavSource{fd: -1}
+func (e *FlacSource) New() glib.GoObjectSubclass {
+	return &FlacSource{fd: -1}
 }
 
-func (e *WavSource) ClassInit(klass *glib.ObjectClass) {
+func (e *FlacSource) ClassInit(klass *glib.ObjectClass) {
 	class := gst.ToElementClass(klass)
 	class.SetMetadata(
 		"WAV Source",
@@ -60,11 +61,11 @@ func (e *WavSource) ClassInit(klass *glib.ObjectClass) {
 	class.InstallProperties(properties)
 }
 
-func (e *WavSource) InstanceInit(instance *glib.Object) {
+func (e *FlacSource) InstanceInit(instance *glib.Object) {
 	e.fd = -1
 }
 
-func (e *WavSource) Constructed(instance *glib.Object) {
+func (e *FlacSource) Constructed(instance *glib.Object) {
 	self := gst.ToGstBin(instance)
 	var err error
 
@@ -75,9 +76,7 @@ func (e *WavSource) Constructed(instance *glib.Object) {
 	}
 
 	e.FdSrc, err = gst.NewElementWithProperties("fdsrc", map[string]interface{}{
-		"fd":           e.fd,
-		"is-live":      true,
-		"do-timestamp": true,
+		"fd": e.fd,
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create fdsrc element: %v", err))
@@ -92,27 +91,19 @@ func (e *WavSource) Constructed(instance *glib.Object) {
 		return
 	}
 
-	e.WavParse, err = gst.NewElement("wavparse")
+	e.FlacParse, err = gst.NewElement("flacparse")
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create wavparse element: %v", err))
-		self.Error("Failed to create wavparse element", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create flacparse element: %v", err))
+		self.Error("Failed to create flacparse element", err)
 		return
 	}
 
-	e.ClockSync, err = gst.NewElementWithProperties("clocksync", map[string]interface{}{
-		"sync-to-first": true,
-	})
-
-	e.ClockSync.GetStaticPad("src").AddProbe(gst.PadProbeTypeEventDownstream, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
-		evt := info.GetEvent()
-		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("wavsource fdsrc pad probe got event of type %s in state %s", evt.Type().String(), self.GetCurrentState().String()))
-		return gst.PadProbeOK
-	})
-	e.ClockSync.GetStaticPad("src").AddProbe(gst.PadProbeTypeBuffer, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
-		buf := info.GetBuffer()
-		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("wavsource fdsrc pad probe got buffer with PTS %d and size %d in state %s", buf.PresentationTimestamp(), buf.GetSize(), self.GetCurrentState().String()))
-		return gst.PadProbeOK
-	})
+	e.FlacDec, err = gst.NewElement("flacdec")
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create flacdec element: %v", err))
+		self.Error("Failed to create flacdec element", err)
+		return
+	}
 
 	e.AudioConvert, err = gst.NewElement("audioconvert")
 	if err != nil {
@@ -138,8 +129,8 @@ func (e *WavSource) Constructed(instance *glib.Object) {
 	if err := self.AddMany(
 		e.FdSrc,
 		e.Queue,
-		e.WavParse,
-		e.ClockSync,
+		e.FlacParse,
+		e.FlacDec,
 		e.AudioConvert,
 		e.AudioResample,
 		e.AudioRate,
@@ -152,8 +143,8 @@ func (e *WavSource) Constructed(instance *glib.Object) {
 	if err := gst.ElementLinkMany(
 		e.FdSrc,
 		e.Queue,
-		e.WavParse,
-		e.ClockSync,
+		e.FlacParse,
+		e.FlacDec,
 		e.AudioConvert,
 		e.AudioResample,
 		e.AudioRate,
@@ -168,7 +159,7 @@ func (e *WavSource) Constructed(instance *glib.Object) {
 	self.AddPad(ghostSrc.Pad)
 }
 
-func (e *WavSource) SetProperty(instance *glib.Object, id uint, value *glib.Value) {
+func (e *FlacSource) SetProperty(instance *glib.Object, id uint, value *glib.Value) {
 	self := gst.ToGstBin(instance)
 	param := properties[id]
 	switch param.Name() {
@@ -189,7 +180,7 @@ func (e *WavSource) SetProperty(instance *glib.Object, id uint, value *glib.Valu
 	}
 }
 
-func (e *WavSource) GetProperty(instance *glib.Object, id uint) *glib.Value {
+func (e *FlacSource) GetProperty(instance *glib.Object, id uint) *glib.Value {
 	self := gst.ToGstBin(instance)
 	param := properties[id]
 	switch param.Name() {
@@ -206,21 +197,16 @@ func (e *WavSource) GetProperty(instance *glib.Object, id uint) *glib.Value {
 	}
 }
 
-func (e *WavSource) Finalize(instance *glib.Object) {
-	self := gst.ToGstBin(instance)
-	self.Log(CAT, gst.LevelDebug, "Finalizing WavSource element")
-
-	// if e.fd >= 0 {
-	// 	if err := unix.Close(e.fd); err != nil {
-	// 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to close fd %d: %v", e.fd, err))
-	// 	}
-	// 	e.fd = -1
-	// }
+func (e *FlacSource) Finalize(instance *glib.Object) {
+	if e.fd >= 0 {
+		unix.Close(e.fd)
+		e.fd = -1
+	}
 
 	e.FdSrc = nil
 	e.Queue = nil
-	e.WavParse = nil
-	e.ClockSync = nil
+	e.FlacParse = nil
+	e.FlacDec = nil
 	e.AudioConvert = nil
 	e.AudioResample = nil
 	e.AudioRate = nil

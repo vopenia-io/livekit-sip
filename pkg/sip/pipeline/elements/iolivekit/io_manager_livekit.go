@@ -110,7 +110,7 @@ func (e *IoManagerLivekit) ClassInit(klass *glib.ObjectClass) {
 
 	gst.SignalNew(
 		class.Type(),
-		"play-wav-fd",
+		"play-audio-fd",
 		gst.SignalRunLast|gst.SignalAction,
 		glib.TYPE_BOOLEAN,
 		glib.TYPE_INT,
@@ -236,17 +236,17 @@ func (e *IoManagerLivekit) Constructed(instance *glib.Object) {
 		return
 	}
 
-	if _, err := self.Connect("play-wav-fd", func(instance *gst.Element, fd int) bool {
+	if _, err := self.Connect("play-audio-fd", func(instance *gst.Element, fd int) bool {
 		e := eweak.Value()
 		self := gst.ToGstBin(wself.Get())
 		if e == nil || self == nil || self.Instance() == nil {
 			unix.Close(fd)
 			return false
 		}
-		return e.playWavFd(self, fd)
+		return e.playAudioFd(self, fd)
 	}); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to connect to play-wav-fd signal: %v", err))
-		self.Error("Failed to connect to play-wav-fd signal", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to connect to play-audio-fd signal: %v", err))
+		self.Error("Failed to connect to play-audio-fd signal", err)
 		return
 	}
 }
@@ -1204,15 +1204,15 @@ func (e *IoManagerLivekit) padRemovedScreenShareOut(self *gst.Bin, pad *gst.Pad,
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Removed screen share output pad %s", pad.GetName()))
 }
 
-func (e *IoManagerLivekit) playWavFd(self *gst.Bin, fd int) bool {
-	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("playWavFd creating wavsource with fd=%d", fd))
+func (e *IoManagerLivekit) playAudioFd(self *gst.Bin, fd int) bool {
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("playAudioFd creating flacsource with fd=%d", fd))
 
-	wavSrc, err := gst.NewElementWithProperties("wavsource", map[string]interface{}{
+	flacSrc, err := gst.NewElementWithProperties("flacsource", map[string]interface{}{
 		"fd": fd,
 	})
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create wavsource: %v", err))
-		self.Error("Failed to create wavsource", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create flacsource: %v", err))
+		self.Error("Failed to create flacsource", err)
 		unix.Close(fd)
 		return false
 	}
@@ -1221,19 +1221,19 @@ func (e *IoManagerLivekit) playWavFd(self *gst.Bin, fd int) bool {
 		"caps": gst.NewCapsFromString(AudioCaps),
 	})
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create capsfilter for wavsource: %v", err))
-		self.Error("Failed to create capsfilter for wavsource", err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create capsfilter for flacsource: %v", err))
+		self.Error("Failed to create capsfilter for flacsource", err)
 		return false
 	}
 
-	if err := self.AddMany(wavSrc, filter); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add wavsource to io_manager_livekit: %v", err))
+	if err := self.AddMany(flacSrc, filter); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add flacsource to io_manager_livekit: %v", err))
 		return false
 	}
 
-	if err := wavSrc.Link(filter); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link wavsource to capsfilter: %v", err))
-		self.Error("Failed to link wavsource to capsfilter", err)
+	if err := flacSrc.Link(filter); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link flacsource to capsfilter: %v", err))
+		self.Error("Failed to link flacsource to capsfilter", err)
 		return false
 	}
 
@@ -1253,7 +1253,7 @@ func (e *IoManagerLivekit) playWavFd(self *gst.Bin, fd int) bool {
 	}
 
 	if ret := srcPad.Link(compositorPad); ret != gst.PadLinkOK {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link wavsource src to compositor pad: %v", ret))
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link flacsource src to compositor pad: %v", ret))
 		return false
 	}
 
@@ -1270,33 +1270,33 @@ func (e *IoManagerLivekit) playWavFd(self *gst.Bin, fd int) bool {
 		return gst.PadProbeOK
 	})
 
-	if !wavSrc.SyncStateWithParent() {
-		self.Log(CAT, gst.LevelWarning, "Failed to sync wavsource state with parent")
+	if !flacSrc.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, "Failed to sync flacsource state with parent")
 	}
 	if !filter.SyncStateWithParent() {
 		self.Log(CAT, gst.LevelWarning, "Failed to sync capsfilter state with parent")
 	}
 
-	self.Log(CAT, gst.LevelDebug, "playWavFd: waiting for EOS")
+	self.Log(CAT, gst.LevelDebug, "playFlacFd: waiting for EOS")
 
 	select {
 	case <-eosCh:
-		self.Log(CAT, gst.LevelDebug, "playWavFd: got EOS, tearing down")
+		self.Log(CAT, gst.LevelDebug, "playFlacFd: got EOS, tearing down")
 	case <-time.After(30 * time.Second):
-		self.Log(CAT, gst.LevelWarning, "playWavFd: timed out waiting for EOS, tearing down anyway")
+		self.Log(CAT, gst.LevelWarning, "playFlacFd: timed out waiting for EOS, tearing down anyway")
 	}
 
-	if err := wavSrc.SetState(gst.StateNull); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set wavsource to NULL: %v", err))
+	if err := flacSrc.SetState(gst.StateNull); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set flacsource to NULL: %v", err))
 	}
 	if err := filter.SetState(gst.StateNull); err != nil {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set capsfilter to NULL: %v", err))
 	}
 
-	if err := self.RemoveMany(wavSrc, filter); err != nil {
+	if err := self.RemoveMany(flacSrc, filter); err != nil {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove elements from io_manager_livekit: %v", err))
 	}
 
-	self.Log(CAT, gst.LevelInfo, "Successfully played WAV fd")
+	self.Log(CAT, gst.LevelInfo, "Successfully played FLAC fd")
 	return true
 }

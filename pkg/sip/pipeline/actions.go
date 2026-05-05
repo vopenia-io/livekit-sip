@@ -88,7 +88,6 @@ func (p *Pipeline) ConnectRoom(wsUrl, token string, attributes map[string]string
 }
 
 func (p *Pipeline) PlayAudio(ctx context.Context, fd int) error {
-	// return nil
 	playFd, err := unix.Open(
 		fmt.Sprintf("/proc/self/fd/%d", fd),
 		unix.O_RDONLY|unix.O_CLOEXEC,
@@ -98,8 +97,8 @@ func (p *Pipeline) PlayAudio(ctx context.Context, fd int) error {
 		return fmt.Errorf("failed to open per-call fd from master fd %d: %w", fd, err)
 	}
 
-	if _, err := p.IOManager.LivekitController.Emit("play-wav-fd", playFd); err != nil {
-		return fmt.Errorf("failed to emit play-wav-fd: %w", err)
+	if _, err := p.IOManager.LivekitController.Emit("play-audio-fd", playFd); err != nil {
+		return fmt.Errorf("failed to emit play-audio-fd: %w", err)
 	}
 
 	return nil

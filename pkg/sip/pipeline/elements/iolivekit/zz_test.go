@@ -17,12 +17,12 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audiopcma"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audiopcmu"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/factorybin"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/wavsource"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/flacsource"
 	"github.com/livekit/sip/res"
 )
 
 func TestMain(m *testing.M) {
-	glib.SetEnv("GST_DEBUG", glib.GetEnv("GST_DEBUG")+",io_manager_livekit:5,wavsource:5", true)
+	glib.SetEnv("GST_DEBUG", glib.GetEnv("GST_DEBUG")+",io_manager_livekit:5,flacsource:5", true)
 	gst.Init(nil)
 
 	if !trackfallback.Register() {
@@ -40,8 +40,8 @@ func TestMain(m *testing.M) {
 	if !factorybin.Register() {
 		panic("failed to register factorybin")
 	}
-	if !wavsource.Register() {
-		panic("failed to register wavsource")
+	if !flacsource.Register() {
+		panic("failed to register flacsource")
 	}
 	Register()
 
@@ -52,7 +52,7 @@ func TestMain(m *testing.M) {
 // fd via /proc/self/fd/N. The masterFd is closed on test cleanup.
 func openWavFd(t *testing.T) int {
 	t.Helper()
-	masterFd, err := res.MemfdFromBytes("test-wav", res.RoomJoinWav)
+	masterFd, err := res.MemfdFromBytes("test-wav", res.RoomJoinFlac)
 	if err != nil {
 		t.Fatal("failed to create memfd:", err)
 	}

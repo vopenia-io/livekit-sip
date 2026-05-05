@@ -1,4 +1,4 @@
-package wavsource
+package flacsource
 
 import (
 	"github.com/go-gst/go-gst/gst"
@@ -7,9 +7,9 @@ import (
 func Register() bool {
 	return gst.RegisterElement(
 		nil,
-		"wavsource",
+		"flacsource",
 		gst.RankNone,
-		&WavSource{},
+		&FlacSource{},
 		gst.ExtendsBin,
 	)
 }
