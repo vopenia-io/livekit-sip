@@ -18,12 +18,13 @@ func SetupLogging(log logger.Logger, gstConf config.GstConfig) {
 
 	if gstConf.Debug != "-" {
 		gst.SetDebugThresholdFromString(gstConf.Debug, false)
+		log.Infow("Gst debug logging enabled", "debug", gstConf.Debug)
 	}
 
 	if os.Getenv("GST_FORCE_DEFAULT_LOGGER") == "1" {
 		return
 	}
-	gstLogger = log
+	gstLogger = log.WithComponent("gst")
 	gst.SetLogFunction(gstLogFunc)
 }
 
@@ -34,7 +35,6 @@ func (p *Pipeline) SetLogHandler() {
 		}
 		child.SetQDataQuark(QLogSipCallID, p.sipCallID)
 	})
-
 }
 
 func gstLogFunc(
