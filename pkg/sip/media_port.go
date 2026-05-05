@@ -228,6 +228,7 @@ type MediaOptions struct {
 	Nvidia                bool
 	MaxActiveParticipants int
 	Gst                   config.GstConfig
+	PublishCodecs         config.PublishCodecConfig
 }
 
 func NewMediaPort(tid traceid.ID, log logger.Logger, mon *stats.CallMonitor, opts *MediaOptions, sampleRate int) (*MediaPort, error) {

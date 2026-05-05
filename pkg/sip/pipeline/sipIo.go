@@ -35,6 +35,7 @@ type SipOpt struct {
 	Nvidia                bool
 	MaxActiveParticipants int
 	Gst                   config.GstConfig
+	PublishCodecs         config.PublishCodecConfig
 }
 
 type Hop struct {

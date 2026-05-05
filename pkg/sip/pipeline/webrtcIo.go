@@ -13,7 +13,6 @@ import (
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/hop"
-	"github.com/pion/webrtc/v4"
 )
 
 func NewWebrtcIo(log logger.Logger, parent *Pipeline) *WebrtcIo {
@@ -45,17 +44,24 @@ func (wio *WebrtcIo) Create() error {
 
 	wio.log.Infow("Creating WebRTC IO", "maxActiveParticipants", wio.pipeline.maxActiveParticipants)
 
-	wio.LivekitBin, err = gst.NewElementWithProperties("livekitbin", map[string]interface{}{
-		"max-active-participants":     uint(wio.pipeline.maxActiveParticipants),
-		"camera":                      false,
-		"camera-mime-type":            webrtc.MimeTypeVP8,
-		"microphone":                  false,
-		"microphone-mime-type":        webrtc.MimeTypeOpus,
-		"screenshare":                 false,
-		"screenshare-mime-type":       webrtc.MimeTypeVP8,
-		"screenshare-audio":           false,
-		"screenshare-audio-mime-type": webrtc.MimeTypeOpus,
-	})
+	props := make(map[string]interface{})
+	if wio.pipeline.maxActiveParticipants > 0 {
+		props["max-active-participants"] = uint(wio.pipeline.maxActiveParticipants)
+	}
+	if wio.pipeline.publishCoders.Camera != "" {
+		props["camera-mime-type"] = wio.pipeline.publishCoders.Camera
+	}
+	if wio.pipeline.publishCoders.Microphone != "" {
+		props["microphone-mime-type"] = wio.pipeline.publishCoders.Microphone
+	}
+	if wio.pipeline.publishCoders.Screenshare != "" {
+		props["screenshare-mime-type"] = wio.pipeline.publishCoders.Screenshare
+	}
+	if wio.pipeline.publishCoders.ScreenshareAudio != "" {
+		props["screenshare-audio-mime-type"] = wio.pipeline.publishCoders.ScreenshareAudio
+	}
+
+	wio.LivekitBin, err = gst.NewElementWithProperties("livekitbin", props)
 	if err != nil {
 		return fmt.Errorf("failed to create livekitbin: %w", err)
 	}

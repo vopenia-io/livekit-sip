@@ -13,6 +13,7 @@ import (
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
+	"github.com/livekit/sip/pkg/config"
 	"github.com/livekit/sip/pkg/sip/pipeline/debug"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipbin"
 )
@@ -48,6 +49,7 @@ type Pipeline struct {
 	maxActiveParticipants int
 	dumpDot               bool
 	dumpDir               string
+	publishCoders         config.PublishCodecConfig
 
 	*SipIo
 	*WebrtcIo
@@ -346,6 +348,7 @@ func New(ctx context.Context, log logger.Logger, sipOpt SipOpt, sipCallID string
 		sipCallID:             sipCallID,
 		dumpDot:               sipOpt.Gst.DumpDot,
 		dumpDir:               sipOpt.Gst.DumpDir,
+		publishCoders:         sipOpt.PublishCodecs,
 	}
 	p.cleanup = p.cleanupChains
 

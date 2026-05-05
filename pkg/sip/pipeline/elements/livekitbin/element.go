@@ -165,6 +165,7 @@ func (e *LivekitBin) InstanceInit(instance *glib.Object) {
 		e.PtMap[i] = make(map[uint8]*gst.Caps)
 	}
 	e.self = glib.WeakRefInit(self)
+	e.config.maxActiveParticipants = 6
 	e.config.microphoneMimeType = webrtc.MimeTypeOpus
 	e.config.cameraMimeType = webrtc.MimeTypeVP8
 	e.config.screenshareMimeType = webrtc.MimeTypeVP8

@@ -124,6 +124,7 @@ func (o *MediaOrchestrator) init() error {
 		Nvidia:                o.opts.Nvidia,
 		MaxActiveParticipants: o.opts.MaxActiveParticipants,
 		Gst:                   o.opts.Gst,
+		PublishCodecs:         o.opts.PublishCodecs,
 	}, o.inbound.sipCallID)
 	if err != nil {
 		return fmt.Errorf("could not create pipeline: %w", err)

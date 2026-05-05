@@ -199,7 +199,7 @@ func mimeTypeToCaps(mimeType string) *gst.Caps {
 	if !ok {
 		return nil
 	}
-	capsStr := fmt.Sprintf("application/x-rtp, media=%s, encoding-name=%s", media, strings.ToUpper(enc))
+	capsStr := fmt.Sprintf("application/x-rtp, media=%s, encoding-name=%s", strings.ToLower(media), strings.ToUpper(enc))
 	return gst.NewCapsFromString(capsStr)
 }
 
@@ -245,7 +245,7 @@ func (e *LivekitBin) requestNewPadSendRtp(instance *gst.Element, templ *gst.PadT
 	}
 
 	if caps == nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create caps for requested pad name %s", name))
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create caps for requested pad name %s. configured mime type: [%s]", name, strings.Join([]string{e.config.microphoneMimeType, e.config.cameraMimeType, e.config.screenshareMimeType, e.config.screenshareAudioMimeType}, ", ")))
 		self.Error(fmt.Sprintf("Failed to create caps for requested pad name %s", name), fmt.Errorf("caps error"))
 		return nil
 	}

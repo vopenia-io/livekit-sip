@@ -68,6 +68,13 @@ type GstConfig struct {
 	DumpDir string `yaml:"dump_dir"`
 }
 
+type PublishCodecConfig struct {
+	Camera           string `yaml:"camera"`
+	Microphone       string `yaml:"microphone"`
+	Screenshare      string `yaml:"screenshare"`
+	ScreenshareAudio string `yaml:"screenshareaudio"`
+}
+
 type Config struct {
 	Redis     *redis.RedisConfig `yaml:"redis"`      // required
 	ApiKey    string             `yaml:"api_key"`    // required (env LIVEKIT_API_KEY)
@@ -97,9 +104,10 @@ type Config struct {
 	MediaUseExternalIP bool   `yaml:"media_use_external_ip"`
 	MediaNAT1To1IP     string `yaml:"media_nat_1_to_1_ip"`
 
-	MediaTimeout        time.Duration   `yaml:"media_timeout"`
-	MediaTimeoutInitial time.Duration   `yaml:"media_timeout_initial"`
-	Codecs              map[string]bool `yaml:"codecs"`
+	MediaTimeout        time.Duration      `yaml:"media_timeout"`
+	MediaTimeoutInitial time.Duration      `yaml:"media_timeout_initial"`
+	Codecs              map[string]bool    `yaml:"codecs"`
+	PublishCodecs       PublishCodecConfig `yaml:"publish_codecs"`
 
 	// HideInboundPort controls how SIP endpoint responds to unverified inbound requests.
 	// Setting it to true makes SIP server silently drop INVITE requests if it gets a negative Auth or Dispatch response.
@@ -178,12 +186,8 @@ func (c *Config) Init() error {
 		c.Video.Height = 720
 	}
 
-	if c.MaxActiveParticipants <= 0 {
-		c.MaxActiveParticipants = 6
-	}
-
 	if c.Gst.Debug == "" {
-		c.Gst.Debug = "sipbin:4"
+		c.Gst.Debug = "*:3,sipbin:4"
 	}
 
 	if err := c.InitLogger(); err != nil {
