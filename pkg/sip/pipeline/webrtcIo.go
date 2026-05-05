@@ -191,6 +191,10 @@ func (wio *WebrtcIo) binPadAdded(_ *gst.Element, pad *gst.Pad) {
 }
 
 func (wio *WebrtcIo) binPadRemoved(_ *gst.Element, pad *gst.Pad) {
+	if pad == nil || pad.GetPadTemplate() == nil || pad.GetPadTemplate().GetName() != "recv_rtp_src_%u_%u_%u" {
+		return
+	}
+
 	var session, ssrc, pt uint
 	if _, err := fmt.Sscanf(pad.GetName(), "recv_rtp_src_%d_%d_%d", &session, &ssrc, &pt); err != nil {
 		wio.log.Warnw("Received removed pad on rtpbin with unrecognized name format", err, "padName", pad.GetName())

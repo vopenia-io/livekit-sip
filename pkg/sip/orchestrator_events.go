@@ -2,6 +2,7 @@ package sip
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/livekit"
@@ -88,6 +89,9 @@ func (o *MediaOrchestrator) SetAttributes(attributes map[string]string) error {
 		}
 	}
 
+	if o.pipeline.WebrtcIo == nil || o.pipeline.WebrtcIo.LivekitBin == nil {
+		return fmt.Errorf("livekit bin is not initialized")
+	}
 	if err := o.pipeline.WebrtcIo.LivekitBin.SetProperty("participant-attributes", attr); err != nil {
 		return err
 	}
