@@ -119,6 +119,7 @@ func (e *LivekitCompositor) Constructed(instance *glib.Object) {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to connect active-speakers-changed signal: %v", err))
 		self.Error("Failed to connect active-speakers-changed signal", err)
 	}
+
 }
 
 func (e *LivekitCompositor) RequestNewPad(instance *gst.Element, templ *gst.PadTemplate, name string, caps *gst.Caps) *gst.Pad {

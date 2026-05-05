@@ -68,7 +68,8 @@ func (e *LivekitBin) callabcks() *lksdk.RoomCallback {
 				if _, err := glib.IdleAdd(func() {
 					defer e.livekitMu.Unlock()
 					e.SubscribeTrack(track, publication, rp)
-					time.Sleep(5 * time.Millisecond)
+					// Throttle between subscriptions on the GLib main loop.
+					time.Sleep(25 * time.Millisecond)
 				}); err != nil {
 					e.livekitMu.Unlock()
 					CAT.Log(gst.LevelError, fmt.Sprintf("Failed to add track subscription to main loop: %v", err))
