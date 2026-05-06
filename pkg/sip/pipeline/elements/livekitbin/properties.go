@@ -137,7 +137,9 @@ func stringPropSetter(dst *string) func(self *gst.Bin, param *glib.ParamSpec, va
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid type for %s property", param.Name()))
 			return
 		}
-		*dst = val
+		if val != "" {
+			*dst = val
+		}
 	}
 }
 
@@ -247,13 +249,7 @@ func (e *LivekitBin) SetProperty(instance *glib.Object, id uint, value *glib.Val
 			e.updateSubscriptions(self)
 		}
 	case "microphone-mime-type":
-		dst := ""
-		stringPropSetter(&dst)(self, param, value)
-		if mimeTypeToCaps(dst) == nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid MIME type for microphone: %q", dst))
-		} else if dst != "" {
-			e.microphoneMimeType = dst
-		}
+		stringPropSetter(&e.microphoneMimeType)(self, param, value)
 	case "camera":
 		old := e.camera
 		boolPropSetter(&e.camera)(self, param, value)
@@ -261,13 +257,7 @@ func (e *LivekitBin) SetProperty(instance *glib.Object, id uint, value *glib.Val
 			e.updateSubscriptions(self)
 		}
 	case "camera-mime-type":
-		dst := ""
-		stringPropSetter(&dst)(self, param, value)
-		if mimeTypeToCaps(dst) == nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid MIME type for camera: %q", dst))
-		} else if dst != "" {
-			e.cameraMimeType = dst
-		}
+		stringPropSetter(&e.cameraMimeType)(self, param, value)
 	case "screenshare":
 		old := e.screenshare
 		boolPropSetter(&e.screenshare)(self, param, value)
@@ -275,13 +265,7 @@ func (e *LivekitBin) SetProperty(instance *glib.Object, id uint, value *glib.Val
 			e.updateSubscriptions(self)
 		}
 	case "screenshare-mime-type":
-		dst := ""
-		stringPropSetter(&dst)(self, param, value)
-		if mimeTypeToCaps(dst) == nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid MIME type for screenshare: %q", dst))
-		} else if dst != "" {
-			e.screenshareMimeType = dst
-		}
+		stringPropSetter(&e.screenshareMimeType)(self, param, value)
 	case "screenshare-audio":
 		old := e.screenshareAudio
 		boolPropSetter(&e.screenshareAudio)(self, param, value)
@@ -289,13 +273,7 @@ func (e *LivekitBin) SetProperty(instance *glib.Object, id uint, value *glib.Val
 			e.updateSubscriptions(self)
 		}
 	case "screenshare-audio-mime-type":
-		dst := ""
-		stringPropSetter(&dst)(self, param, value)
-		if mimeTypeToCaps(dst) == nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid MIME type for screenshare audio: %q", dst))
-		} else if dst != "" {
-			e.screenshareAudioMimeType = dst
-		}
+		stringPropSetter(&e.screenshareAudioMimeType)(self, param, value)
 	default:
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown property %s", param.Name()))
 	}
