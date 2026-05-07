@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"unsafe"
 	"weak"
 
 	"github.com/go-gst/go-glib/glib"
@@ -209,25 +208,9 @@ func (sio *SipIo) binPadAddedRecvRtpSrc(_ *gst.Element, pad *gst.Pad) {
 		return
 	}
 
-	hopSrc, err := gst.NewElementWithProperties("hopsrc", map[string]interface{}{})
+	hopSink, hopSrc, err := hop.NewPair()
 	if err != nil {
-		sio.log.Errorw("Failed to create hop src element for new recv RTP pad", err, "session", session, "ssrc", ssrc, "pt", pt)
-		return
-	}
-
-	value, err := glib.ValueInit(hop.TypeHopSrc)
-	if err != nil {
-		sio.log.Errorw("Failed to create GValue for hop src type", err, "session", session, "ssrc", ssrc, "pt", pt)
-		return
-	}
-
-	value.SetInstance(unsafe.Pointer(hopSrc.Instance()))
-
-	hopSink, err := gst.NewElementWithProperties("hopsink", map[string]interface{}{
-		"src": value,
-	})
-	if err != nil {
-		sio.log.Errorw("Failed to create hop sink element for new recv RTP pad", err, "session", session, "ssrc", ssrc, "pt", pt)
+		sio.log.Errorw("Failed to create hop pair for new recv RTP pad", err, "session", session, "ssrc", ssrc, "pt", pt)
 		return
 	}
 

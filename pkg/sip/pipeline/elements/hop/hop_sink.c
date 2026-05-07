@@ -1,22 +1,20 @@
 /*
- * HopSink - minimal GstBaseSink paired with HopSrc. render() forwards
- * the received buffer directly to the paired HopSrc via
- * hop_src_push_buffer(), so the whole chain runs on the caller's thread
- * — no queue, no thread hop. Set the paired src via the "src" property
- * before PLAYING.
+ * HopSink — plain GstElement with one sink pad. Forwards downstream
+ * buffers, events, and queries synchronously across the hop to the
+ * paired HopSrc's src pad. No streaming task, no thread, no queue.
  */
 
 #include "hop_sink.h"
-#include "hop_src.h"
+#include "hop_link.h"
 
-struct _HopSink {
-    GstBaseSink parent;
-    HopSrc     *src;   /* held ref; set via "src" property */
+struct _HopSink
+{
+    GstElement parent;
+    GstPad *sinkpad;
+    HopLink *link;
 };
 
-G_DEFINE_TYPE(HopSink, hop_sink, GST_TYPE_BASE_SINK)
-
-enum { PROP_0, PROP_SRC };
+G_DEFINE_TYPE(HopSink, hop_sink, GST_TYPE_ELEMENT)
 
 static GstStaticPadTemplate sink_template =
     GST_STATIC_PAD_TEMPLATE("sink",
@@ -24,88 +22,98 @@ static GstStaticPadTemplate sink_template =
                             GST_PAD_ALWAYS,
                             GST_STATIC_CAPS_ANY);
 
-static void
-hop_sink_set_property(GObject *obj, guint id, const GValue *val, GParamSpec *p)
-{
-    HopSink *s = HOP_SINK(obj);
-    if (id == PROP_SRC) {
-        if (s->src) { g_object_unref(s->src); s->src = NULL; }
-        GObject *o = g_value_get_object(val);
-        if (o) s->src = HOP_SRC(g_object_ref(o));
-    } else {
-        G_OBJECT_WARN_INVALID_PROPERTY_ID(obj, id, p);
-    }
-}
-
-static void
-hop_sink_get_property(GObject *obj, guint id, GValue *val, GParamSpec *p)
-{
-    HopSink *s = HOP_SINK(obj);
-    if (id == PROP_SRC) g_value_set_object(val, s->src);
-    else G_OBJECT_WARN_INVALID_PROPERTY_ID(obj, id, p);
-}
-
 static GstFlowReturn
-hop_sink_render(GstBaseSink *bs, GstBuffer *buf)
+hop_sink_chain(GstPad *pad, GstObject *parent, GstBuffer *buf)
 {
-    HopSink *s = HOP_SINK(bs);
-    return hop_src_push_buffer(s->src, gst_buffer_ref(buf));
+    HopSink *s = HOP_SINK(parent);
+    GstPad *partner = hop_link_acquire_partner(s->link, GST_PAD_SINK);
+    if (!partner)
+    {
+        gst_buffer_unref(buf);
+        return GST_FLOW_FLUSHING;
+    }
+    GstFlowReturn ret = gst_pad_push(partner, buf);
+    gst_object_unref(partner);
+    (void)pad;
+    return ret;
 }
 
-/* Forward events to the paired src's pad so they reach downstream.
- * STREAM_START is already emitted by the basesrc task before it exits —
- * forwarding it too would duplicate. Everything else (CAPS, SEGMENT, TAG,
- * custom downstream events, EOS) is forwarded, preserving upstream's
- * sticky-event order. basesink's parent event handler is still called so
- * it keeps its own state in sync and posts EOS on the bus as normal. */
 static gboolean
-hop_sink_event(GstBaseSink *bs, GstEvent *ev)
+hop_sink_event(GstPad *pad, GstObject *parent, GstEvent *ev)
 {
-    HopSink *s = HOP_SINK(bs);
-    if (s->src && GST_EVENT_TYPE(ev) != GST_EVENT_STREAM_START)
-        hop_src_push_event(s->src, gst_event_ref(ev));
+    HopSink *s = HOP_SINK(parent);
+    GstPad *partner = hop_link_acquire_partner(s->link, GST_PAD_SINK);
+    if (!partner)
+    {
+        /* Drop the event but report success so upstream doesn't error. */
+        gst_event_unref(ev);
+        return TRUE;
+    }
+    gboolean ok = gst_pad_push_event(partner, ev);
+    gst_object_unref(partner);
+    (void)pad;
+    return ok;
+}
 
-    return GST_BASE_SINK_CLASS(hop_sink_parent_class)->event(bs, ev);
+static gboolean
+hop_sink_query(GstPad *pad, GstObject *parent, GstQuery *q)
+{
+    HopSink *s = HOP_SINK(parent);
+    GstPad *partner = hop_link_acquire_partner(s->link, GST_PAD_SINK);
+    if (!partner)
+        return gst_pad_query_default(pad, parent, q);
+    gboolean ok = gst_pad_peer_query(partner, q);
+    gst_object_unref(partner);
+    return ok;
 }
 
 static void
-hop_sink_finalize(GObject *obj)
+hop_sink_dispose(GObject *obj)
 {
     HopSink *s = HOP_SINK(obj);
-    if (s->src) g_object_unref(s->src);
-    G_OBJECT_CLASS(hop_sink_parent_class)->finalize(obj);
+    if (s->link)
+    {
+        hop_link_set_pad(s->link, GST_PAD_SINK, NULL);
+        hop_link_unref(s->link);
+        s->link = NULL;
+    }
+    G_OBJECT_CLASS(hop_sink_parent_class)->dispose(obj);
 }
 
 static void
 hop_sink_class_init(HopSinkClass *klass)
 {
-    GObjectClass     *gc = G_OBJECT_CLASS(klass);
-    GstElementClass  *ec = GST_ELEMENT_CLASS(klass);
-    GstBaseSinkClass *bc = GST_BASE_SINK_CLASS(klass);
+    GObjectClass *gc = G_OBJECT_CLASS(klass);
+    GstElementClass *ec = GST_ELEMENT_CLASS(klass);
 
-    gc->set_property = hop_sink_set_property;
-    gc->get_property = hop_sink_get_property;
-    gc->finalize     = hop_sink_finalize;
-    bc->render       = hop_sink_render;
-    bc->event        = hop_sink_event;
-
-    g_object_class_install_property(gc, PROP_SRC,
-        g_param_spec_object("src", "Src",
-            "Peer HopSrc element to forward buffers to",
-            HOP_TYPE_SRC,
-            G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+    gc->dispose = hop_sink_dispose;
 
     gst_element_class_add_static_pad_template(ec, &sink_template);
     gst_element_class_set_static_metadata(ec,
-        "Hop Sink", "Sink/Generic",
-        "Minimal sink: forwards buffers synchronously to a paired HopSrc",
-        "bench");
+                                          "Hop Sink", "Sink/Generic",
+                                          "Passthrough sink half — forwards synchronously to paired HopSrc",
+                                          "livekit-sip");
 }
 
 static void
 hop_sink_init(HopSink *s)
 {
-    (void) s;
-    gst_base_sink_set_sync(GST_BASE_SINK(s), FALSE);
-    gst_base_sink_set_async_enabled(GST_BASE_SINK(s), FALSE);
+    s->sinkpad = gst_pad_new_from_static_template(&sink_template, "sink");
+    gst_pad_set_chain_function(s->sinkpad, hop_sink_chain);
+    gst_pad_set_event_function(s->sinkpad, hop_sink_event);
+    gst_pad_set_query_function(s->sinkpad, hop_sink_query);
+    gst_element_add_pad(GST_ELEMENT(s), s->sinkpad);
+
+    s->link = hop_link_new();
+    hop_link_set_pad(s->link, GST_PAD_SINK, s->sinkpad);
+}
+
+void
+_hop_sink_replace_link(GstElement *elem, HopLink *new_link)
+{
+    HopSink *s = HOP_SINK(elem);
+    hop_link_set_pad(s->link, GST_PAD_SINK, NULL);
+    hop_link_unref(s->link);
+    s->link = hop_link_ref(new_link);
+    hop_link_set_pad(s->link, GST_PAD_SINK, s->sinkpad);
 }
