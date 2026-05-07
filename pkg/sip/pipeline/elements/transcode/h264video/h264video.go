@@ -41,7 +41,7 @@ h264_video_probe_bad_buffers(GstPad *pad, GstPadProbeInfo *info, gpointer user_d
         now - st->last_request > 5 * GST_SECOND) {
         gst_pad_send_event(pad,
             gst_video_event_new_upstream_force_key_unit(
-                GST_CLOCK_TIME_NONE, FALSE, 0));
+                GST_CLOCK_TIME_NONE, TRUE, 0));
         st->last_request = now;
     }
     return GST_PAD_PROBE_OK;
