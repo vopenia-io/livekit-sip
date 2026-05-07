@@ -176,6 +176,34 @@ func mediaCapsFixBareFmtp(caps *gst.Caps) *gst.Caps {
 	return caps
 }
 
+func kindToMediaType(kind livekit.TrackSource) string {
+	switch kind {
+	case livekit.TrackSource_CAMERA, livekit.TrackSource_SCREEN_SHARE:
+		return "video"
+	case livekit.TrackSource_MICROPHONE, livekit.TrackSource_SCREEN_SHARE_AUDIO:
+		return "audio"
+	default:
+		return "unknown"
+	}
+}
+
+func mediaCapsRtcpFeedback(self *gst.Bin, caps *gst.Caps) *gst.Caps {
+	for i := range caps.GetSize() {
+		structure := caps.GetStructureAt(i)
+		if !structure.HasField("rtcp-fb-nack-pli") {
+			if err := structure.SetBool("rtcp-fb-nack-pli", true); err != nil {
+				self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set rtcp-fb-nack-pli attribute on caps structure: %v", err))
+			}
+		}
+		if !structure.HasField("rtcp-fb-ccm-fir") {
+			if err := structure.SetBool("rtcp-fb-ccm-fir", true); err != nil {
+				self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set rtcp-fb-ccm-fir attribute on caps structure: %v", err))
+			}
+		}
+	}
+	return caps
+}
+
 func (e *SipBin) selectCapsForMedia(self *gst.Bin, media *gstsdp.Media, kind livekit.TrackSource) (*gst.Caps, error) {
 	mediaCaps := make([]*gst.Caps, 0, media.FormatsLen())
 	for _, format := range media.Formats() {
@@ -193,6 +221,7 @@ func (e *SipBin) selectCapsForMedia(self *gst.Bin, media *gstsdp.Media, kind liv
 		caps.GetStructureAt(0).SetName("application/x-rtp")
 		// caps.GetStructureAt(0).RemoveValue("proto") // TODO: properly handle srtp if we want to support it
 
+		caps = mediaCapsRtcpFeedback(self, caps)
 		caps = mediaCapsFixBareFmtp(caps)
 
 		info := rtp.PayloadInfoForPt(uint8(pt))
@@ -236,7 +265,6 @@ func (e *SipBin) selectCapsForMedia(self *gst.Bin, media *gstsdp.Media, kind liv
 	if res.IsEmpty() {
 		return nil, fmt.Errorf("no compatible caps found for media %s: %s", media.GetMedia(), media.AsText())
 	}
-
 	return res, nil
 }
 

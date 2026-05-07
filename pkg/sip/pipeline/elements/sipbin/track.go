@@ -85,6 +85,7 @@ func (e *SipBin) NewTrack(self *gst.Bin, idx int, kind livekit.TrackSource, prot
 		"socket":       grtpSocket,
 		"close-socket": false,
 		"buffer-size":  int(bufferSize),
+		"caps":         gst.NewCapsFromString(fmt.Sprintf("application/x-rtp, media=(string)%s, rtcp-fb-nack-pli=(boolean)true, rtcp-fb-ccm-fir=(boolean)true", kindToMediaType(kind))),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create RTP source element: %w", err)
@@ -93,6 +94,7 @@ func (e *SipBin) NewTrack(self *gst.Bin, idx int, kind livekit.TrackSource, prot
 	rtcpSrc, err := gst.NewElementWithProperties("udpsrc", map[string]interface{}{
 		"socket":       grtcpSocket,
 		"close-socket": false,
+		"caps":         gst.NewCapsFromString("application/x-rtcp"),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create RTCP source element: %w", err)
