@@ -27,7 +27,7 @@ hop_sink_chain(GstPad *pad, GstObject *parent, GstBuffer *buf)
 {
     HopSink *s = HOP_SINK(parent);
     GstPad *partner = hop_link_acquire_partner(s->link, GST_PAD_SINK);
-    if (!partner)
+    if (G_UNLIKELY(!partner))
     {
         gst_buffer_unref(buf);
         return GST_FLOW_FLUSHING;
@@ -43,7 +43,7 @@ hop_sink_event(GstPad *pad, GstObject *parent, GstEvent *ev)
 {
     HopSink *s = HOP_SINK(parent);
     GstPad *partner = hop_link_acquire_partner(s->link, GST_PAD_SINK);
-    if (!partner)
+    if (G_UNLIKELY(!partner))
     {
         /* Drop the event but report success so upstream doesn't error. */
         gst_event_unref(ev);
@@ -60,7 +60,7 @@ hop_sink_query(GstPad *pad, GstObject *parent, GstQuery *q)
 {
     HopSink *s = HOP_SINK(parent);
     GstPad *partner = hop_link_acquire_partner(s->link, GST_PAD_SINK);
-    if (!partner)
+    if (G_UNLIKELY(!partner))
         return gst_pad_query_default(pad, parent, q);
     gboolean ok = gst_pad_peer_query(partner, q);
     gst_object_unref(partner);
@@ -74,7 +74,7 @@ hop_sink_dispose(GObject *obj)
     if (s->link)
     {
         hop_link_set_pad(s->link, GST_PAD_SINK, NULL);
-        hop_link_unref(s->link);
+        g_object_unref(s->link);
         s->link = NULL;
     }
     G_OBJECT_CLASS(hop_sink_parent_class)->dispose(obj);
@@ -113,7 +113,7 @@ _hop_sink_replace_link(GstElement *elem, HopLink *new_link)
 {
     HopSink *s = HOP_SINK(elem);
     hop_link_set_pad(s->link, GST_PAD_SINK, NULL);
-    hop_link_unref(s->link);
-    s->link = hop_link_ref(new_link);
+    g_object_unref(s->link);
+    s->link = g_object_ref(new_link);
     hop_link_set_pad(s->link, GST_PAD_SINK, s->sinkpad);
 }

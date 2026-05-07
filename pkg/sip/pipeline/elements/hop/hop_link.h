@@ -6,22 +6,26 @@ G_BEGIN_DECLS
 
 /* Shared, ref-counted connective tissue between a HopSink and a HopSrc.
  *
- * Each element holds one ref. The link stores raw pointers to the two
- * pads (no refcount on the pads themselves) — each element clears its
- * own slot under .lock during dispose, while the pad is still alive.
+ * HopLink is a plain GObject — refcounting goes through g_object_ref /
+ * g_object_unref. Each element holds one ref for its entire lifetime.
  *
- * hop_link_acquire_partner() takes the lock briefly, reads the partner
- * pad pointer, and gst_object_ref()s it before releasing the lock, so
- * the partner pad survives the forward operation even if the partner
- * element disposes concurrently.
+ * The link stores raw pointers to the two pads (no refcount on the pads
+ * themselves) — each element clears its own slot under the writer lock
+ * during dispose, while the pad is still alive.
  *
- * The lock is NEVER held across a gst_pad_push or peer_query call. */
+ * hop_link_acquire_partner() takes the reader lock briefly, reads the
+ * partner pad pointer, and gst_object_ref()s it before releasing the
+ * lock, so the partner pad survives the forward operation even if the
+ * partner element disposes concurrently. Concurrent readers don't
+ * contend; writers (set_pad) only run on init/dispose/bind, so the
+ * hot path is fully parallel.
+ *
+ * No lock is ever held across a gst_pad_push or peer_query call. */
 
-typedef struct _HopLink HopLink;
+#define HOP_TYPE_LINK (hop_link_get_type())
+G_DECLARE_FINAL_TYPE(HopLink, hop_link, HOP, LINK, GObject)
 
 HopLink *hop_link_new(void);
-HopLink *hop_link_ref(HopLink *l);
-void     hop_link_unref(HopLink *l);
 
 /* Set or clear (pad == NULL) the slot for the given direction. */
 void     hop_link_set_pad(HopLink *l, GstPadDirection dir, GstPad *pad);

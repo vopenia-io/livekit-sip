@@ -30,7 +30,7 @@ hop_src_event(GstPad *pad, GstObject *parent, GstEvent *ev)
 {
     HopSrc *s = HOP_SRC(parent);
     GstPad *partner = hop_link_acquire_partner(s->link, GST_PAD_SRC);
-    if (!partner)
+    if (G_UNLIKELY(!partner))
     {
         /* Partner gone — fall back to default to keep pad sane. */
         gst_event_unref(ev);
@@ -47,7 +47,7 @@ hop_src_query(GstPad *pad, GstObject *parent, GstQuery *q)
 {
     HopSrc *s = HOP_SRC(parent);
     GstPad *partner = hop_link_acquire_partner(s->link, GST_PAD_SRC);
-    if (!partner)
+    if (G_UNLIKELY(!partner))
         return gst_pad_query_default(pad, parent, q);
     gboolean ok = gst_pad_peer_query(partner, q);
     gst_object_unref(partner);
@@ -61,7 +61,7 @@ hop_src_dispose(GObject *obj)
     if (s->link)
     {
         hop_link_set_pad(s->link, GST_PAD_SRC, NULL);
-        hop_link_unref(s->link);
+        g_object_unref(s->link);
         s->link = NULL;
     }
     G_OBJECT_CLASS(hop_src_parent_class)->dispose(obj);
@@ -100,7 +100,7 @@ _hop_src_replace_link(GstElement *elem, HopLink *new_link)
     HopSrc *s = HOP_SRC(elem);
     /* Clear the old link's pointer, drop our ref, adopt the new one. */
     hop_link_set_pad(s->link, GST_PAD_SRC, NULL);
-    hop_link_unref(s->link);
-    s->link = hop_link_ref(new_link);
+    g_object_unref(s->link);
+    s->link = g_object_ref(new_link);
     hop_link_set_pad(s->link, GST_PAD_SRC, s->srcpad);
 }
