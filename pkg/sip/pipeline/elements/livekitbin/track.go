@@ -199,7 +199,7 @@ func mimeTypeToCaps(mimeType string) *gst.Caps {
 	if !ok {
 		return nil
 	}
-	capsStr := fmt.Sprintf("application/x-rtp, media=%s, encoding-name=%s", strings.ToLower(media), strings.ToUpper(enc))
+	capsStr := fmt.Sprintf("application/x-rtp, media=%s, encoding-name=%s, rtcp-fb-nack-pli=(boolean)true, rtcp-fb-ccm-fir=(boolean)true", strings.ToLower(media), strings.ToUpper(enc))
 	return gst.NewCapsFromString(capsStr)
 }
 
@@ -392,6 +392,8 @@ func (e *LivekitBin) capsFromTrack(self *gst.Bin, track *webrtc.TrackRemote, pub
 	if codec.Channels > 0 {
 		capsStr += fmt.Sprintf(", channels=%d", codec.Channels)
 	}
+
+	capsStr += ", rtcp-fb-nack-pli=(boolean)true, rtcp-fb-ccm-fir=(boolean)true"
 
 	return gst.NewCapsFromString(capsStr), uint8(pt)
 }

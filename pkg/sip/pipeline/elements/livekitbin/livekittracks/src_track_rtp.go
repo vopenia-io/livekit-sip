@@ -11,6 +11,7 @@ import (
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/base"
+	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/webrtc/v4"
 )
@@ -178,7 +179,18 @@ func (s *SrcTrackRtp) SetCaps(self *base.GstBaseSrc, caps *gst.Caps) bool {
 }
 
 func (s *SrcTrackRtp) GetCaps(self *base.GstBaseSrc, filter *gst.Caps) *gst.Caps {
-	caps := gst.NewCapsFromString("application/x-rtp")
+	var mediaType string
+	switch s.Pub.Source() {
+	case livekit.TrackSource_CAMERA, livekit.TrackSource_SCREEN_SHARE:
+		mediaType = "video"
+	case livekit.TrackSource_MICROPHONE, livekit.TrackSource_SCREEN_SHARE_AUDIO:
+		mediaType = "audio"
+	default:
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unsupported track source: %s", s.Pub.Source()))
+		self.Error(fmt.Sprintf("Unsupported track source: %s", s.Pub.Source()), nil)
+		return gst.NewEmptyCaps()
+	}
+	caps := gst.NewCapsFromString(fmt.Sprintf("application/x-rtp, media=(string)%s, rtcp-fb-nack-pli=(boolean)true, rtcp-fb-ccm-fir=(boolean)true", mediaType))
 	if filter != nil && filter.Instance() != nil && !filter.IsEmpty() && !filter.IsAny() {
 		if intersect := caps.Intersect(filter); intersect != nil {
 			return intersect
