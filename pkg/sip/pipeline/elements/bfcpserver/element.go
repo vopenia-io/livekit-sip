@@ -20,13 +20,22 @@ var CAT = gst.NewDebugCategory(
 	"bfcpserver Element",
 )
 
+var (
+	signalOnFloorRequested uint
+	signalOnFloorGranted   uint
+	signalOnFloorReleased  uint
+	signalStartScreenshare uint
+	signalStopScreenshare  uint
+)
+
 type BFCPServer struct {
 	props
-	bfcpServer  *bfcp.Server
-	bfcpConfig  *bfcp.ServerConfig
-	started     bool
-	constructed bool
-	requestID   atomic.Int64
+	bfcpServer       *bfcp.Server
+	bfcpConfig       *bfcp.ServerConfig
+	started          bool
+	constructed      bool
+	requestID        atomic.Int64
+	lastFloorRelease time.Time
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -46,7 +55,17 @@ func (e *BFCPServer) ClassInit(klass *glib.ObjectClass) {
 		"Roomkit <roomkit-visio@numerique.gouv.fr>",
 	)
 
-	gst.SignalNew(
+	signalOnFloorRequested = gst.SignalNew(
+		class.Type(),
+		"on-floor-requested",
+		gst.SignalRunLast,
+		glib.TYPE_BOOLEAN,
+		glib.TYPE_INT,
+		glib.TYPE_INT,
+		glib.TYPE_INT,
+	)
+
+	signalOnFloorGranted = gst.SignalNew(
 		class.Type(),
 		"on-floor-granted",
 		gst.SignalRunLast,
@@ -56,7 +75,7 @@ func (e *BFCPServer) ClassInit(klass *glib.ObjectClass) {
 		glib.TYPE_INT,
 	)
 
-	gst.SignalNew(
+	signalOnFloorReleased = gst.SignalNew(
 		class.Type(),
 		"on-floor-released",
 		gst.SignalRunLast,
@@ -65,7 +84,7 @@ func (e *BFCPServer) ClassInit(klass *glib.ObjectClass) {
 		glib.TYPE_INT,
 	)
 
-	gst.SignalNew(
+	signalStartScreenshare = gst.SignalNew(
 		class.Type(),
 		"start-screenshare",
 		gst.SignalRunLast,
@@ -73,7 +92,7 @@ func (e *BFCPServer) ClassInit(klass *glib.ObjectClass) {
 		glib.TYPE_INT, // floor ID
 	)
 
-	gst.SignalNew(
+	signalStopScreenshare = gst.SignalNew(
 		class.Type(),
 		"stop-screenshare",
 		gst.SignalRunLast,

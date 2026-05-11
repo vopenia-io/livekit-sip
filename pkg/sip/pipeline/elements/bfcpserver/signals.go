@@ -5,11 +5,13 @@ import (
 	"time"
 	"weak"
 
+	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/vopenia-io/bfcp"
 )
 
 const VirtualClientID = 0x0101
+const FloorRequestDebounceDuration = 3 * time.Second
 
 func (e *BFCPServer) startScreenshare(self *gst.Element, floorID int) {
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Received start-screenshare signal for floorID=%d", floorID))
@@ -84,6 +86,27 @@ func (e *BFCPServer) SetupSignals(self *gst.Element) {
 			return false
 		}
 
+		if e.lastFloorRelease.Add(FloorRequestDebounceDuration).After(time.Now()) {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Received floor request for floorID=%d from userID=%d too soon after previous request", floorID, userID))
+			time.Sleep(time.Until(e.lastFloorRelease.Add(FloorRequestDebounceDuration)))
+		}
+
+		if self.SignalHasHandlerPending(signalOnFloorRequested, glib.Quark(0), true) {
+			val, err := self.Emit("on-floor-requested", int(floorID), int(userID), int(requestID))
+			if err != nil {
+				self.Log(CAT, gst.LevelError, fmt.Sprintf("Error emitting on-floor-requested signal: %v", err))
+				self.Error("Error emitting on-floor-requested signal", err)
+				return false
+			}
+			handled, ok := val.(bool)
+			if !ok {
+				self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid return type from on-floor-requested signal handler: %T", val))
+				self.Error("Invalid return type from on-floor-requested signal handler", fmt.Errorf("expected bool, got %T", val))
+				return false
+			}
+			return handled
+		}
+
 		return true
 	}
 
@@ -97,6 +120,8 @@ func (e *BFCPServer) SetupSignals(self *gst.Element) {
 
 	e.bfcpServer.OnFloorReleased = func(floorID, userID uint16) {
 		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Floor released: floorID=%d, userID=%d", floorID, userID))
+
+		e.lastFloorRelease = time.Now()
 
 		if _, err := self.Emit("on-floor-released", int(floorID), int(userID)); err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error emitting on-floor-released signal: %v", err))
