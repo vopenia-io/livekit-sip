@@ -4,11 +4,24 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"weak"
 
+	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/gstsdp"
 	"github.com/livekit/protocol/livekit"
 )
+
+type BfcpTrack struct {
+	initialized bool
+	Idx         int
+	Proto       string
+	BfcpServer  *gst.Element
+	BfcpVersion int
+	ConfID      uint32
+	UserID      uint16
+	FloorID     uint16
+}
 
 func (e *SipBin) NewBfcpTrack(self *gst.Bin, idx int, proto string) (*BfcpTrack, error) {
 	ip := e.bindIP
@@ -32,20 +45,64 @@ func (e *SipBin) NewBfcpTrack(self *gst.Bin, idx int, proto string) (*BfcpTrack,
 		return nil, fmt.Errorf("failed to create BFCP server element: %w", err)
 	}
 
-	// wself := glib.WeakRefInit(self)
-	// eweak := weak.Make(e)
-	// if _, err := bfcpServer.Connect("on-floor-released", func(instance *gst.Element, floorID, userID int) {
-	// 	self := gst.ToGstBin(wself.Get())
-	// 	e := eweak.Value()
-	// 	if self == nil || self.Instance() == nil || e == nil {
-	// 		return
-	// 	}
-	// 	e.mu.Lock()
-	// 	defer e.mu.Unlock()
-	// 	e.clearTrack(self, livekit.TrackSource_SCREEN_SHARE)
-	// }); err != nil {
-	// 	return nil, fmt.Errorf("failed to connect on-floor-released signal: %w", err)
-	// }
+	wself := glib.WeakRefInit(self)
+	eweak := weak.Make(e)
+	if _, err := bfcpServer.Connect("on-floor-released", func(_ *gst.Element, floorID, userID int) {
+		if userID != int(1) {
+			return
+		}
+		e.mu.Lock()
+		defer e.mu.Unlock()
+
+		self := gst.ToGstBin(wself.Get())
+		e := eweak.Value()
+		if self == nil || self.Instance() == nil || e == nil {
+			return
+		}
+
+		if err := e.trackToggleEvent(self, livekit.TrackSource_SCREEN_SHARE, false); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to toggle off screenshare track on floor release: %v", err))
+			self.Error("Failed to toggle off screenshare track on floor release", err)
+		}
+	}); err != nil {
+		return nil, fmt.Errorf("failed to connect on-floor-released signal: %w", err)
+	}
+	if _, err := bfcpServer.Connect("on-floor-granted", func(_ *gst.Element, floorID, userID, requestID int) {
+		if userID != int(1) {
+			return
+		}
+
+		e.mu.Lock()
+		defer e.mu.Unlock()
+
+		self := gst.ToGstBin(wself.Get())
+		e := eweak.Value()
+		if self == nil || self.Instance() == nil || e == nil || e.Bfcp == nil {
+			return
+		}
+
+		if err := e.trackToggleEvent(self, livekit.TrackSource_SCREEN_SHARE, true); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to toggle on screenshare track on floor grant: %v", err))
+			self.Error("Failed to toggle on screenshare track on floor grant", err)
+		}
+	}); err != nil {
+		return nil, fmt.Errorf("failed to connect on-floor-granted signal: %w", err)
+	}
+	if _, err := bfcpServer.Connect("on-floor-requested", func(_ *gst.Element, floorID, userID, requestID int) bool {
+		if userID != int(1) {
+			return false
+		}
+
+		self := gst.ToGstBin(wself.Get())
+		e := eweak.Value()
+		if self == nil || self.Instance() == nil || e == nil || e.Bfcp == nil {
+			return false
+		}
+		e.clearTrack(self, livekit.TrackSource_SCREEN_SHARE)
+		return true
+	}); err != nil {
+		return nil, fmt.Errorf("failed to connect on-floor-requested signal: %w", err)
+	}
 
 	return &BfcpTrack{
 		Idx:         idx,

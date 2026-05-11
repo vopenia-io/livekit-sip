@@ -152,6 +152,7 @@ func (e *SipBin) InstanceInit(instance *glib.Object) {
 	e.sessionID = randID()
 
 	eweak := weak.Make(e)
+	wself := glib.WeakRefInit(self)
 	if _, err := self.Connect("offer-sdp", func(instance *gst.Element, offer string) string {
 		e := eweak.Value()
 		if e == nil {
@@ -237,7 +238,7 @@ func (e *SipBin) InstanceInit(instance *glib.Object) {
 	e.RtpBin, err = gst.NewElementWithProperties("rtpbin", map[string]interface{}{
 		"rtp-profile":              int(3), // GST_RTP_PROFILE_AVPF
 		"autoremove":               true,
-		"max-misorder-time":        uint(200),
+		"max-misorder-time":        uint(0),
 		"max-dropout-time":         uint(200),
 		"max-ts-offset":            int(200000000),
 		"timeout-inactive-sources": true,
@@ -250,9 +251,10 @@ func (e *SipBin) InstanceInit(instance *glib.Object) {
 		self.Error("failed to create rtpbin element", err)
 		return
 	}
-	if _, err := e.RtpBin.Connect("pad-added", func(instance *gst.Element, pad *gst.Pad) {
+	if _, err := e.RtpBin.Connect("pad-added", func(_ *gst.Element, pad *gst.Pad) {
 		e := eweak.Value()
-		if e == nil {
+		self := gst.ToGstBin(wself.Get())
+		if e == nil || self == nil || self.Instance() == nil {
 			return
 		}
 		e.onRtpBinPadAdded(self, pad)
@@ -261,9 +263,10 @@ func (e *SipBin) InstanceInit(instance *glib.Object) {
 		self.Error("failed to connect pad-added signal", err)
 		return
 	}
-	if _, err := e.RtpBin.Connect("pad-removed", func(instance *gst.Element, pad *gst.Pad) {
+	if _, err := e.RtpBin.Connect("pad-removed", func(_ *gst.Element, pad *gst.Pad) {
 		e := eweak.Value()
-		if e == nil {
+		self := gst.ToGstBin(wself.Get())
+		if e == nil || self == nil || self.Instance() == nil {
 			return
 		}
 		e.onRtpBinPadRemoved(self, pad)
@@ -272,9 +275,10 @@ func (e *SipBin) InstanceInit(instance *glib.Object) {
 		self.Error("failed to connect pad-removed signal", err)
 		return
 	}
-	if _, err := e.RtpBin.Connect("request-pt-map", func(instance *gst.Element, session int, pt uint8) *gst.Caps {
+	if _, err := e.RtpBin.Connect("request-pt-map", func(_ *gst.Element, session int, pt uint8) *gst.Caps {
 		e := eweak.Value()
-		if e == nil {
+		self := gst.ToGstBin(wself.Get())
+		if e == nil || self == nil || self.Instance() == nil {
 			return nil
 		}
 		return e.onRtpBinRequestPtMap(self, session, pt)
@@ -283,15 +287,40 @@ func (e *SipBin) InstanceInit(instance *glib.Object) {
 		self.Error("failed to connect request-pt-map signal", err)
 		return
 	}
-	if _, err := e.RtpBin.Connect("on-sender-timeout", func(instance *gst.Element, session, ssrc uint) {
+	if _, err := e.RtpBin.Connect("on-sender-timeout", func(_ *gst.Element, session, ssrc uint) {
 		e := eweak.Value()
-		if e == nil {
+		self := gst.ToGstBin(wself.Get())
+		if e == nil || self == nil || self.Instance() == nil {
 			return
 		}
 		e.onRtpBinSenderTimeout(self, session, ssrc)
 	}); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to connect on-sender-timeout signal: %v", err))
 		self.Error("failed to connect on-sender-timeout signal", err)
+		return
+	}
+	if _, err := e.RtpBin.Connect("on-ssrc-collision", func(_ *gst.Element, session, ssrc uint) {
+		e := eweak.Value()
+		self := gst.ToGstBin(wself.Get())
+		if e == nil || self == nil || self.Instance() == nil {
+			return
+		}
+		e.onRtpBinSsrcCollision(self, session, ssrc)
+	}); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to connect on-ssrc-collision signal: %v", err))
+		self.Error("failed to connect on-ssrc-collision signal", err)
+		return
+	}
+	if _, err := e.RtpBin.Connect("new-jitterbuffer", func(_ *gst.Element, jitterbuffer *gst.Element, session, ssrc uint) {
+		e := eweak.Value()
+		self := gst.ToGstBin(wself.Get())
+		if e == nil || self == nil || self.Instance() == nil {
+			return
+		}
+		e.onRtpBinNewJitterbuffer(self, jitterbuffer, session, ssrc)
+	}); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to connect on-ssrc-collision signal: %v", err))
+		self.Error("failed to connect on-ssrc-collision signal", err)
 		return
 	}
 
@@ -341,6 +370,7 @@ func (e *SipBin) Finalize(instance *glib.Object) {
 			}
 		}
 	}
+	e.Bfcp = nil
 	e.Tracks = [NbTracks]*SipTrack{}
 	e.PtMap = [NbTracks]map[uint8]*gst.Caps{}
 	for i := range e.PtMap {

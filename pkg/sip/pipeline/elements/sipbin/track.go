@@ -13,17 +13,6 @@ import (
 	"github.com/livekit/protocol/livekit"
 )
 
-type BfcpTrack struct {
-	initialized bool
-	Idx         int
-	Proto       string
-	BfcpServer  *gst.Element
-	BfcpVersion int
-	ConfID      uint32
-	UserID      uint16
-	FloorID     uint16
-}
-
 type SipTrack struct {
 	initialized bool
 	Idx         int
@@ -303,12 +292,43 @@ func (e *SipBin) CleanupTrack(self *gst.Bin, track *SipTrack) error {
 	return nil
 }
 
+func (e *SipBin) trackToggleEvent(self *gst.Bin, kind livekit.TrackSource, on bool) error {
+	switch kind {
+	case livekit.TrackSource_CAMERA, livekit.TrackSource_MICROPHONE, livekit.TrackSource_SCREEN_SHARE, livekit.TrackSource_SCREEN_SHARE_AUDIO:
+	default:
+		return fmt.Errorf("invalid track source kind: %s", kind)
+	}
+
+	track := e.Tracks[kind]
+	if track == nil || !track.initialized {
+		return nil
+	}
+
+	var st *gst.Structure
+	if on {
+		st = gst.NewStructure(EventOOBStreamOn)
+	} else {
+		st = gst.NewStructure(EventOOBStreamOff)
+	}
+
+	trackPad := track.RtpSrc.GetStaticPad("src")
+	if trackPad == nil {
+		return fmt.Errorf("failed to get RTP source pad for track source %s", kind)
+	}
+
+	event := gst.NewCustomEvent(gst.EventTypeCustomOOB, st.Transfer())
+	if !trackPad.PushEvent(event) {
+		return fmt.Errorf("failed to push event to track pad for track source %s", kind)
+	}
+
+	return nil
+}
+
 func (e *SipBin) clearTrack(self *gst.Bin, kind livekit.TrackSource) {
 	if e.Tracks[kind] == nil {
 		return
 	}
 
-	time.Sleep(500 * time.Millisecond)
 	rtpSessionVal, err := e.RtpBin.Emit("get-internal-session", uint(kind))
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get internal session for track source %s: %v", kind, err))
@@ -371,6 +391,15 @@ func (e *SipBin) clearTrack(self *gst.Bin, kind livekit.TrackSource) {
 		if internal {
 			continue
 		}
+		isCsrc, err := stats.GetBool("is-csrc")
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get is-csrc field from stats for RTP source at index %d for track source %s: %v", i, kind, err))
+			self.Error(fmt.Sprintf("Failed to get is-csrc field from stats for RTP source at index %d for track source %s", i, kind), err)
+			continue
+		}
+		if isCsrc {
+			continue
+		}
 		validated, err := stats.GetBool("validated")
 		if err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get validated field from stats for RTP source at index %d for track source %s: %v", i, kind, err))
@@ -400,10 +429,16 @@ func (e *SipBin) clearTrack(self *gst.Bin, kind livekit.TrackSource) {
 			self.Error(fmt.Sprintf("Failed to get packets-received field from stats for RTP source at index %d for track source %s", i, kind), err)
 			continue
 		}
+		if packetsReceived == 0 {
+			continue
+		}
 		ssrcs = append(ssrcs, uint32(ssrc))
 		nptk = append(nptk, packetsReceived)
 	}
-	time.Sleep(1500 * time.Millisecond)
+	if len(ssrcs) == 0 {
+		return
+	}
+	time.Sleep(500 * time.Millisecond)
 	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Clearing %d SSRCs from RTP session for track source %s: %v", len(ssrcs), kind, ssrcs))
 	for i, ssrc := range ssrcs {
 		rtpSourceVal, err := rtpSession.Emit("get-source-by-ssrc", uint(ssrc))

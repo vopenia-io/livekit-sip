@@ -1,7 +1,9 @@
 package sipbin
 
 import (
+	"errors"
 	"fmt"
+	"math"
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/livekit"
@@ -89,6 +91,43 @@ func (e *SipBin) onRtpBinSenderTimeout(self *gst.Bin, session, ssrc uint) {
 
 	if _, err := e.RtpBin.Emit("clear-ssrc", session, ssrc); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to emit clear-ssrc signal on rtpbin for session %d and ssrc %d: %v", session, ssrc, err))
+	}
+}
+
+func (e *SipBin) onRtpBinSsrcCollision(self *gst.Bin, session, ssrc uint) {
+	kind := livekit.TrackSource(session)
+	switch kind {
+	case livekit.TrackSource_CAMERA, livekit.TrackSource_SCREEN_SHARE,
+		livekit.TrackSource_MICROPHONE, livekit.TrackSource_SCREEN_SHARE_AUDIO:
+	default:
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Received SSRC collision for unsupported track source %d", kind))
+		return
+	}
+
+	self.Log(CAT, gst.LevelWarning, fmt.Sprintf("SSRC collision detected for track source %d, ssrc %d", kind, ssrc))
+
+	if _, err := e.RtpBin.Emit("clear-ssrc", session, ssrc); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to emit clear-ssrc signal on rtpbin for session %d and ssrc %d: %v", session, ssrc, err))
+	}
+}
+
+func (e *SipBin) onRtpBinNewJitterbuffer(self *gst.Bin, jitterbuffer *gst.Element, session, ssrc uint) {
+	return
+	kind := livekit.TrackSource(session)
+	switch kind {
+	case livekit.TrackSource_CAMERA, livekit.TrackSource_SCREEN_SHARE,
+		livekit.TrackSource_MICROPHONE, livekit.TrackSource_SCREEN_SHARE_AUDIO:
+	default:
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Received new jitterbuffer for unsupported track source %d", kind))
+		return
+	}
+
+	if err := errors.Join(
+		jitterbuffer.SetProperty("mode", int(0)),
+		jitterbuffer.SetProperty("max-dropout-time", uint(math.MaxInt32)),
+	); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set properties on new jitterbuffer for track source %d, session %d, and ssrc %d: %v", kind, session, ssrc, err))
+		self.Error(fmt.Sprintf("Failed to set properties on new jitterbuffer for track source %d, session %d, and ssrc %d", kind, session, ssrc), err)
 	}
 }
 
