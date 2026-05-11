@@ -6,6 +6,7 @@ import (
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
+	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/webrtc/v4"
 )
@@ -105,6 +106,26 @@ func (e *LivekitBin) callabcks() *lksdk.RoomCallback {
 			// 		CAT.Log(gst.LevelError, fmt.Sprintf("Failed to add track unmuted to main loop: %v", err))
 			// 	}
 			// },
+			OnLocalTrackPublished: func(pub *lksdk.LocalTrackPublication, _ *lksdk.LocalParticipant) {
+				kind := pub.Source()
+				switch kind {
+				case livekit.TrackSource_CAMERA, livekit.TrackSource_MICROPHONE, livekit.TrackSource_SCREEN_SHARE, livekit.TrackSource_SCREEN_SHARE_AUDIO:
+				default:
+					return
+				}
+
+				if e.publications[kind] == nil || !e.publications[kind].initialized {
+					return
+				}
+
+				if err := e.publications[kind].TrackSink.SetProperty("pub", glib.ArbitraryValue{Data: pub}); err != nil {
+					self := gst.ToGstBin(e.self.Get())
+					if self != nil && self.Instance() != nil {
+						self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set pub property on sink track for publication %s: %v", pub.SID(), err))
+						self.Error(fmt.Sprintf("Failed to set pub property on sink track for publication %s", pub.SID()), err)
+					}
+				}
+			},
 		},
 		OnActiveSpeakersChanged: func(p []lksdk.Participant) {
 			e.livekitMu.Lock()

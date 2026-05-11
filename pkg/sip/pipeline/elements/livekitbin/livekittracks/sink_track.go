@@ -3,10 +3,13 @@ package livekittracks
 import (
 	"errors"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/base"
+	lksdk "github.com/livekit/server-sdk-go/v2"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipbin"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -18,10 +21,34 @@ var sinkTrackProperties = []*glib.ParamSpec{
 		glib.TYPE_ARBITRARY_DATA,
 		glib.ParameterWritable|glib.ParameterConstructOnly,
 	),
+	glib.NewBoxedParam(
+		"pub",
+		"Pub",
+		"The livekit publication for this track",
+		glib.TYPE_ARBITRARY_DATA,
+		glib.ParameterWritable,
+	),
+	glib.NewBoxedParam(
+		"lp",
+		"LP",
+		"The livekit participant for this track",
+		glib.TYPE_ARBITRARY_DATA,
+		glib.ParameterWritable|glib.ParameterConstructOnly,
+	),
+	glib.NewBoxedParam(
+		"opts",
+		"Options",
+		"Track publication options",
+		glib.TYPE_ARBITRARY_DATA,
+		glib.ParameterWritable|glib.ParameterConstructOnly,
+	),
 }
 
 type SinkTrack struct {
 	track *webrtc.TrackLocalStaticRTP
+	pub   atomic.Pointer[lksdk.LocalTrackPublication]
+	lp    *lksdk.LocalParticipant
+	opts  *lksdk.TrackPublicationOptions
 }
 
 func (*SinkTrack) New() glib.GoObjectSubclass {
@@ -55,6 +82,15 @@ func (s *SinkTrack) InstanceInit(instance *glib.Object) {
 	self.SetMaxBitrate(1_500_000)
 }
 
+func (s *SinkTrack) Constructed(instance *glib.Object) {
+	self := base.ToGstBaseSink(instance)
+	if s.track == nil || s.lp == nil {
+		self.Log(CAT, gst.LevelError, "Track, publication, or participant is not set in sink_track")
+		self.Error("Track, publication, or participant is not set", errors.New("one or more required fields are nil"))
+		return
+	}
+}
+
 func (s *SinkTrack) SetCaps(self *base.GstBaseSink, caps *gst.Caps) bool {
 	return true
 }
@@ -76,21 +112,30 @@ func (s *SinkTrack) Start(self *base.GstBaseSink) bool {
 		return false
 	}
 
+	s.publish(self)
+
 	return true
 }
 
 func (s *SinkTrack) Stop(self *base.GstBaseSink) bool {
 	self.Log(CAT, gst.LevelDebug, "Stopping")
-
+	s.unPublish(self)
 	return true
 }
 
 func (s *SinkTrack) Render(self *base.GstBaseSink, buffer *gst.Buffer) gst.FlowReturn {
 	if s.track == nil {
-		self.Log(CAT, gst.LevelError, "Track is not set, dropping RTCP packet")
+		self.Log(CAT, gst.LevelError, "Track is not set in sink_track")
 		self.Error("Track is not set", errors.New("track is nil"))
 		return gst.FlowError
 	}
+
+	// TODO: do we need to prevent writes when muted?
+	// if yes then we will need to send a force key unit event upstream
+	// pub := s.pub
+	// if pub == nil || pub.IsMuted() {
+	// 	return gst.FlowOK
+	// }
 
 	if _, err := s.track.Write(buffer.Bytes()); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to write RTCP packet to track: %v", err))
@@ -101,8 +146,59 @@ func (s *SinkTrack) Render(self *base.GstBaseSink, buffer *gst.Buffer) gst.FlowR
 	return gst.FlowOK
 }
 
+func (s *SinkTrack) unPublish(self *base.GstBaseSink) {
+	pub := s.pub.Swap(nil)
+	if pub == nil {
+		return
+	}
+
+	tp := s.lp.GetTrackPublication(pub.Source())
+	if tp == nil {
+		return
+	}
+
+	if err := s.lp.UnpublishTrack(tp.SID()); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to unpublish track: %v", err))
+	}
+}
+
+func (s *SinkTrack) publish(self *base.GstBaseSink) {
+	if s.pub.Load() != nil {
+		self.Log(CAT, gst.LevelWarning, "Track is already published, skipping publish")
+		return
+	}
+	pub, err := s.lp.PublishTrack(s.track, s.opts)
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to publish track: %v", err))
+		self.Error("Failed to publish track", err)
+		return
+	}
+	s.pub.Store(pub)
+}
+
+func (s *SinkTrack) Event(self *base.GstBaseSink, event *gst.Event) bool {
+	switch event.Type() {
+	case gst.EventTypeCustomOOB:
+		structure := event.GetStructure()
+		switch structure.Name() {
+		case sipbin.EventOOBStreamOff:
+			self.Log(CAT, gst.LevelInfo, "Received OOB Stream Off event, stopping track")
+			s.unPublish(self)
+			return true
+		case sipbin.EventOOBStreamOn:
+			self.Log(CAT, gst.LevelInfo, "Received OOB Stream On event, starting track")
+			s.publish(self)
+			return true
+		}
+	}
+
+	return self.ParentEvent(event)
+}
+
 func (s *SinkTrack) Finalize(instance *glib.Object) {
 	s.track = nil
+	s.pub.Store(nil)
+	s.lp = nil
 }
 
 func (s *SinkTrack) SetProperty(instance *glib.Object, id uint, value *glib.Value) {
@@ -132,6 +228,81 @@ func (s *SinkTrack) SetProperty(instance *glib.Object, id uint, value *glib.Valu
 			return
 		}
 		s.track = track
+	case "pub":
+		gv, err := value.GoValue()
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get Go value for pub property: %v", err))
+			self.Error("Failed to get Go value for pub property", err)
+			return
+		}
+		if gv == nil {
+			return
+		}
+		data, ok := gv.(glib.ArbitraryValue)
+		if !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid type for pub property: %T", gv))
+			self.Error("Invalid type for pub property", fmt.Errorf("expected glib.ArbitraryValue, got %T", gv))
+			return
+		}
+		pub, ok := data.Data.(*lksdk.LocalTrackPublication)
+		if !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid data type for pub property: %T", data.Data))
+			self.Error("Invalid data type for pub property", fmt.Errorf("expected *lksdk.LocalTrackPublication, got %T", data.Data))
+			return
+		}
+		if pub == nil {
+			return
+		}
+		s.pub.Store(pub)
+	case "lp":
+		gv, err := value.GoValue()
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get Go value for lp property: %v", err))
+			self.Error("Failed to get Go value for lp property", err)
+			return
+		}
+		if gv == nil {
+			return
+		}
+		data, ok := gv.(glib.ArbitraryValue)
+		if !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid type for lp property: %T", gv))
+			self.Error("Invalid type for lp property", fmt.Errorf("expected glib.ArbitraryValue, got %T", gv))
+			return
+		}
+		lp, ok := data.Data.(*lksdk.LocalParticipant)
+		if !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid data type for lp property: %T", data.Data))
+			self.Error("Invalid data type for lp property", fmt.Errorf("expected *lksdk.LocalParticipant, got %T", data.Data))
+			return
+		}
+		s.lp = lp
+	case "opts":
+		gv, err := value.GoValue()
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get Go value for opts property: %v", err))
+			self.Error("Failed to get Go value for opts property", err)
+			return
+		}
+		if gv == nil {
+			return
+		}
+		data, ok := gv.(glib.ArbitraryValue)
+		if !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid type for opts property: %T", gv))
+			self.Error("Invalid type for opts property", fmt.Errorf("expected glib.ArbitraryValue, got %T", gv))
+			return
+		}
+		opts, ok := data.Data.(*lksdk.TrackPublicationOptions)
+		if !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid data type for opts property: %T", data.Data))
+			self.Error("Invalid data type for opts property", fmt.Errorf("expected *lksdk.TrackPublicationOptions, got %T", data.Data))
+			return
+		}
+		if opts == nil {
+			return
+		}
+		s.opts = opts
 	default:
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unknown property ID %d for SinkTrack", id))
 		self.Error(fmt.Sprintf("Unknown property ID %d for SinkTrack", id), nil)

@@ -46,18 +46,24 @@ func (p *LivekitBinPublication) Init(e *LivekitBin, self *gst.Bin, kind livekit.
 		return fmt.Errorf("failed to create new local track: %w", err)
 	}
 
-	pub, err := e.room.LocalParticipant.PublishTrack(track, &lksdk.TrackPublicationOptions{
-		Name:   fmt.Sprintf("%s_%s", e.room.LocalParticipant.Identity(), kind.String()),
-		Source: kind,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create sink track: %w", err)
-	}
+	// pub, err := e.room.LocalParticipant.PublishTrack(track, &lksdk.TrackPublicationOptions{
+	// 	Name:   fmt.Sprintf("%s_%s", e.room.LocalParticipant.Identity(), kind.String()),
+	// 	Source: kind,
+	// })
+	// if err != nil {
+	// 	return fmt.Errorf("failed to create sink track: %w", err)
+	// }
 
-	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Published camera track with SID %s", pub.SID()))
+	// self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Published camera track with SID %s", pub.SID()))
 
 	element, err := gst.NewElementWithProperties("livekitbin_sinktrack", map[string]interface{}{
 		"track": glib.ArbitraryValue{Data: track},
+		// "pub":   glib.ArbitraryValue{Data: pub},
+		"opts": glib.ArbitraryValue{Data: &lksdk.TrackPublicationOptions{
+			Name:   fmt.Sprintf("%s_%s", e.room.LocalParticipant.Identity(), kind.String()),
+			Source: kind,
+		}},
+		"lp": glib.ArbitraryValue{Data: e.room.LocalParticipant},
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create sink track element: %w", err)
@@ -782,20 +788,20 @@ func (e *LivekitBin) releasePadSendRtpSink(self *gst.Bin, pad *gst.Pad) {
 		e.RtpBin.ReleaseRequestPad(pad)
 	}
 
-	sid := ""
-	if e.room.LocalParticipant != nil {
-		tp := e.room.LocalParticipant.GetTrackPublication(kind)
-		if tp != nil {
-			sid = tp.SID()
-		}
-	}
-	if sid != "" {
-		if err := e.room.LocalParticipant.UnpublishTrack(sid); err != nil {
-			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to unpublish track for track source %s when releasing pad %s: %v", kind.String(), gpad.GetName(), err))
-		}
-	} else {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Publication SID is empty for track source %s when releasing pad %s, skipping unpublish: sid=%q", kind.String(), gpad.GetName(), sid))
-	}
+	// sid := ""
+	// if e.room.LocalParticipant != nil {
+	// 	tp := e.room.LocalParticipant.GetTrackPublication(kind)
+	// 	if tp != nil {
+	// 		sid = tp.SID()
+	// 	}
+	// }
+	// if sid != "" {
+	// 	if err := e.room.LocalParticipant.UnpublishTrack(sid); err != nil {
+	// 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to unpublish track for track source %s when releasing pad %s: %v", kind.String(), gpad.GetName(), err))
+	// 	}
+	// } else {
+	// 	self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Publication SID is empty for track source %s when releasing pad %s, skipping unpublish: sid=%q", kind.String(), gpad.GetName(), sid))
+	// }
 
 	e.publications[kind] = nil
 
