@@ -104,8 +104,6 @@ func (e *SipBin) onRtpBinPadAdded(self *gst.Bin, pad *gst.Pad) {
 		e.onRtpBinPadAddedSendRtpSrc(self, pad)
 	case "recv_rtp_src_%u_%u_%u":
 		e.onRtpBinPadAddedRecvRtpSrc(self, pad)
-	default:
-		self.Log(CAT, gst.LevelTrace, fmt.Sprintf("Received new pad %s on rtpbin with unrecognized template %s", pad.GetName(), templ.GetName()))
 	}
 }
 
@@ -202,8 +200,6 @@ func (e *SipBin) onRtpBinPadRemoved(self *gst.Bin, pad *gst.Pad) {
 		e.onRtpBinPadRemovedSendRtpSrc(self, pad)
 	case "recv_rtp_src_%u_%u_%u":
 		e.onRtpBinPadRemovedRecvRtpSrc(self, pad)
-	default:
-		self.Log(CAT, gst.LevelTrace, fmt.Sprintf("Pad %s removed from rtpbin with unrecognized template %s", pad.GetName(), templ.GetName()))
 	}
 }
 
