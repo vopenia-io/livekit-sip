@@ -66,12 +66,10 @@ var properties = []*glib.ParamSpec{
 
 func (e *TrackFallback) setTrackProperty(self *gst.Bin, trackSource livekit.TrackSource, enabled bool) {
 	e.Tracks[trackSource].enabled = enabled
-	if self.GetCurrentState() == gst.StatePlaying {
-		if enabled {
-			e.startTrackFallback(self, trackSource)
-		} else {
-			e.stopTrackFallback(self, trackSource)
-		}
+	if enabled {
+		e.startTrackFallback(self, trackSource)
+	} else {
+		e.stopTrackFallback(self, trackSource)
 	}
 }
 
