@@ -194,16 +194,16 @@ func (e *SipBin) handleOfferSdp(self *gst.Bin, offerData []byte) ([]byte, error)
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Generated answer SDP:\n%s", answerData))
 
-	self.Log(CAT, gst.LevelInfo, "Emitting available media")
+	self.Log(CAT, gst.LevelDebug, "Emitting available media")
 	e.emitAvailableMedia(self)
 
-	self.Log(CAT, gst.LevelInfo, "Scheduling early reinvite if needed")
+	self.Log(CAT, gst.LevelDebug, "Scheduling early reinvite if needed")
 	e.earlyReinvite(self)
 
-	self.Log(CAT, gst.LevelInfo, "Scheduling track cleanup for inactive tracks")
+	self.Log(CAT, gst.LevelDebug, "Scheduling track cleanup for inactive tracks")
 	e.clearTracks(self)
 
-	self.Log(CAT, gst.LevelInfo, "Offer SDP processing complete")
+	self.Log(CAT, gst.LevelDebug, "Offer SDP processing complete")
 
 	return []byte(answerData), nil
 }
