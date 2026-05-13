@@ -3,6 +3,8 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
 
 	"github.com/go-gst/go-gst/gst"
 	"golang.org/x/sys/unix"
@@ -88,7 +90,7 @@ func (p *Pipeline) ConnectRoom(wsUrl, token string, attributes map[string]string
 }
 
 func (p *Pipeline) PlayAudio(ctx context.Context, fd int) error {
-	playFd, err := unix.Open(
+	srcFd, err := unix.Open(
 		fmt.Sprintf("/proc/self/fd/%d", fd),
 		unix.O_RDONLY|unix.O_CLOEXEC,
 		0,
@@ -97,9 +99,38 @@ func (p *Pipeline) PlayAudio(ctx context.Context, fd int) error {
 		return fmt.Errorf("failed to open per-call fd from master fd %d: %w", fd, err)
 	}
 
-	if _, err := p.IOManager.LivekitController.Emit("play-audio-fd", playFd); err != nil {
-		return fmt.Errorf("failed to emit play-audio-fd: %w", err)
+	var pfds [2]int
+	if err := unix.Pipe2(pfds[:], unix.O_CLOEXEC); err != nil {
+		unix.Close(srcFd)
+		return fmt.Errorf("pipe2: %w", err)
 	}
+	pipeR, pipeW := pfds[0], pfds[1]
 
-	return nil
+	src := os.NewFile(uintptr(srcFd), "memfd-reader")
+	wr := os.NewFile(uintptr(pipeW), "play-pipe-w")
+	go func() {
+		defer src.Close()
+		defer wr.Close()
+
+		if _, err := io.Copy(wr, src); err != nil {
+			p.Log.Errorw("failed to copy audio data to pipe", err)
+		}
+	}()
+
+	var PlayErr error
+	done := make(chan struct{})
+	go func() {
+		if _, err := p.IOManager.LivekitController.Emit("play-audio-fd", pipeR); err != nil {
+			PlayErr = fmt.Errorf("failed to emit play-audio-fd: %w", err)
+		}
+		p.Log.Debugw("play-audio-fd ended", "fd", pipeR, "err", PlayErr)
+		close(done)
+	}()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-done:
+		return PlayErr
+	}
 }

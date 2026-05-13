@@ -234,7 +234,7 @@ func (p *Pipeline) Close() error {
 		p.IOManager.SipController.SetLockedState(false)
 		p.IOManager.LivekitController.SetLockedState(false)
 
-		p.Log.Infow("Pipeline set to null state complete", "pid", pid, "err", err)
+		p.Log.Debugw("Pipeline set to null state complete", "pid", pid, "err", err)
 	}()
 
 	closed := false
@@ -311,7 +311,7 @@ func (p *Pipeline) Close() error {
 	}
 
 	p.CloseBus()
-	p.Log.Infow("Pipeline bus closed")
+	p.Log.Debugw("Pipeline bus closed")
 
 	time.Sleep(100 * time.Millisecond) // give some time to settle
 	p.Log.Infow("Pipeline closed")
