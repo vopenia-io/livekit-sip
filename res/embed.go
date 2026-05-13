@@ -2,6 +2,7 @@ package res
 
 import (
 	"bytes"
+	"embed"
 	_ "embed"
 	"io"
 
@@ -18,14 +19,14 @@ var RoomJoinOgg []byte
 //go:embed wrong_pin.ogg
 var WrongPinOgg []byte
 
-//go:embed enter_pin.flac
-var EnterPinFlac []byte
+//go:embed lang/*/enter_pin.flac
+var EnterPin embed.FS
 
-//go:embed room_join.flac
-var RoomJoinFlac []byte
+//go:embed lang/*/room_join.flac
+var RoomJoin embed.FS
 
-//go:embed wrong_pin.flac
-var WrongPinFlac []byte
+//go:embed lang/*/wrong_pin.flac
+var WrongPin embed.FS
 
 const SampleRate = 48000
 

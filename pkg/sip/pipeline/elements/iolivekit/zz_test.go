@@ -52,7 +52,11 @@ func TestMain(m *testing.M) {
 // fd via /proc/self/fd/N. The masterFd is closed on test cleanup.
 func openWavFd(t *testing.T) int {
 	t.Helper()
-	masterFd, err := res.MemfdFromBytes("test-wav", res.RoomJoinFlac)
+	Data, err := res.EnterPin.ReadFile("lang/en/enter_pin.wav")
+	if err != nil {
+		t.Fatal("failed to read embedded WAV file:", err)
+	}
+	masterFd, err := res.MemfdFromBytes("test-wav", Data)
 	if err != nil {
 		t.Fatal("failed to create memfd:", err)
 	}

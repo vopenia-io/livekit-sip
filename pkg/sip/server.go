@@ -203,7 +203,7 @@ func NewServer(region string, conf *config.Config, log logger.Logger, mon *stats
 		option(s)
 	}
 	s.infos.byCallID = expirable.NewLRU[string, *inboundCallInfo](maxCallCache, nil, callCacheTTL)
-	s.initMediaRes()
+	s.initMediaRes(s.conf)
 	pipeline.SetupLogging(log, conf.Gst)
 	return s
 }
