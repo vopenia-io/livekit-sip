@@ -66,6 +66,7 @@ func (e *IoManagerLivekit) requestNewPadAudioIn(self *gst.Bin, templ *gst.PadTem
 	var err error
 	audioIn.RtpAudio, err = gst.NewElementWithProperties("factorybin", map[string]interface{}{
 		"factories": glib.NewStrv([]string{
+			"g722-audio",
 			"opus-audio",
 			"pcmu-audio",
 			"pcma-audio",
@@ -641,6 +642,7 @@ func (e *IoManagerLivekit) padAddedAudioOut(self *gst.Bin, pad *gst.Pad, name st
 
 	audioOut.AudioRtp, err = gst.NewElementWithProperties("factorybin", map[string]interface{}{
 		"factories": glib.NewStrv([]string{
+			"audio-g722",
 			"audio-opus",
 			"audio-pcmu",
 			"audio-pcma",
@@ -1014,6 +1016,7 @@ func (e *IoManagerLivekit) padRemovedScreenShareOut(self *gst.Bin, pad *gst.Pad,
 }
 
 func (e *IoManagerLivekit) playAudioFd(self *gst.Bin, fd int) bool {
+	// return true
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("playAudioFd creating flacsource with fd=%d", fd))
 
 	flacSrc, err := gst.NewElementWithProperties("flacsource", map[string]interface{}{

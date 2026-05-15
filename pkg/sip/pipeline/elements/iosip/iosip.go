@@ -153,6 +153,7 @@ func (e *IoManagerSip) linkNewPadAudioMicrophone(self *gst.Bin, pad *gst.Pad, na
 	var err error
 	audioIn.RtpAudio, err = gst.NewElementWithProperties("factorybin", map[string]interface{}{
 		"factories": glib.NewStrv([]string{
+			"g722-audio",
 			"opus-audio",
 			"pcmu-audio",
 			"pcma-audio",
@@ -653,6 +654,7 @@ func (e *IoManagerSip) padAddedAudioOut(self *gst.Bin, pad *gst.Pad, name string
 	var err error
 	audioOut.AudioRtp, err = gst.NewElementWithProperties("factorybin", map[string]interface{}{
 		"factories": glib.NewStrv([]string{
+			"audio-g722",
 			"audio-opus",
 			"audio-pcmu",
 			"audio-pcma",

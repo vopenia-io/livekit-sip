@@ -14,6 +14,7 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipbin"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipcompositor"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/trackfallback"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audiog722"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audioopus"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audiopcma"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/audiopcmu"
@@ -21,6 +22,7 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/dtmfaudio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/factorybin"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/flacsource"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/g722audio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/h264video"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/opusaudio"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/pcmaaudio"
@@ -130,6 +132,14 @@ func init() {
 
 	if !pcmaaudio.Register() {
 		panic("Failed to register pcma-audio")
+	}
+
+	if !audiog722.Register() {
+		panic("Failed to register audio-g722")
+	}
+
+	if !g722audio.Register() {
+		panic("Failed to register g722-audio")
 	}
 
 	if !vp9video.Register() {
