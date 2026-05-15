@@ -299,7 +299,7 @@ func (sio *SipIo) onAvailableMedia(camera, microphone, screenshare, screenshareA
 		sio.pipeline.WebrtcIo.LivekitBin.SetProperty("microphone", microphone),
 		sio.pipeline.WebrtcIo.LivekitBin.SetProperty("camera", camera),
 		sio.pipeline.WebrtcIo.LivekitBin.SetProperty("screenshare", screenshare),
-		// sio.pipeline.WebrtcIo.LivekitBin.SetProperty("screenshare-audio", screenshareAudio),
+		sio.pipeline.WebrtcIo.LivekitBin.SetProperty("screenshare-audio", screenshareAudio),
 	); err != nil {
 		sio.log.Errorw("Failed to set available media properties on LiveKit bin", err, "camera", camera, "microphone", microphone, "screenshare", screenshare, "screenshareAudio", screenshareAudio)
 	}

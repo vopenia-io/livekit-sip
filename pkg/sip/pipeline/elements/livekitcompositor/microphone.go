@@ -180,6 +180,10 @@ func (e *LivekitCompositor) requestNewRawSinkPad(self *gst.Bin, templ *gst.PadTe
 	return e.requestNewMicrophoneSinkPad(self, templ, name) // may need to differentiate in the future
 }
 
+func (e *LivekitCompositor) requestNewScreenShareAudioSinkPad(self *gst.Bin, templ *gst.PadTemplate, name string) *gst.Pad {
+	return e.requestNewMicrophoneSinkPad(self, templ, name) // may need to differentiate in the future
+}
+
 func (e *LivekitCompositor) releaseMicrophoneSinkPad(self *gst.Bin, gpad *gst.GhostPad) {
 	if e.LivekitCompositorMicrophone == nil {
 		self.Log(CAT, gst.LevelWarning, "Attempted to release microphone sink pad but microphone compositor is not initialized")
@@ -203,6 +207,10 @@ func (e *LivekitCompositor) releaseMicrophoneSinkPad(self *gst.Bin, gpad *gst.Gh
 }
 
 func (e *LivekitCompositor) releaseRawSinkPad(self *gst.Bin, gpad *gst.GhostPad) {
+	e.releaseMicrophoneSinkPad(self, gpad) // may need to differentiate in the future
+}
+
+func (e *LivekitCompositor) releaseScreenShareAudioSinkPad(self *gst.Bin, gpad *gst.GhostPad) {
 	e.releaseMicrophoneSinkPad(self, gpad) // may need to differentiate in the future
 }
 

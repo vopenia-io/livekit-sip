@@ -36,6 +36,8 @@ type IoManagerLivekit struct {
 
 	ScreenShareIn  map[string]*ScreenShareInTranscode
 	ScreenShareOut *ScreenShareOutTranscode
+
+	ScreenShareAudioIn map[string]*ScreenShareAudioInTranscode
 }
 
 type AudioInTranscode struct {
@@ -77,6 +79,13 @@ type ScreenShareOutTranscode struct {
 	gpad     *gst.GhostPad
 	Queue    *gst.Element
 	VideoRTP *gst.Element
+	pad      *gst.Pad
+}
+
+type ScreenShareAudioInTranscode struct {
+	gpad     *gst.GhostPad
+	RtpAudio *gst.Element
+	Filter   *gst.Element
 	pad      *gst.Pad
 }
 
@@ -169,6 +178,7 @@ func (e *IoManagerLivekit) InstanceInit(instance *glib.Object) {
 	e.AudioIn = make(map[string]*AudioInTranscode)
 	e.CameraIn = make(map[string]*CameraInTranscode)
 	e.ScreenShareIn = make(map[string]*ScreenShareInTranscode)
+	e.ScreenShareAudioIn = make(map[string]*ScreenShareAudioInTranscode)
 	e.videoWidth = 1280
 	e.videoHeight = 720
 	e.videoFramerate = 24

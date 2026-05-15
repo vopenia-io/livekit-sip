@@ -40,6 +40,8 @@ func (e *IoManagerLivekit) RequestNewPad(instance *gst.Element, templ *gst.PadTe
 			return e.requestNewPadCameraIn(self, templ, name, session, ssrc, pt)
 		case livekit.TrackSource_SCREEN_SHARE:
 			return e.requestNewPadScreenShareIn(self, templ, name, session, ssrc, pt)
+		case livekit.TrackSource_SCREEN_SHARE_AUDIO:
+			return e.requestNewPadScreenShareAudioIn(self, templ, name, session, ssrc, pt)
 		default:
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Unsupported session kind in pad name %s: %d (%s)", name, session, livekit.TrackSource(session).String()))
 			return nil
@@ -334,6 +336,93 @@ func (e *IoManagerLivekit) requestNewPadScreenShareIn(self *gst.Bin, templ *gst.
 	return screenShareIn.gpad.Pad
 }
 
+func (e *IoManagerLivekit) requestNewPadScreenShareAudioIn(self *gst.Bin, templ *gst.PadTemplate, name string, session int, ssrc int, pt int) *gst.Pad {
+	e.inMu.Lock()
+	defer e.inMu.Unlock()
+
+	if _, exists := e.AudioIn[name]; exists {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Pad with name %s already exists", name))
+		return nil
+	}
+
+	screenShareAudioIn := &ScreenShareAudioInTranscode{}
+
+	var err error
+	screenShareAudioIn.RtpAudio, err = gst.NewElementWithProperties("factorybin", map[string]interface{}{
+		"factories": glib.NewStrv([]string{
+			"g722-audio",
+			"opus-audio",
+			"pcmu-audio",
+			"pcma-audio",
+		}),
+	})
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create factorybin element for pad %s: %v", name, err))
+		self.Error(fmt.Sprintf("Failed to create factorybin element for pad %s", name), err)
+		return nil
+	}
+	screenShareAudioIn.Filter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
+		"caps": gst.NewCapsFromString(AudioCaps),
+	})
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create capsfilter element for pad %s: %v", name, err))
+		self.Error(fmt.Sprintf("Failed to create capsfilter element for pad %s", name), err)
+		return nil
+	}
+
+	if err := self.AddMany(screenShareAudioIn.RtpAudio, screenShareAudioIn.Filter); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add factorybin element to SIP IO element for pad %s: %v", name, err))
+		self.Error(fmt.Sprintf("Failed to add factorybin element to SIP IO element for pad %s", name), err)
+		return nil
+	}
+
+	if err := screenShareAudioIn.RtpAudio.Link(screenShareAudioIn.Filter); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link factorybin element to capsfilter for pad %s: %v", name, err))
+		self.Error(fmt.Sprintf("Failed to link factorybin element to capsfilter for pad %s", name), err)
+		return nil
+	}
+
+	screenShareAudioIn.pad = e.Compositor.GetRequestPad(fmt.Sprintf("sink_%d_%d_%d", session, ssrc, pt))
+	if screenShareAudioIn.pad == nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get request pad from compositor for pad %s", name))
+		self.Error(fmt.Sprintf("Failed to get request pad from compositor for pad %s", name), fmt.Errorf("compositor returned nil pad"))
+		return nil
+	}
+
+	if ret := screenShareAudioIn.Filter.GetStaticPad("src").Link(screenShareAudioIn.pad); ret != gst.PadLinkOK {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link capsfilter src pad to compositor pad for pad %s: %v", name, ret))
+		self.Error(fmt.Sprintf("Failed to link capsfilter src pad to compositor pad for pad %s", name), fmt.Errorf("failed to link pads"))
+		return nil
+	}
+
+	screenShareAudioIn.gpad = gst.NewGhostPadFromTemplate(name, screenShareAudioIn.RtpAudio.GetStaticPad("sink"), templ)
+	if screenShareAudioIn.gpad == nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create ghost pad for pad %s", name))
+		self.Error(fmt.Sprintf("Failed to create ghost pad for pad %s", name), fmt.Errorf("gst.NewGhostPadFromTemplate returned nil"))
+		return nil
+	}
+	if !screenShareAudioIn.gpad.SetActive(true) {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to activate ghost pad for pad %s", name))
+	}
+	if !self.AddPad(screenShareAudioIn.gpad.Pad) {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add ghost pad to SIP IO element for pad %s", name))
+		self.Error(fmt.Sprintf("Failed to add ghost pad to SIP IO element for pad %s", name), fmt.Errorf("self.AddPad returned false"))
+		return nil
+	}
+
+	if !screenShareAudioIn.RtpAudio.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state of factorybin element with parent for pad %s", name))
+	}
+	if !screenShareAudioIn.Filter.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state of capsfilter element with parent for pad %s", name))
+	}
+
+	e.ScreenShareAudioIn[name] = screenShareAudioIn
+
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Successfully created new screen share audio input pad %s for session %d", name, session))
+	return screenShareAudioIn.gpad.Pad
+}
+
 func (e *IoManagerLivekit) ReleasePad(instance *gst.Element, pad *gst.Pad) {
 	self := gst.ToGstBin(instance)
 
@@ -366,6 +455,8 @@ func (e *IoManagerLivekit) ReleasePad(instance *gst.Element, pad *gst.Pad) {
 			e.releasePadCameraIn(self, gpad, pname, session, ssrc, pt)
 		case livekit.TrackSource_SCREEN_SHARE:
 			e.releasePadScreenShareIn(self, gpad, pname, session, ssrc, pt)
+		case livekit.TrackSource_SCREEN_SHARE_AUDIO:
+			e.releasePadScreenShareAudioIn(self, gpad, pname, session, ssrc, pt)
 		default:
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Unsupported session kind in pad name %s: %d (%s)", pname, session, livekit.TrackSource(session).String()))
 			return
@@ -469,6 +560,34 @@ func (e *IoManagerLivekit) releasePadScreenShareIn(self *gst.Bin, _ *gst.GhostPa
 	delete(e.ScreenShareIn, pname)
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Successfully released screen share input pad %s for session %d", pname, session))
+}
+
+func (e *IoManagerLivekit) releasePadScreenShareAudioIn(self *gst.Bin, _ *gst.GhostPad, pname string, session int, _ int, _ int) {
+	e.inMu.Lock()
+	defer e.inMu.Unlock()
+
+	screenShareAudioIn, exists := e.ScreenShareAudioIn[pname]
+	if !exists {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("No screen share audio input pad found with name %s", pname))
+		return
+	}
+
+	if err := screenShareAudioIn.RtpAudio.SetState(gst.StateNull); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set factorybin element to NULL state for pad %s: %v", pname, err))
+	}
+	if err := screenShareAudioIn.Filter.SetState(gst.StateNull); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set capsfilter element to NULL state for pad %s: %v", pname, err))
+	}
+
+	e.Compositor.ReleaseRequestPad(screenShareAudioIn.pad)
+
+	if err := self.RemoveMany(screenShareAudioIn.RtpAudio, screenShareAudioIn.Filter); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove factorybin element from SIP IO element for pad %s: %v", pname, err))
+	}
+
+	delete(e.ScreenShareAudioIn, pname)
+
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Successfully released screen share audio input pad %s for session %d", pname, session))
 }
 
 func (e *IoManagerLivekit) compositorPadAdded(self *gst.Bin, pad *gst.Pad) {

@@ -164,6 +164,8 @@ func (e *LivekitCompositor) requestNewSinkPad(self *gst.Bin, templ *gst.PadTempl
 		pad = e.requestNewCameraSinkPad(self, templ, name)
 	case livekit.TrackSource_SCREEN_SHARE:
 		pad = e.requestNewScreenshareSinkPad(self, templ, name)
+	case livekit.TrackSource_SCREEN_SHARE_AUDIO:
+		pad = e.requestNewScreenShareAudioSinkPad(self, templ, name)
 	default:
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown track source in pad name: %s", name))
 		return nil
@@ -261,6 +263,8 @@ func (e *LivekitCompositor) releaseSinkPad(self *gst.Bin, gpad *gst.GhostPad) {
 		e.releaseCameraSinkPad(self, gpad)
 	case livekit.TrackSource_SCREEN_SHARE:
 		e.releaseScreenshareSinkPad(self, gpad)
+	case livekit.TrackSource_SCREEN_SHARE_AUDIO:
+		e.releaseScreenShareAudioSinkPad(self, gpad)
 	default:
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown track source in released pad name: %s", gpad.GetName()))
 		return
