@@ -3,11 +3,147 @@ package sipbin
 import (
 	"fmt"
 	"strconv"
+	"strings"
+	"weak"
 
+	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/gstsdp"
 	"github.com/livekit/protocol/livekit"
 )
+
+type BfcpTrack struct {
+	initialized bool
+	Idx         int
+	Proto       string
+	BfcpServer  *gst.Element
+	BfcpVersion int
+	ConfID      uint32
+	UserID      uint16
+	FloorID     uint16
+}
+
+func (e *SipBin) NewBfcpTrack(self *gst.Bin, idx int, proto string) (*BfcpTrack, error) {
+	ip := e.bindIP
+	if ip == nil {
+		ip = e.ip
+	}
+	if ip == nil {
+		return nil, fmt.Errorf("no IP address configured for BFCP media")
+	}
+	props := map[string]interface{}{
+		"bind-ip": ip.String(),
+	}
+	if e.portStart != 0 {
+		props["port-start"] = uint(e.portStart)
+	}
+	if e.portEnd != 0 {
+		props["port-end"] = uint(e.portEnd)
+	}
+	bfcpServer, err := gst.NewElementWithProperties("bfcpserver", props)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create BFCP server element: %w", err)
+	}
+
+	wself := glib.WeakRefInit(self)
+	eweak := weak.Make(e)
+	if _, err := bfcpServer.Connect("on-floor-released", func(_ *gst.Element, floorID, userID int) {
+		if userID != int(1) {
+			return
+		}
+		e.mu.Lock()
+		defer e.mu.Unlock()
+
+		self := gst.ToGstBin(wself.Get())
+		e := eweak.Value()
+		if self == nil || self.Instance() == nil || e == nil {
+			return
+		}
+
+		if err := e.trackToggleEvent(self, livekit.TrackSource_SCREEN_SHARE, false); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to toggle off screenshare track on floor release: %v", err))
+			self.Error("Failed to toggle off screenshare track on floor release", err)
+		}
+	}); err != nil {
+		return nil, fmt.Errorf("failed to connect on-floor-released signal: %w", err)
+	}
+	if _, err := bfcpServer.Connect("on-floor-granted", func(_ *gst.Element, floorID, userID, requestID int) {
+		if userID != int(1) {
+			return
+		}
+
+		e.mu.Lock()
+		defer e.mu.Unlock()
+
+		self := gst.ToGstBin(wself.Get())
+		e := eweak.Value()
+		if self == nil || self.Instance() == nil || e == nil || e.Bfcp == nil {
+			return
+		}
+
+		if err := e.trackToggleEvent(self, livekit.TrackSource_SCREEN_SHARE, true); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to toggle on screenshare track on floor grant: %v", err))
+			self.Error("Failed to toggle on screenshare track on floor grant", err)
+		}
+	}); err != nil {
+		return nil, fmt.Errorf("failed to connect on-floor-granted signal: %w", err)
+	}
+	if _, err := bfcpServer.Connect("on-floor-requested", func(_ *gst.Element, floorID, userID, requestID int) bool {
+		if userID != int(1) {
+			return false
+		}
+
+		self := gst.ToGstBin(wself.Get())
+		e := eweak.Value()
+		if self == nil || self.Instance() == nil || e == nil || e.Bfcp == nil {
+			return false
+		}
+		e.clearTrack(self, livekit.TrackSource_SCREEN_SHARE)
+		return true
+	}); err != nil {
+		return nil, fmt.Errorf("failed to connect on-floor-requested signal: %w", err)
+	}
+
+	return &BfcpTrack{
+		Idx:         idx,
+		Proto:       proto,
+		BfcpServer:  bfcpServer,
+		BfcpVersion: 2,
+		ConfID:      1,
+		UserID:      1,
+		FloorID:     1,
+	}, nil
+}
+
+func (b *BfcpTrack) Init(e *SipBin, self *gst.Bin, media *gstsdp.Media, session *gstsdp.Message) error {
+	if b.initialized {
+		return nil
+	}
+
+	// if err := b.BfcpServer.SetProperty("floor-id", uint(b.FloorID)); err != nil {
+	// 	return fmt.Errorf("failed to set floor-id property on BFCP server: %w", err)
+	// }
+
+	if version := media.GetAttributeVal("bfcpver"); version != "" {
+		version, _, _ = strings.Cut(version, " ")
+		if v, err := strconv.Atoi(version); err == nil {
+			b.BfcpVersion = v
+		} else {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to parse BFCP version from media attribute: %v", err))
+		}
+	}
+
+	if err := self.Add(b.BfcpServer); err != nil {
+		return fmt.Errorf("failed to add BFCP server element to bin: %w", err)
+	}
+
+	if !b.BfcpServer.SyncStateWithParent() {
+		return fmt.Errorf("failed to sync state of BFCP server element with parent")
+	}
+
+	b.initialized = true
+	return nil
+}
 
 func (e *SipBin) makeBfcpMedia(bfcp *BfcpTrack) (*gstsdp.Media, error) {
 	media, err := gstsdp.NewMedia()

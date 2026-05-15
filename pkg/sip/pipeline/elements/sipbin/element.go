@@ -21,30 +21,12 @@ var CAT = gst.NewDebugCategory(
 
 const NbTracks = int(livekit.TrackSource_SCREEN_SHARE_AUDIO) + 1
 
-// type LogMutex struct {
-// 	sync.Mutex
-// }
+type EncodingCase int
 
-// func (m *LogMutex) Lock() {
-// 	uid := uuid.NewString()
-
-// 	done := make(chan struct{})
-
-// 	fmt.Printf("Locking mutex %s\n", uid)
-// 	go func() {
-// 		defer close(done)
-// 		select {
-// 		case <-done:
-// 			fmt.Printf("Mutex %s locked\n", uid)
-// 		case <-time.After(5 * time.Second):
-// 			fmt.Printf("Timeout waiting to lock mutex %s at:\n %s", uid, string(debug.Stack()))
-// 		}
-// 	}()
-
-// 	m.Mutex.Lock()
-// 	done <- struct{}{}
-// 	<-done
-// }
+const (
+	EncodingCaseLower EncodingCase = iota
+	EncodingCaseUpper
+)
 
 type SipBin struct {
 	config
@@ -52,9 +34,10 @@ type SipBin struct {
 
 	RtpBin *gst.Element
 
-	PtMap  [NbTracks]map[uint8]*gst.Caps // indexed by livekit.TrackSource
-	Tracks [NbTracks]*SipTrack           // indexed by livekit.TrackSource
-	Medias []*gstsdp.Media
+	encodingCase [NbTracks]map[uint8]EncodingCase // indexed by livekit.TrackSource
+	PtMap        [NbTracks]map[uint8]*gst.Caps    // indexed by livekit.TrackSource
+	Tracks       [NbTracks]*SipTrack              // indexed by livekit.TrackSource
+	Medias       []*gstsdp.Media
 
 	Bfcp *BfcpTrack
 
@@ -110,6 +93,21 @@ func (e *SipBin) ClassInit(klass *glib.ObjectClass) {
 		glib.TYPE_STRING,
 	)
 
+	gst.SignalNew(
+		class.Type(),
+		"toggle-screenshare",
+		gst.SignalRunLast,
+		glib.TYPE_NONE,
+		glib.TYPE_BOOLEAN,
+	)
+
+	gst.SignalNew(
+		class.Type(),
+		"stats",
+		gst.SignalRunLast,
+		gst.TypeStructure,
+	)
+
 	// request signals
 	SignalSendOfferSdpID = gst.SignalNew(
 		class.Type(),
@@ -159,9 +157,14 @@ func (e *SipBin) InstanceInit(instance *glib.Object) {
 		e.PtMap[i] = make(map[uint8]*gst.Caps)
 	}
 
+	for i := range e.encodingCase {
+		e.encodingCase[i] = make(map[uint8]EncodingCase)
+	}
+
 	e.sessionID = randID()
 
 	eweak := weak.Make(e)
+	wself := glib.WeakRefInit(self)
 	if _, err := self.Connect("offer-sdp", func(instance *gst.Element, offer string) string {
 		e := eweak.Value()
 		if e == nil {
@@ -171,6 +174,7 @@ func (e *SipBin) InstanceInit(instance *glib.Object) {
 		answerData, err := e.OnOfferSdp(self, []byte(offer))
 		if err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to process offer: %v", err))
+			self.Error("failed to process offer", err)
 			return ""
 		}
 		return string(answerData)
@@ -189,6 +193,7 @@ func (e *SipBin) InstanceInit(instance *glib.Object) {
 		err := e.OnAnswerSdp(self, []byte(answer))
 		if err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to process answer: %v", err))
+			self.Error("failed to process answer", err)
 			return
 		}
 	}); err != nil {
@@ -206,6 +211,7 @@ func (e *SipBin) InstanceInit(instance *glib.Object) {
 		err := e.OnAckSDP(self, []byte(ack))
 		if err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to process ack: %v", err))
+			self.Error("failed to process ack", err)
 			return
 		}
 	}); err != nil {
@@ -214,11 +220,37 @@ func (e *SipBin) InstanceInit(instance *glib.Object) {
 		return
 	}
 
+	if _, err := self.Connect("toggle-screenshare", func(instance *gst.Element, enable bool) {
+		e := eweak.Value()
+		if e == nil {
+			return
+		}
+		self := gst.ToGstBin(instance)
+		e.ToggleScreenshare(self, enable)
+	}); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to connect toggle-screenshare signal: %v", err))
+		self.Error("failed to connect toggle-screenshare signal", err)
+		return
+	}
+
+	if _, err := self.Connect("stats", func(instance *gst.Element) *gst.Structure {
+		e := eweak.Value()
+		if e == nil {
+			return nil
+		}
+		self := gst.ToGstBin(instance)
+		return e.DumpStats(self)
+	}); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to connect stats signal: %v", err))
+		self.Error("failed to connect stats signal", err)
+		return
+	}
+
 	var err error
 	e.RtpBin, err = gst.NewElementWithProperties("rtpbin", map[string]interface{}{
 		"rtp-profile":              int(3), // GST_RTP_PROFILE_AVPF
 		"autoremove":               true,
-		"max-misorder-time":        uint(200),
+		"max-misorder-time":        uint(0),
 		"max-dropout-time":         uint(200),
 		"max-ts-offset":            int(200000000),
 		"timeout-inactive-sources": true,
@@ -231,9 +263,10 @@ func (e *SipBin) InstanceInit(instance *glib.Object) {
 		self.Error("failed to create rtpbin element", err)
 		return
 	}
-	if _, err := e.RtpBin.Connect("pad-added", func(instance *gst.Element, pad *gst.Pad) {
+	if _, err := e.RtpBin.Connect("pad-added", func(_ *gst.Element, pad *gst.Pad) {
 		e := eweak.Value()
-		if e == nil {
+		self := gst.ToGstBin(wself.Get())
+		if e == nil || self == nil || self.Instance() == nil {
 			return
 		}
 		e.onRtpBinPadAdded(self, pad)
@@ -242,9 +275,10 @@ func (e *SipBin) InstanceInit(instance *glib.Object) {
 		self.Error("failed to connect pad-added signal", err)
 		return
 	}
-	if _, err := e.RtpBin.Connect("pad-removed", func(instance *gst.Element, pad *gst.Pad) {
+	if _, err := e.RtpBin.Connect("pad-removed", func(_ *gst.Element, pad *gst.Pad) {
 		e := eweak.Value()
-		if e == nil {
+		self := gst.ToGstBin(wself.Get())
+		if e == nil || self == nil || self.Instance() == nil {
 			return
 		}
 		e.onRtpBinPadRemoved(self, pad)
@@ -253,15 +287,52 @@ func (e *SipBin) InstanceInit(instance *glib.Object) {
 		self.Error("failed to connect pad-removed signal", err)
 		return
 	}
-	if _, err := e.RtpBin.Connect("request-pt-map", func(instance *gst.Element, session int, pt uint8) *gst.Caps {
+	if _, err := e.RtpBin.Connect("request-pt-map", func(_ *gst.Element, session int, pt uint8) *gst.Caps {
 		e := eweak.Value()
-		if e == nil {
+		self := gst.ToGstBin(wself.Get())
+		if e == nil || self == nil || self.Instance() == nil {
 			return nil
 		}
 		return e.onRtpBinRequestPtMap(self, session, pt)
 	}); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to connect request-pt-map signal: %v", err))
 		self.Error("failed to connect request-pt-map signal", err)
+		return
+	}
+	if _, err := e.RtpBin.Connect("on-sender-timeout", func(_ *gst.Element, session, ssrc uint) {
+		e := eweak.Value()
+		self := gst.ToGstBin(wself.Get())
+		if e == nil || self == nil || self.Instance() == nil {
+			return
+		}
+		e.onRtpBinSenderTimeout(self, session, ssrc)
+	}); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to connect on-sender-timeout signal: %v", err))
+		self.Error("failed to connect on-sender-timeout signal", err)
+		return
+	}
+	if _, err := e.RtpBin.Connect("on-ssrc-collision", func(_ *gst.Element, session, ssrc uint) {
+		e := eweak.Value()
+		self := gst.ToGstBin(wself.Get())
+		if e == nil || self == nil || self.Instance() == nil {
+			return
+		}
+		e.onRtpBinSsrcCollision(self, session, ssrc)
+	}); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to connect on-ssrc-collision signal: %v", err))
+		self.Error("failed to connect on-ssrc-collision signal", err)
+		return
+	}
+	if _, err := e.RtpBin.Connect("new-jitterbuffer", func(_ *gst.Element, jitterbuffer *gst.Element, session, ssrc uint) {
+		e := eweak.Value()
+		self := gst.ToGstBin(wself.Get())
+		if e == nil || self == nil || self.Instance() == nil {
+			return
+		}
+		e.onRtpBinNewJitterbuffer(self, jitterbuffer, session, ssrc)
+	}); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("failed to connect on-ssrc-collision signal: %v", err))
+		self.Error("failed to connect on-ssrc-collision signal", err)
 		return
 	}
 
@@ -311,10 +382,14 @@ func (e *SipBin) Finalize(instance *glib.Object) {
 			}
 		}
 	}
+	e.Bfcp = nil
 	e.Tracks = [NbTracks]*SipTrack{}
 	e.PtMap = [NbTracks]map[uint8]*gst.Caps{}
 	for i := range e.PtMap {
 		e.PtMap[i] = make(map[uint8]*gst.Caps)
+	}
+	for i := range e.encodingCase {
+		e.encodingCase[i] = make(map[uint8]EncodingCase)
 	}
 	e.RtpBin = nil
 	e.Medias = nil
@@ -390,14 +465,13 @@ func (e *SipBin) requestNewPadSendRtpSink(self *gst.Bin, templ *gst.PadTemplate,
 
 	switch kind {
 	case livekit.TrackSource_CAMERA:
-		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Created new RTP sink pad for camera track: %s", gpad.GetName()))
+		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Created new RTP sink pad for camera track: %s", gpad.GetName()))
 	case livekit.TrackSource_SCREEN_SHARE:
-		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Created new RTP sink pad for screen share track: %s", gpad.GetName()))
-		e.bfcpStartScreenshare(self)
+		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Created new RTP sink pad for screen share track: %s", gpad.GetName()))
 	case livekit.TrackSource_MICROPHONE:
-		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Created new RTP sink pad for microphone track: %s", gpad.GetName()))
+		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Created new RTP sink pad for microphone track: %s", gpad.GetName()))
 	case livekit.TrackSource_SCREEN_SHARE_AUDIO:
-		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Created new RTP sink pad for screen share audio track: %s", gpad.GetName()))
+		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Created new RTP sink pad for screen share audio track: %s", gpad.GetName()))
 	}
 
 	return gpad.Pad
@@ -464,7 +538,6 @@ func (e *SipBin) releasePadSendRtpSink(self *gst.Bin, pad *gst.Pad) {
 		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Released RTP sink pad for camera track: %s", name))
 	case livekit.TrackSource_SCREEN_SHARE:
 		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Released RTP sink pad for screen share track: %s", name))
-		e.bfcpStopScreenshare(self)
 	case livekit.TrackSource_MICROPHONE:
 		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Released RTP sink pad for microphone track: %s", name))
 	case livekit.TrackSource_SCREEN_SHARE_AUDIO:

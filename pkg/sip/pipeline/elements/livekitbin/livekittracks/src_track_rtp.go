@@ -11,24 +11,39 @@ import (
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/base"
+	"github.com/livekit/protocol/livekit"
+	lksdk "github.com/livekit/server-sdk-go/v2"
+	"github.com/pion/webrtc/v4"
 )
 
-func NewSrcTrackRtp(parent *SrcTrack) (*gst.Element, error) {
-	element, err := gst.NewElement("livekitbin_srctrack_rtp")
-	if err != nil {
-		return nil, err
-	}
-	src, ok := gst.SubclassFromElement[*SrcTrackRtp](element)
-	if !ok {
-		return nil, fmt.Errorf("failed to cast element to SrcTrackRtp")
-	}
-	src.parent = parent
-
-	return element, nil
+var srcTrackRtpProperties = []*glib.ParamSpec{
+	glib.NewBoxedParam(
+		"track",
+		"Track",
+		"The webrtc track this element will read from",
+		glib.TYPE_ARBITRARY_DATA,
+		glib.ParameterWritable|glib.ParameterConstructOnly,
+	),
+	glib.NewBoxedParam(
+		"pub",
+		"Publication",
+		"The LiveKit publication for the track this element will read from",
+		glib.TYPE_ARBITRARY_DATA,
+		glib.ParameterWritable|glib.ParameterConstructOnly,
+	),
+	glib.NewBoxedParam(
+		"rp",
+		"RemoteParticipant",
+		"The LiveKit RemoteParticipant that published the track this element will read from",
+		glib.TYPE_ARBITRARY_DATA,
+		glib.ParameterWritable|glib.ParameterConstructOnly,
+	),
 }
 
 type SrcTrackRtp struct {
-	parent  *SrcTrack
+	Track   *webrtc.TrackRemote
+	Pub     *lksdk.RemoteTrackPublication
+	Rp      *lksdk.RemoteParticipant
 	unblock atomic.Bool
 }
 
@@ -51,6 +66,8 @@ func (*SrcTrackRtp) ClassInit(klass *glib.ObjectClass) {
 		gst.PadDirectionSource,
 		gst.PadPresenceAlways,
 		gst.NewCapsFromString("application/x-rtp")))
+
+	class.InstallProperties(srcTrackRtpProperties)
 }
 
 func (s *SrcTrackRtp) InstanceInit(instance *glib.Object) {
@@ -62,32 +79,118 @@ func (s *SrcTrackRtp) InstanceInit(instance *glib.Object) {
 	self.SetDoTimestamp(true)
 }
 
+func (s *SrcTrackRtp) SetProperty(instance *glib.Object, id uint, value *glib.Value) {
+	self := base.ToGstBaseSrc(instance)
+	param := srcTrackRtpProperties[id]
+	switch param.Name() {
+	case "track":
+		gv, err := value.GoValue()
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get Go value for track property: %v", err))
+			self.Error("Failed to get Go value for track property", err)
+			return
+		}
+		if gv == nil {
+			return
+		}
+		data, ok := gv.(glib.ArbitraryValue)
+		if !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid type for track property: %T", gv))
+			self.Error("Invalid type for track property", fmt.Errorf("expected glib.ArbitraryValue, got %T", gv))
+			return
+		}
+		track, ok := data.Data.(*webrtc.TrackRemote)
+		if !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid data type for track property: %T", data.Data))
+			self.Error("Invalid data type for track property", fmt.Errorf("expected *webrtc.TrackRemote, got %T", data.Data))
+			return
+		}
+		s.Track = track
+	case "pub":
+		gv, err := value.GoValue()
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get Go value for pub property: %v", err))
+			self.Error("Failed to get Go value for pub property", err)
+			return
+		}
+		if gv == nil {
+			return
+		}
+		data, ok := gv.(glib.ArbitraryValue)
+		if !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid type for pub property: %T", gv))
+			self.Error("Invalid type for pub property", fmt.Errorf("expected glib.ArbitraryValue, got %T", gv))
+			return
+		}
+		pub, ok := data.Data.(*lksdk.RemoteTrackPublication)
+		if !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid data type for pub property: %T", data.Data))
+			self.Error("Invalid data type for pub property", fmt.Errorf("expected *lksdk.RemoteTrackPublication, got %T", data.Data))
+			return
+		}
+		s.Pub = pub
+	case "rp":
+		gv, err := value.GoValue()
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get Go value for rp property: %v", err))
+			self.Error("Failed to get Go value for rp property", err)
+			return
+		}
+		if gv == nil {
+			return
+		}
+		data, ok := gv.(glib.ArbitraryValue)
+		if !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid type for rp property: %T", gv))
+			self.Error("Invalid type for rp property", fmt.Errorf("expected glib.ArbitraryValue, got %T", gv))
+			return
+		}
+		rp, ok := data.Data.(*lksdk.RemoteParticipant)
+		if !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid data type for rp property: %T", data.Data))
+			self.Error("Invalid data type for rp property", fmt.Errorf("expected *lksdk.RemoteParticipant, got %T", data.Data))
+			return
+		}
+		s.Rp = rp
+	default:
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unknown property ID: %d", id))
+		self.Error(fmt.Sprintf("Unknown property ID: %d", id), nil)
+	}
+}
+
+func (s *SrcTrackRtp) Constructed(instance *glib.Object) {
+	self := base.ToGstBaseSrc(instance)
+	self.Log(CAT, gst.LevelDebug, "Constructed")
+
+	if s.Track == nil || s.Pub == nil || s.Rp == nil {
+		err := errors.New("Track, Pub, and Rp must be set before constructing SrcTrackRtp")
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to construct SrcTrackRtp: %v", err))
+		self.Error("Failed to construct SrcTrackRtp: Track, Pub, and Rp must be set", err)
+		return
+	}
+
+	s.unblock.Store(false)
+
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Constructed SrcTrackRtp for track %s from participant %s", s.Track.ID(), s.Rp.Identity()))
+}
+
 func (s *SrcTrackRtp) SetCaps(self *base.GstBaseSrc, caps *gst.Caps) bool {
 	return true
 }
 
 func (s *SrcTrackRtp) GetCaps(self *base.GstBaseSrc, filter *gst.Caps) *gst.Caps {
-	if s.parent == nil || s.parent.Track == nil {
-		return gst.NewCapsFromString("application/x-rtp").Ref()
+	var mediaType string
+	switch s.Pub.Source() {
+	case livekit.TrackSource_CAMERA, livekit.TrackSource_SCREEN_SHARE:
+		mediaType = "video"
+	case livekit.TrackSource_MICROPHONE, livekit.TrackSource_SCREEN_SHARE_AUDIO:
+		mediaType = "audio"
+	default:
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unsupported track source: %s", s.Pub.Source()))
+		self.Error(fmt.Sprintf("Unsupported track source: %s", s.Pub.Source()), nil)
+		return gst.NewEmptyCaps()
 	}
-	// codec := s.parent.Track.Codec()
-
-	// media, enc, ok := strings.Cut(codec.MimeType, "/")
-	// if !ok {
-	// 	self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid codec mime type: %s", codec.MimeType))
-	// 	return nil
-	// }
-
-	capsStr := "application/x-rtp"
-	// capsStr += fmt.Sprintf(", media=(string)%s", strings.ToLower(media))
-	// capsStr += fmt.Sprintf(", encoding-name=(string)%s", strings.ToUpper(enc))
-	// capsStr += fmt.Sprintf(", payload=(int)%d", codec.PayloadType)
-	// capsStr += fmt.Sprintf(", clock-rate=(int)%d", codec.ClockRate)
-	// if codec.Channels > 0 {
-	// 	capsStr += fmt.Sprintf(", channels=(int)%d", codec.Channels)
-	// }
-
-	caps := gst.NewCapsFromString(capsStr)
+	caps := gst.NewCapsFromString(fmt.Sprintf("application/x-rtp, media=(string)%s, rtcp-fb-nack-pli=(boolean)true, rtcp-fb-ccm-fir=(boolean)true", mediaType))
 	if filter != nil && filter.Instance() != nil && !filter.IsEmpty() && !filter.IsAny() {
 		if intersect := caps.Intersect(filter); intersect != nil {
 			return intersect
@@ -98,20 +201,9 @@ func (s *SrcTrackRtp) GetCaps(self *base.GstBaseSrc, filter *gst.Caps) *gst.Caps
 
 func (s *SrcTrackRtp) Start(self *base.GstBaseSrc) bool {
 	self.Log(CAT, gst.LevelDebug, "Starting")
-	if s.parent == nil {
-		self.Log(CAT, gst.LevelError, "Parent SrcTrack element is not set")
-		self.Error("Parent SrcTrack element is not set", errors.New("parent SrcTrack is nil"))
-		return false
-	}
-
-	if err := s.parent.SendSourceInfo(); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to send source info: %v", err))
-		self.Error("Failed to send source info", err)
-		return false
-	}
 
 	s.unblock.Store(false)
-	if err := s.parent.Track.SetReadDeadline(time.Time{}); err != nil {
+	if err := s.Track.SetReadDeadline(time.Time{}); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to reset read deadline on track: %v", err))
 		self.Error("Failed to reset read deadline on track", err)
 		return false
@@ -122,6 +214,9 @@ func (s *SrcTrackRtp) Start(self *base.GstBaseSrc) bool {
 
 func (s *SrcTrackRtp) Stop(self *base.GstBaseSrc) bool {
 	self.Log(CAT, gst.LevelDebug, "Stopping")
+	if err := s.Pub.SetSubscribed(false); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to unsubscribe from track publication: %v", err))
+	}
 
 	return true
 }
@@ -138,7 +233,7 @@ func (s *SrcTrackRtp) Fill(self *base.GstBaseSrc, offset uint64, length uint, bu
 	ptr := mapInfo.Data()
 	data := unsafe.Slice((*byte)(ptr), length)
 
-	n, _, err := s.parent.Track.Read(data)
+	n, _, err := s.Track.Read(data)
 	if s.unblock.Load() {
 		self.Log(CAT, gst.LevelInfo, "Fill unblocked, returning Flushing")
 		return gst.FlowFlushing
@@ -163,7 +258,7 @@ func (s *SrcTrackRtp) Unlock(self *base.GstBaseSrc) bool {
 
 	s.unblock.Store(true)
 
-	if err := s.parent.Track.SetReadDeadline(time.Now()); err != nil {
+	if err := s.Track.SetReadDeadline(time.Now()); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set read deadline on track: %v", err))
 		self.Error("Failed to set read deadline on track", err)
 		return false
@@ -175,10 +270,16 @@ func (s *SrcTrackRtp) Unlock(self *base.GstBaseSrc) bool {
 func (s *SrcTrackRtp) UnlockStop(self *base.GstBaseSrc) bool {
 	self.Log(CAT, gst.LevelInfo, "SrcTrackRtp UnlockStop called")
 	s.unblock.Store(false)
-	if err := s.parent.Track.SetReadDeadline(time.Time{}); err != nil {
+	if err := s.Track.SetReadDeadline(time.Time{}); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to reset read deadline on track: %v", err))
 		self.Error("Failed to reset read deadline on track", err)
 		return false
 	}
 	return true
+}
+
+func (s *SrcTrackRtp) Finalize(instance *glib.Object) {
+	s.Track = nil
+	s.Pub = nil
+	s.Rp = nil
 }

@@ -31,12 +31,20 @@ var _ GstChain = (*IOManager)(nil)
 func (c *IOManager) Create() error {
 	var err error
 
-	c.SipController, err = gst.NewElement("io_manager_sip")
+	c.SipController, err = gst.NewElementWithProperties("iosip", map[string]interface{}{
+		"video-width":  c.pipeline.videoWidth,
+		"video-height": c.pipeline.videoHeight,
+		"nvidia":       c.pipeline.nvidia,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to create IO Manager SIP element: %w", err)
 	}
 
-	c.LivekitController, err = gst.NewElement("io_manager_livekit")
+	c.LivekitController, err = gst.NewElementWithProperties("iolivekit", map[string]interface{}{
+		"video-width":  c.pipeline.videoWidth,
+		"video-height": c.pipeline.videoHeight,
+		"nvidia":       c.pipeline.nvidia,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to create IO Manager LiveKit element: %w", err)
 	}
@@ -87,6 +95,32 @@ func (c *IOManager) handleSipControllerPadAdded(_ *gst.Element, pad *gst.Pad) {
 	}
 }
 
+func (c *IOManager) handleSipControllerPadRemoved(_ *gst.Element, pad *gst.Pad) {
+	pname := pad.GetName()
+	c.log.Debugw("SIP IO Manager pad removed", "pad", pname)
+
+	if !strings.HasPrefix(pname, "send_rtp_src_") {
+		return
+	}
+
+	var session int
+	if _, err := fmt.Sscanf(pname, "send_rtp_src_%d", &session); err != nil {
+		c.log.Errorw("Failed to parse pad name", err, "pad", pname)
+		return
+	}
+
+	if c.pipeline.WebrtcIo == nil || c.pipeline.WebrtcIo.LivekitBin == nil {
+		return
+	}
+	destPad := c.pipeline.WebrtcIo.LivekitBin.GetStaticPad(fmt.Sprintf("send_rtp_sink_%d", session))
+	if destPad == nil {
+		c.log.Warnw("Failed to get static pad", nil, "pad", fmt.Sprintf("send_rtp_sink_%d", session))
+		return
+	}
+	c.pipeline.WebrtcIo.LivekitBin.ReleaseRequestPad(destPad)
+	c.log.Infow("Released request pad on LiveKit bin", "pad", destPad.GetName())
+}
+
 func (c *IOManager) handleLivekitCompositorPadAdded(_ *gst.Element, pad *gst.Pad) {
 	pname := pad.GetName()
 	c.log.Debugw("Livekit IO Manager pad added", "pad", pname)
@@ -127,6 +161,9 @@ func (c *IOManager) handleLivekitCompositorPadRemoved(_ *gst.Element, pad *gst.P
 		return
 	}
 
+	if c.pipeline.SipIo == nil || c.pipeline.SipIo.SipBin == nil {
+		return
+	}
 	destPad := c.pipeline.SipIo.SipBin.GetStaticPad(fmt.Sprintf("send_rtp_sink_%d", session))
 	if destPad == nil {
 		c.log.Warnw("Failed to get static pad", nil, "pad", fmt.Sprintf("send_rtp_sink_%d", session))
@@ -134,6 +171,12 @@ func (c *IOManager) handleLivekitCompositorPadRemoved(_ *gst.Element, pad *gst.P
 	}
 	c.pipeline.SipIo.SipBin.ReleaseRequestPad(destPad)
 	c.log.Infow("Released request pad on SIP bin", "pad", destPad.GetName())
+}
+
+func (c *IOManager) toggleScreenshare(e *gst.Element, hasScreenshare bool) {
+	if _, err := c.pipeline.SipIo.SipBin.Emit("toggle-screenshare", hasScreenshare); err != nil {
+		c.log.Errorw("Failed to emit toggle-screenshare signal", err)
+	}
 }
 
 func (c *IOManager) Link() error {
@@ -145,6 +188,14 @@ func (c *IOManager) Link() error {
 			return
 		}
 		ptr.handleSipControllerPadAdded(e, pad)
+	})
+
+	c.SipController.Connect("pad-removed", func(e *gst.Element, pad *gst.Pad) {
+		ptr := cweak.Value()
+		if ptr == nil {
+			return
+		}
+		ptr.handleSipControllerPadRemoved(e, pad)
 	})
 
 	c.LivekitController.Connect("pad-added", func(e *gst.Element, pad *gst.Pad) {
@@ -163,6 +214,16 @@ func (c *IOManager) Link() error {
 		ptr.handleLivekitCompositorPadRemoved(e, pad)
 	})
 
+	if _, err := c.LivekitController.Connect("has-screenshare", func(e *gst.Element, hasScreenshare bool) {
+		ptr := cweak.Value()
+		if ptr == nil {
+			return
+		}
+		ptr.toggleScreenshare(e, hasScreenshare)
+	}); err != nil {
+		return fmt.Errorf("failed to connect to has-screenshare signal: %w", err)
+	}
+
 	return nil
 }
 
@@ -173,5 +234,7 @@ func (c *IOManager) Close() error {
 	); err != nil {
 		return fmt.Errorf("failed to remove IO Manager elements from pipeline: %w", err)
 	}
+	c.SipController = nil
+	c.LivekitController = nil
 	return nil
 }

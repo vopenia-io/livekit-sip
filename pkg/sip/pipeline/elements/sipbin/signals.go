@@ -1,30 +1,55 @@
 package sipbin
 
 import (
+	"errors"
 	"fmt"
+	"math"
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/livekit"
 )
 
 func (e *SipBin) OnAckSDP(self *gst.Bin, b []byte) error {
-	unlock := e.transaction.Ack()
+	unlock, err := e.transaction.Ack(TransactionPendingKindAck)
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to ack transaction: %v", err))
+		return err
+	}
 	defer unlock()
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
 
 	e.transactionID.Add(1)
 
-	// TODO: handle late answer here
+	// late offer answer
+	if len(b) > 0 {
+		if err := e.handleAnswerSdp(self, b); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to handle answer SDP in AckSDP: %v", err))
+			return err
+		}
+	}
 
 	return nil
 }
 
-func (e *SipBin) emitAvailableMedia(self *gst.Bin) {
-	microphone := e.Tracks[livekit.TrackSource_MICROPHONE] != nil
-	camera := e.Tracks[livekit.TrackSource_CAMERA] != nil
-	screenShare := e.Tracks[livekit.TrackSource_SCREEN_SHARE] != nil
-	screenShareAudio := e.Tracks[livekit.TrackSource_SCREEN_SHARE_AUDIO] != nil
+func (e *SipBin) ToggleScreenshare(self *gst.Bin, enable bool) {
+	if enable {
+		e.bfcpStartScreenshare(self)
+	} else {
+		e.bfcpStopScreenshare(self)
+	}
+}
 
-	if _, err := self.Emit("available-media", microphone, camera, screenShare, screenShareAudio); err != nil {
+func (e *SipBin) emitAvailableMedia(self *gst.Bin) {
+	camera := e.Tracks[livekit.TrackSource_CAMERA] != nil && e.Tracks[livekit.TrackSource_CAMERA].send
+	microphone := e.Tracks[livekit.TrackSource_MICROPHONE] != nil && e.Tracks[livekit.TrackSource_MICROPHONE].send
+	screenShare := e.Tracks[livekit.TrackSource_SCREEN_SHARE] != nil && e.Tracks[livekit.TrackSource_SCREEN_SHARE].send
+	screenShareAudio := e.Tracks[livekit.TrackSource_SCREEN_SHARE_AUDIO] != nil && e.Tracks[livekit.TrackSource_SCREEN_SHARE_AUDIO].send
+
+	e.mu.Unlock()
+	defer e.mu.Lock()
+	if _, err := self.Emit("available-media", camera, microphone, screenShare, screenShareAudio); err != nil {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to emit available-media signal: %v", err))
 	}
 }
@@ -52,6 +77,60 @@ func (e *SipBin) onRtpBinRequestPtMap(self *gst.Bin, session int, pt uint8) *gst
 	return caps
 }
 
+func (e *SipBin) onRtpBinSenderTimeout(self *gst.Bin, session, ssrc uint) {
+	kind := livekit.TrackSource(session)
+	switch kind {
+	case livekit.TrackSource_CAMERA, livekit.TrackSource_SCREEN_SHARE,
+		livekit.TrackSource_MICROPHONE, livekit.TrackSource_SCREEN_SHARE_AUDIO:
+	default:
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Received sender timeout for unsupported track source %d", kind))
+		return
+	}
+
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Sender timeout for track source %d, ssrc %d", kind, ssrc))
+
+	if _, err := e.RtpBin.Emit("clear-ssrc", session, ssrc); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to emit clear-ssrc signal on rtpbin for session %d and ssrc %d: %v", session, ssrc, err))
+	}
+}
+
+func (e *SipBin) onRtpBinSsrcCollision(self *gst.Bin, session, ssrc uint) {
+	kind := livekit.TrackSource(session)
+	switch kind {
+	case livekit.TrackSource_CAMERA, livekit.TrackSource_SCREEN_SHARE,
+		livekit.TrackSource_MICROPHONE, livekit.TrackSource_SCREEN_SHARE_AUDIO:
+	default:
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Received SSRC collision for unsupported track source %d", kind))
+		return
+	}
+
+	self.Log(CAT, gst.LevelWarning, fmt.Sprintf("SSRC collision detected for track source %d, ssrc %d", kind, ssrc))
+
+	if _, err := e.RtpBin.Emit("clear-ssrc", session, ssrc); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to emit clear-ssrc signal on rtpbin for session %d and ssrc %d: %v", session, ssrc, err))
+	}
+}
+
+func (e *SipBin) onRtpBinNewJitterbuffer(self *gst.Bin, jitterbuffer *gst.Element, session, ssrc uint) {
+	return
+	kind := livekit.TrackSource(session)
+	switch kind {
+	case livekit.TrackSource_CAMERA, livekit.TrackSource_SCREEN_SHARE,
+		livekit.TrackSource_MICROPHONE, livekit.TrackSource_SCREEN_SHARE_AUDIO:
+	default:
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Received new jitterbuffer for unsupported track source %d", kind))
+		return
+	}
+
+	if err := errors.Join(
+		jitterbuffer.SetProperty("mode", int(0)),
+		jitterbuffer.SetProperty("max-dropout-time", uint(math.MaxInt32)),
+	); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set properties on new jitterbuffer for track source %d, session %d, and ssrc %d: %v", kind, session, ssrc, err))
+		self.Error(fmt.Sprintf("Failed to set properties on new jitterbuffer for track source %d, session %d, and ssrc %d", kind, session, ssrc), err)
+	}
+}
+
 func (e *SipBin) onRtpBinPadAdded(self *gst.Bin, pad *gst.Pad) {
 	templ := pad.Template()
 	if templ == nil {
@@ -64,8 +143,6 @@ func (e *SipBin) onRtpBinPadAdded(self *gst.Bin, pad *gst.Pad) {
 		e.onRtpBinPadAddedSendRtpSrc(self, pad)
 	case "recv_rtp_src_%u_%u_%u":
 		e.onRtpBinPadAddedRecvRtpSrc(self, pad)
-	default:
-		self.Log(CAT, gst.LevelTrace, fmt.Sprintf("Received new pad %s on rtpbin with unrecognized template %s", pad.GetName(), templ.GetName()))
 	}
 }
 
@@ -101,43 +178,7 @@ func (e *SipBin) onRtpBinPadAddedSendRtpSrc(self *gst.Bin, pad *gst.Pad) {
 		return
 	}
 
-	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Linked new pad %s from rtpbin to RTP sink for track source %d", pad.GetName(), kind))
-
-	if e.RtpBin.GetStaticPad(fmt.Sprintf("send_rtcp_src_%d", session)) != nil {
-		return
-	}
-
-	e.wg.Add(1)
-	go func() {
-		defer e.wg.Done()
-
-		e.mu.Lock()
-		defer e.mu.Unlock()
-
-		if e.RtpBin == nil {
-			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("RtpBin is nil when trying to link RTCP pad for new RTP pad %s", pad.GetName()))
-			return
-		}
-
-		ti := e.Tracks[kind]
-		if ti == nil || ti.RtcpSink == nil {
-			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Track info for track source %d not found when linking RTCP pad after new RTP pad %s added", kind, pad.GetName()))
-			return
-		}
-
-		rtcpPad := e.RtpBin.GetRequestPad(fmt.Sprintf("send_rtcp_src_%d", session))
-		if rtcpPad == nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get request pad for RTCP source for track source %d", kind))
-			return
-		}
-		if ret := rtcpPad.Link(ti.RtcpSink.GetStaticPad("sink")); ret != gst.PadLinkOK {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link RTCP pad %s to RTCP sink for track source %d: %v", rtcpPad.GetName(), kind, ret))
-			self.Error(fmt.Sprintf("Failed to link RTCP pad %s to RTCP sink for track source %d", rtcpPad.GetName(), kind), fmt.Errorf("link failed: %v", ret))
-			return
-		}
-
-		self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Linked RTCP pad %s from rtpbin to RTCP sink for track source %d", rtcpPad.GetName(), kind))
-	}()
+	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Linked new pad %s from rtpbin to RTP sink for track source %d", pad.GetName(), kind))
 }
 
 func (e *SipBin) onRtpBinPadAddedRecvRtpSrc(self *gst.Bin, pad *gst.Pad) {
@@ -196,8 +237,38 @@ func (e *SipBin) onRtpBinPadRemoved(self *gst.Bin, pad *gst.Pad) {
 	switch templ.GetName() {
 	case "send_rtp_src_%u":
 		e.onRtpBinPadRemovedSendRtpSrc(self, pad)
+	case "recv_rtp_src_%u_%u_%u":
+		e.onRtpBinPadRemovedRecvRtpSrc(self, pad)
+	}
+}
+
+func (e *SipBin) onRtpBinPadRemovedRecvRtpSrc(self *gst.Bin, pad *gst.Pad) {
+	var session, ssrc, pt int
+	if _, err := fmt.Sscanf(pad.GetName(), "recv_rtp_src_%d_%d_%d", &session, &ssrc, &pt); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Pad %s removed from rtpbin, but failed to parse session, ssrc, and payload type: %v", pad.GetName(), err))
+		return
+	}
+
+	kind := livekit.TrackSource(session)
+	switch kind {
+	case livekit.TrackSource_CAMERA, livekit.TrackSource_SCREEN_SHARE,
+		livekit.TrackSource_MICROPHONE, livekit.TrackSource_SCREEN_SHARE_AUDIO:
 	default:
-		self.Log(CAT, gst.LevelTrace, fmt.Sprintf("Pad %s removed from rtpbin with unrecognized template %s", pad.GetName(), templ.GetName()))
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Pad %s removed from rtpbin for unsupported track source %d", pad.GetName(), kind))
+		return
+	}
+
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Pad %s removed from rtpbin for track source %d, ssrc %d, and payload type %d", pad.GetName(), kind, ssrc, pt))
+
+	gpad := self.GetStaticPad(fmt.Sprintf("recv_rtp_src_%d_%d_%d", session, ssrc, pt))
+	if gpad == nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to get ghost pad for removed RTP source pad %s", pad.GetName()))
+		return
+	}
+
+	if !self.RemovePad(gpad) {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove ghost pad for removed RTP source pad %s", pad.GetName()))
+		return
 	}
 }
 

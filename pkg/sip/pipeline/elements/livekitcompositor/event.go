@@ -8,11 +8,6 @@ import (
 	"github.com/samber/lo"
 )
 
-const (
-	WIDTH  = 1280
-	HEIGHT = 720
-)
-
 func (e *LivekitCompositor) onActiveSpeakersChanged(instance *gst.Element, structure *gst.Structure) {
 	self := gst.ToGstBin(instance)
 
@@ -27,11 +22,6 @@ func (e *LivekitCompositor) onActiveSpeakersChanged(instance *gst.Element, struc
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
-
-	if !e.ready {
-		self.Log(CAT, gst.LevelDebug, "Not applying active speakers change because compositor is not ready")
-		return
-	}
 
 	layout := make([]string, len(info.ParticipantsSID))
 

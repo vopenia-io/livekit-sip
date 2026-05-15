@@ -18,6 +18,10 @@ var CAT = gst.NewDebugCategory(
 type SipCompositor struct {
 	mu sync.Mutex
 
+	videoWidth  uint
+	videoHeight uint
+	nvidia      bool
+
 	*SipCompositorMicrophone
 	*SipCompositorCamera
 	*SipCompositorScreenshare
@@ -49,40 +53,49 @@ func (e *SipCompositor) ClassInit(klass *glib.ObjectClass) {
 		gst.PadPresenceSometimes,
 		gst.NewAnyCaps(),
 	))
+
+	class.InstallProperties(properties)
 }
 
 func (e *SipCompositor) InstanceInit(instance *glib.Object) {
+	e.videoWidth = 1280
+	e.videoHeight = 720
+	e.nvidia = false
 }
 
-func (e *SipCompositor) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
+// func (e *SipCompositor) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
+// 	self := gst.ToGstBin(instance)
+
+// 	if transition == gst.StateChangeReadyToNull {
+// 		sinks, err := self.GetSinkPads()
+// 		if err != nil {
+// 			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to get sink pads: %v", err))
+// 		} else {
+// 			for _, sink := range sinks {
+// 				e.ReleasePad(instance, sink)
+// 			}
+// 		}
+
+// 		e.mu.Lock()
+// 		e.cleanupMicrophone(self)
+// 		e.cleanupCamera(self)
+// 		e.cleanupScreenshare(self)
+// 		e.mu.Unlock()
+// 	}
+
+// 	return self.ParentChangeState(transition)
+// }
+
+func (e *SipCompositor) Finalize(instance *glib.Object) {
 	self := gst.ToGstBin(instance)
+	self.Log(CAT, gst.LevelDebug, "Finalizing SipCompositor element")
 
-	if transition == gst.StateChangeReadyToNull {
-		sinks, err := self.GetSinkPads()
-		if err != nil {
-			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to get sink pads: %v", err))
-		} else {
-			for _, sink := range sinks {
-				e.ReleasePad(instance, sink)
-			}
-		}
+	e.mu.Lock()
+	defer e.mu.Unlock()
 
-		e.mu.Lock()
-		e.cleanupMicrophone(self)
-		e.cleanupCamera(self)
-		e.cleanupScreenshare(self)
-		e.mu.Unlock()
-	}
-
-	ret := self.ParentChangeState(transition)
-
-	if transition == gst.StateChangeReadyToNull {
-		e.SipCompositorCamera = nil
-		e.SipCompositorMicrophone = nil
-		e.SipCompositorScreenshare = nil
-	}
-
-	return ret
+	e.SipCompositorCamera = nil
+	e.SipCompositorMicrophone = nil
+	e.SipCompositorScreenshare = nil
 }
 
 func (e *SipCompositor) RequestNewPad(instance *gst.Element, templ *gst.PadTemplate, name string, caps *gst.Caps) *gst.Pad {

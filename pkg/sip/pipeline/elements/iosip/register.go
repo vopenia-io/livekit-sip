@@ -7,7 +7,7 @@ import (
 func Register() bool {
 	return gst.RegisterElement(
 		nil,
-		"io_manager_sip",
+		"iosip",
 		gst.RankNone,
 		&IoManagerSip{},
 		gst.ExtendsBin,

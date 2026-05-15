@@ -4,9 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"weak"
 
-	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin/livekittracks"
@@ -14,12 +12,10 @@ import (
 )
 
 type LivekitCompositorCamera struct {
-	FakeVideoSrc   *gst.Element
-	FallbackFilter *gst.Element
-
-	PatchBay   *gst.Element
 	Compositor *gst.Element
 	Filter     *gst.Element
+
+	Format string
 }
 
 func (e *LivekitCompositor) initCamera(self *gst.Bin) error {
@@ -27,53 +23,41 @@ func (e *LivekitCompositor) initCamera(self *gst.Bin) error {
 		return nil
 	}
 
-	self.Log(CAT, gst.LevelInfo, "Initializing camera compositor")
+	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Initializing camera compositor with driver %s", lo.Ternary(e.nvidia, "nvidia", "cpu")))
 	e.LivekitCompositorCamera = &LivekitCompositorCamera{}
+	if e.nvidia {
+		e.LivekitCompositorCamera.Format = "video/x-raw(memory:CUDAMemory)"
+	} else {
+		e.LivekitCompositorCamera.Format = "video/x-raw"
+	}
 
 	var err error
+	if e.nvidia {
+		e.LivekitCompositorCamera.Compositor, err = gst.NewElementWithProperties("cudacompositor", map[string]interface{}{
+			"force-live":           true,
+			"ignore-inactive-pads": true,
+		})
+	} else {
+		e.LivekitCompositorCamera.Compositor, err = gst.NewElementWithProperties("compositor", map[string]interface{}{
+			"force-live":           true,
+			"ignore-inactive-pads": true,
+			"background": int(1), // black
+		})
+	}
+	if err != nil {
+		return err
+	}
 
-	e.LivekitCompositorCamera.FakeVideoSrc, err = gst.NewElementWithProperties("videotestsrc", map[string]interface{}{
-		"pattern": int(2), // black
-		"is-live": true,
-	})
-	if err != nil {
-		return err
-	}
-	e.LivekitCompositorCamera.FallbackFilter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-		"caps": gst.NewCapsFromString("video/x-raw,format=I420,width=1280,height=720,framerate=24/1"),
-	})
-	if err != nil {
-		return err
-	}
-
-	e.LivekitCompositorCamera.PatchBay, err = gst.NewElementWithProperties("livekit_compositor_patchbay", map[string]interface{}{})
-	if err != nil {
-		return err
-	}
-	e.LivekitCompositorCamera.Compositor, err = gst.NewElementWithProperties("compositor", map[string]interface{}{
-		"ignore-inactive-pads": true,
-		"background":           int(1), // black
-	})
-	if err != nil {
-		return err
-	}
 	e.LivekitCompositorCamera.Filter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-		"caps": gst.NewCapsFromString("video/x-raw,format=I420,width=1280,height=720,framerate=24/1"),
+		"caps": gst.NewCapsFromString(fmt.Sprintf("%s,width=%d,height=%d,framerate=24/1", e.LivekitCompositorCamera.Format, e.videoWidth, e.videoHeight)),
 	})
 	if err != nil {
 		return err
 	}
 
 	if err := self.AddMany(
-		e.LivekitCompositorCamera.FakeVideoSrc,
-		e.LivekitCompositorCamera.FallbackFilter,
-		e.LivekitCompositorCamera.PatchBay,
 		e.LivekitCompositorCamera.Compositor,
 		e.LivekitCompositorCamera.Filter); err != nil {
-		return err
-	}
-
-	if err := gst.ElementLinkMany(e.LivekitCompositorCamera.FakeVideoSrc, e.LivekitCompositorCamera.FallbackFilter); err != nil {
 		return err
 	}
 
@@ -81,26 +65,20 @@ func (e *LivekitCompositor) initCamera(self *gst.Bin) error {
 		return err
 	}
 
-	src0 := e.LivekitCompositorCamera.PatchBay.GetRequestPad("src_%u")
-	if src0 == nil {
-		return fmt.Errorf("failed to request new source pad from patchbay")
-	}
-	sink0 := e.LivekitCompositorCamera.Compositor.GetRequestPad("sink_0")
-	if sink0 == nil {
-		return fmt.Errorf("failed to request new sink pad from compositor")
-	}
-	if ret := src0.Link(sink0); ret != gst.PadLinkOK {
-		return fmt.Errorf("failed to link source %q and sink %q pads", src0.GetName(), sink0.GetName())
-	}
-	sink0.SetProperty("xpos", 0)
-	sink0.SetProperty("ypos", 0)
-	sink0.SetProperty("width", WIDTH)
-	sink0.SetProperty("height", HEIGHT)
-
-	fallback0 := e.LivekitCompositorCamera.PatchBay.GetRequestPad("sink_%u")
-	if ret := e.LivekitCompositorCamera.FallbackFilter.GetStaticPad("src").Link(fallback0); ret != gst.PadLinkOK {
-		return fmt.Errorf("failed to link fallback filter to patchbay: %v", ret)
-	}
+	// sink0 := e.LivekitCompositorCamera.Compositor.GetRequestPad("sink_0")
+	// if sink0 == nil {
+	// 	return fmt.Errorf("failed to request new sink pad from compositor")
+	// }
+	// if err := errors.Join(
+	// 	sink0.SetProperty("xpos", 0),
+	// 	sink0.SetProperty("ypos", 0),
+	// 	sink0.SetProperty("width", int(e.videoWidth)),
+	// 	sink0.SetProperty("height", int(e.videoHeight)),
+	// 	sink0.SetProperty("max-last-buffer-repeat", uint64(math.MaxUint64)),
+	// 	sink0.SetProperty("repeat-after-eos", true),
+	// ); err != nil {
+	// 	return fmt.Errorf("failed to set position and size for compositor sink pad for fallback video: %w", err)
+	// }
 
 	class := gst.ToElementClass(self.Class())
 	gpad := gst.NewGhostPadFromTemplate(fmt.Sprintf("src_%d", livekit.TrackSource_CAMERA), e.LivekitCompositorCamera.Filter.GetStaticPad("src"), class.GetPadTemplate("src_%u"))
@@ -114,25 +92,11 @@ func (e *LivekitCompositor) initCamera(self *gst.Bin) error {
 		return fmt.Errorf("failed to add ghost pad for camera source to bin")
 	}
 
-	if !e.LivekitCompositorCamera.FakeVideoSrc.SyncStateWithParent() {
-		self.Log(CAT, gst.LevelWarning, "Failed to sync state of fake video source with parent")
-	}
-	if !e.LivekitCompositorCamera.FallbackFilter.SyncStateWithParent() {
-		self.Log(CAT, gst.LevelWarning, "Failed to sync state of fallback filter with parent")
-	}
-
-	if !e.LivekitCompositorCamera.PatchBay.SyncStateWithParent() {
-		self.Log(CAT, gst.LevelWarning, "Failed to sync state of patchbay with parent")
-	}
 	if !e.LivekitCompositorCamera.Compositor.SyncStateWithParent() {
 		self.Log(CAT, gst.LevelWarning, "Failed to sync state of compositor with parent")
 	}
 	if !e.LivekitCompositorCamera.Filter.SyncStateWithParent() {
 		self.Log(CAT, gst.LevelWarning, "Failed to sync state of filter with parent")
-	}
-
-	if _, err := e.LivekitCompositorCamera.PatchBay.Emit("activate-path", fallback0, src0); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to activate initial path from fallback filter to compositor: %v", err))
 	}
 
 	return nil
@@ -144,9 +108,34 @@ func (e *LivekitCompositor) requestNewCameraSinkPad(self *gst.Bin, templ *gst.Pa
 		return nil
 	}
 
-	sink := e.LivekitCompositorCamera.PatchBay.GetRequestPad("sink_%u")
+	var session, ssrc, pt int
+	if _, err := fmt.Sscanf(name, "sink_%d_%d_%d", &session, &ssrc, &pt); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Invalid pad name: %s", name))
+		return nil
+	}
+
+	if e.LivekitCompositorCamera.Compositor.GetStaticPad(fmt.Sprintf("sink_%d", ssrc)) != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Sink pad for SSRC %d already exists, cannot create another one", ssrc))
+		return nil
+	}
+
+	sink := e.LivekitCompositorCamera.Compositor.GetRequestPad(fmt.Sprintf("sink_%d", ssrc))
 	if sink == nil {
 		self.Log(CAT, gst.LevelError, "Failed to request new sink pad from patchbay")
+		return nil
+	}
+
+	if err := errors.Join(
+		sink.SetProperty("xpos", int(0)),
+		sink.SetProperty("ypos", int(0)),
+		sink.SetProperty("width", int(e.videoWidth)),
+		sink.SetProperty("height", int(e.videoHeight)),
+		sink.SetProperty("max-last-buffer-repeat", uint64(math.MaxUint64)),
+		sink.SetProperty("repeat-after-eos", true),
+		sink.SetProperty("sizing-policy", int(1)), // keep-aspect-ratio
+		sink.SetProperty("alpha", float64(0)),
+	); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set position and size for camera sink pad: %v", err))
 		return nil
 	}
 
@@ -155,6 +144,7 @@ func (e *LivekitCompositor) requestNewCameraSinkPad(self *gst.Bin, templ *gst.Pa
 		self.Log(CAT, gst.LevelError, "Failed to create ghost pad for camera sink")
 		return nil
 	}
+
 	if !gpad.SetActive(true) {
 		self.Log(CAT, gst.LevelError, "Failed to activate ghost pad for camera sink")
 		return nil
@@ -163,25 +153,6 @@ func (e *LivekitCompositor) requestNewCameraSinkPad(self *gst.Bin, templ *gst.Pa
 		self.Log(CAT, gst.LevelError, "Failed to add ghost pad for camera sink to bin")
 		return nil
 	}
-
-	eweak := weak.Make(e)
-	wself := glib.WeakRefInit(self)
-	livekittracks.PadOnTrackSourceInfo(sink, func(sink *gst.Pad, info livekittracks.TrackSourceInfo) {
-		e := eweak.Value()
-		if e == nil {
-			return
-		}
-		self := gst.ToGstBin(wself.Get())
-		if self == nil || self.Instance() == nil {
-			return
-		}
-		e.mu.Lock()
-		defer e.mu.Unlock()
-		if idx := lo.IndexOf(e.currentLayout, info.ParticipantSID); idx != -1 {
-			self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Track source info received for participant %s, which is in the current layout. Reapplying layout.", info.ParticipantSID))
-			e.activateCameraPad(self, sink, idx, len(e.currentLayout))
-		}
-	})
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Created new camera sink pad %s", gpad.GetName()))
 
@@ -200,121 +171,128 @@ func (e *LivekitCompositor) releaseCameraSinkPad(self *gst.Bin, gpad *gst.GhostP
 		return
 	}
 
-	info, Infoerr := livekittracks.PadGetTrackSourceInfo(target)
+	if info, err := livekittracks.PadGetTrackSourceInfo(target); err == nil {
+		_, ok := e.tracks[info.Source][info.ParticipantSID]
+		if ok {
+			delete(e.tracks[info.Source], info.ParticipantSID)
+		}
+	}
 
-	e.LivekitCompositorCamera.PatchBay.ReleaseRequestPad(target)
+	e.LivekitCompositorCamera.Compositor.ReleaseRequestPad(target)
 
 	if !self.RemovePad(gpad.Pad) {
 		self.Log(CAT, gst.LevelWarning, "Failed to remove ghost pad for camera sink from bin")
 		return
 	}
 
-	if Infoerr != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to get track source info from released camera pad: %v", Infoerr))
-	} else {
-		if lo.Contains(e.currentLayout, info.ParticipantSID) {
-			self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Track source info received for participant %s, which is in the current layout. Reapplying layout.", info.ParticipantSID))
-			e.applyCameraLayout(self, e.currentLayout)
-		}
-	}
-
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Released camera sink pad %s", gpad.GetName()))
+
+	e.cleanupCamera(self)
 }
 
-func (e *LivekitCompositor) activateCameraPad(self *gst.Bin, sinkPad *gst.Pad /* on patchbay */, idx int, nTrack int) bool {
-	destPad := e.LivekitCompositorCamera.Compositor.GetStaticPad(fmt.Sprintf("sink_%d", idx+1))
-	if destPad == nil {
-		destPad = e.LivekitCompositorCamera.Compositor.GetRequestPad(fmt.Sprintf("sink_%d", idx+1))
-		if destPad == nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get or request sink pad for layout position %d", idx))
-			self.Error("Failed to get or request sink pad for camera layout", fmt.Errorf("failed to get or request sink pad for camera layout position %d", idx))
-			return false
-		}
-		if err := destPad.SetProperty("sizing-policy", int(1) /* keep-aspect-ratio */); err != nil {
-			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set sizing policy on compositor sink pad for layout position %d: %v", idx, err))
-		}
-		srcPad := e.LivekitCompositorCamera.PatchBay.GetRequestPad("src_%u")
-		if srcPad == nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to request new source pad for layout position %d", idx))
-			self.Error("Failed to request new source pad for camera layout", fmt.Errorf("failed to request new source pad for camera layout position %d", idx))
-			return false
-		}
-		if ret := srcPad.Link(destPad); ret != gst.PadLinkOK {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link source pad %s to compositor sink pad %s for layout position %d", srcPad.GetName(), destPad.GetName(), idx))
-			self.Error("Failed to link camera patchbay source pad to compositor sink pad for layout", fmt.Errorf("failed to link camera patchbay source pad %s to compositor sink pad %s for layout position %d", srcPad.GetName(), destPad.GetName(), idx))
-			return false
-		}
-	}
-	srcPad := destPad.GetPeer()
-	if srcPad == nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Compositor sink pad %s for layout position %d is not linked to any source pad", destPad.GetName(), idx))
-		self.Error("Compositor sink pad for camera layout is not linked to any source pad", fmt.Errorf("compositor sink pad %s for layout position %d is not linked to any source pad", destPad.GetName(), idx))
-		return false
-	}
-	if _, err := e.LivekitCompositorCamera.PatchBay.Emit("activate-path", sinkPad, srcPad); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to activate path from camera patchbay pad %s to compositor sink pad %s for layout position %d: %v", sinkPad.GetName(), destPad.GetName(), idx, err))
-		return true
-	}
-	if err := cameraPadSetPosSize(destPad, idx, nTrack); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set position and size for compositor sink pad %s for layout position %d: %v", destPad.GetName(), idx, err))
+func (e *LivekitCompositor) findPadForParticipant(self *gst.Bin, sid string, kind livekit.TrackSource) (*gst.Pad, livekittracks.TrackSourceInfo, bool) {
+	info, ok := e.tracks[kind][sid]
+	if !ok {
+		return nil, livekittracks.TrackSourceInfo{}, false
 	}
 
-	return true
-}
+	pname := fmt.Sprintf("sink_%d_%d_%d", kind, info.SSRC, info.PT)
+	pad := self.GetStaticPad(pname)
+	if pad == nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("No pad found for participant SID %s and track source %s (expected pad name: %s)", sid, kind.String(), pname))
+		return nil, info, false
+	}
 
-func (e *LivekitCompositor) cleanupCameraTrack(idx int) {
-	destPad := e.LivekitCompositorCamera.Compositor.GetStaticPad(fmt.Sprintf("sink_%d", idx+1))
-	if destPad == nil {
-		return
-	}
-	srcPad := destPad.GetPeer()
-	e.LivekitCompositorCamera.Compositor.ReleaseRequestPad(destPad)
-	if srcPad != nil {
-		e.LivekitCompositorCamera.PatchBay.ReleaseRequestPad(srcPad)
-	}
+	return pad, info, true
 }
 
 func (e *LivekitCompositor) applyCameraLayout(self *gst.Bin, layout []string) {
-	if e.LivekitCompositorCamera == nil {
+	if e.LivekitCompositorCamera == nil || len(layout) == 0 {
 		return
 	}
 
-	if len(layout) < len(e.currentLayout) {
-		for i := len(layout); i < len(e.currentLayout); i++ {
-			e.cleanupCameraTrack(i)
+	type PadInfo struct {
+		pad  *gst.Pad
+		info livekittracks.TrackSourceInfo
+	}
+
+	for _, participantSID := range e.currentLayout {
+		pad, _, ok := e.findPadForParticipant(self, participantSID, livekit.TrackSource_CAMERA)
+		if !ok {
+			continue
+		}
+
+		if !lo.Contains(layout, participantSID) {
+			self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Participant SID %s is in current layout but not in new layout, hiding camera track", participantSID))
+			e.hideCameraTrack(self, pad)
+			continue
 		}
 	}
 
 	for i, participantSID := range layout {
-		sinkPad := e.findCameraPatchBayPadForParticipant(self, participantSID)
-		if sinkPad == nil {
-			self.Log(CAT, gst.LevelDebug, fmt.Sprintf("No camera pad found for participant SID %s in layout position %d, skipping", participantSID, i))
-			e.cleanupCameraTrack(i)
+		pad, _, ok := e.findPadForParticipant(self, participantSID, livekit.TrackSource_CAMERA)
+		if !ok {
+			self.Log(CAT, gst.LevelDebug, fmt.Sprintf("No camera pad found for participant SID %s, skipping layout for this participant", participantSID))
 			continue
 		}
-		if !e.activateCameraPad(self, sinkPad, i, len(layout)) {
-			return
+
+		if err := e.cameraPadSetPosSize(pad, i, len(layout)); err != nil {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set position and size for camera pad for participant SID %s: %v", participantSID, err))
+			continue
 		}
 
 		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Activated camera path for participant SID %s at layout position %d", participantSID, i))
 	}
 }
 
-func cameraPadSetPosSize(pad *gst.Pad, idx int, nTrack int) error {
+func (e *LivekitCompositor) hideCameraTrack(self *gst.Bin, pad *gst.Pad) {
+	gpad := pad.AsGhostPad()
+	if gpad == nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to cast pad %s to ghost pad when hiding camera track", pad.GetName()))
+		return
+	}
+	target := gpad.GetTarget()
+	if target == nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to get target pad for ghost pad %s when hiding camera track", gpad.GetName()))
+		return
+	}
+
+	if err := target.SetProperty("alpha", float64(0)); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set alpha property to 0 for pad %s when hiding camera track: %v", target.GetName(), err))
+	}
+}
+
+func cameraComputeSize(videoWidth, videoHeight int, idx int, nTrack int) (width, height, x, y int) {
 	cols := int(math.Ceil(math.Sqrt(float64(nTrack))))
 	rows := int(math.Ceil(float64(nTrack) / float64(cols)))
 
-	width := WIDTH / cols
-	height := HEIGHT / rows
+	width = int(videoWidth) / cols
+	height = int(videoHeight) / rows
 
-	x := (idx % cols) * width
-	y := (idx / cols) * height
+	x = (idx % cols) * width
+	y = (idx / cols) * height
+
+	return
+}
+
+func (e *LivekitCompositor) cameraPadSetPosSize(pad *gst.Pad, idx int, nTrack int) error {
+	gpad := pad.AsGhostPad()
+	if gpad == nil {
+		return fmt.Errorf("failed to cast pad %s to ghost pad when setting position and size for camera track", pad.GetName())
+	}
+	target := gpad.GetTarget()
+	if target == nil {
+		return fmt.Errorf("failed to get target pad for ghost pad %s when setting position and size for camera track", gpad.GetName())
+	}
+
+	width, height, x, y := cameraComputeSize(int(e.videoWidth), int(e.videoHeight), idx, nTrack)
 
 	err := errors.Join(
-		pad.SetProperty("xpos", x),
-		pad.SetProperty("ypos", y),
-		pad.SetProperty("width", width),
-		pad.SetProperty("height", height),
+		target.SetProperty("xpos", x),
+		target.SetProperty("ypos", y),
+		target.SetProperty("width", int(width)),
+		target.SetProperty("height", int(height)),
+		target.SetProperty("alpha", float64(1)),
 	)
 
 	if err != nil {
@@ -323,49 +301,36 @@ func cameraPadSetPosSize(pad *gst.Pad, idx int, nTrack int) error {
 	return nil
 }
 
-func (e *LivekitCompositor) findCameraPatchBayPadForParticipant(self *gst.Bin, participantSID string) *gst.Pad {
-	if _, ok := e.participants[participantSID]; !ok {
-		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Participant with SID %s not found when looking for camera patchbay pad", participantSID))
-		return nil
-	}
-
-	sinks, err := e.LivekitCompositorCamera.PatchBay.GetSinkPads()
-	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get sink pads from patchbay: %v", err))
-		return nil
-	}
-
-	for _, sink := range sinks {
-		if sink.GetName() == "sink_0" {
-			continue // skip the fallback pad
-		}
-		info, err := livekittracks.PadGetTrackSourceInfo(sink)
-		if err != nil {
-			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to get track source info from pad %s: %v", sink.GetName(), err))
-			continue
-		}
-
-		if info.Source != livekit.TrackSource_CAMERA {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Pad %s is not a camera source, skipping", sink.GetName()))
-			continue
-		}
-
-		if info.ParticipantSID == participantSID {
-			self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Found camera patchbay pad %s for participant SID %s", sink.GetName(), participantSID))
-			return sink
-		}
-	}
-	self.Log(CAT, gst.LevelWarning, fmt.Sprintf("No camera patchbay pad found for participant SID %s", participantSID))
-	return nil
-}
-
 func (e *LivekitCompositor) cleanupCamera(self *gst.Bin) {
 	if e.LivekitCompositorCamera == nil {
 		return
 	}
 
-	sink0 := e.LivekitCompositorCamera.PatchBay.GetStaticPad("sink_0")
-	if sink0 != nil {
-		e.LivekitCompositorCamera.PatchBay.ReleaseRequestPad(sink0)
+	sinks, err := e.LivekitCompositorCamera.Compositor.GetSinkPads()
+	if err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to get sink pads while handling pad-removed signal: %v", err))
+		return
 	}
+	if len(sinks) > 0 {
+		return
+	}
+
+	if err := e.LivekitCompositorCamera.Compositor.SetState(gst.StateNull); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set camera compositor state to null during cleanup: %v", err))
+	}
+	if err := e.LivekitCompositorCamera.Filter.SetState(gst.StateNull); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set camera filter state to null during cleanup: %v", err))
+	}
+	if err := self.RemoveMany(e.LivekitCompositorCamera.Compositor, e.LivekitCompositorCamera.Filter); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove camera compositor and filter from bin during cleanup: %v", err))
+	}
+
+	if pad := self.GetStaticPad(fmt.Sprintf("src_%d", livekit.TrackSource_CAMERA)); pad != nil {
+		if !self.RemovePad(pad) {
+			self.Log(CAT, gst.LevelWarning, "Failed to remove ghost pad for camera source from bin during cleanup")
+		}
+	}
+
+	e.LivekitCompositorCamera = nil
+	self.Log(CAT, gst.LevelInfo, "Cleaned up camera compositor")
 }

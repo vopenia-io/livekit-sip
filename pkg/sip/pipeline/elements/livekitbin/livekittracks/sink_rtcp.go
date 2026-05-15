@@ -3,7 +3,6 @@ package livekittracks
 import (
 	"errors"
 	"fmt"
-	"sync/atomic"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
@@ -12,20 +11,18 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
-type SinkRtcp struct {
-	pc      *webrtc.PeerConnection
-	probeID atomic.Uint64
+var sinkRtcpProperties = []*glib.ParamSpec{
+	glib.NewBoxedParam(
+		"pc",
+		"PeerConnection",
+		"The WebRTC PeerConnection to send RTCP packets to",
+		glib.TYPE_ARBITRARY_DATA,
+		glib.ParameterWritable|glib.ParameterConstructOnly,
+	),
 }
 
-func (s *SinkRtcp) Setup(instance *gst.Element, pc *webrtc.PeerConnection) {
-	self := base.ToGstBaseSink(instance)
-
-	if id := s.probeID.Swap(0); id != 0 {
-		s.pc = pc
-		self.GetStaticPad("sink").RemoveProbe(id)
-	} else {
-		self.Log(CAT, gst.LevelWarning, "RTCP sink can only be set up once, ignoring subsequent setup")
-	}
+type SinkRtcp struct {
+	pc *webrtc.PeerConnection
 }
 
 func (*SinkRtcp) New() glib.GoObjectSubclass {
@@ -47,6 +44,8 @@ func (*SinkRtcp) ClassInit(klass *glib.ObjectClass) {
 		gst.PadDirectionSink,
 		gst.PadPresenceAlways,
 		gst.NewCapsFromString("application/x-rtcp")))
+	
+	class.InstallProperties(sinkRtcpProperties)
 }
 
 func (s *SinkRtcp) InstanceInit(instance *glib.Object) {
@@ -55,14 +54,16 @@ func (s *SinkRtcp) InstanceInit(instance *glib.Object) {
 	self.SetSync(false)
 	self.SetAsyncEnabled(false)
 	self.SetMaxBitrate(500_000)
+}
 
-	probeID := self.GetStaticPad("sink").AddProbe(gst.PadProbeTypeBuffer|gst.PadProbeTypeBufferList, PadProbeDrop)
-	if probeID == 0 {
-		self.Log(CAT, gst.LevelError, "Failed to add probe to sink pad")
-		self.Error("Failed to add probe to sink pad", errors.New("failed to add probe to sink pad"))
+func (s *SinkRtcp) Constructed(instance *glib.Object) {
+	self := base.ToGstBaseSink(instance)
+
+	if s.pc == nil {
+		self.Log(CAT, gst.LevelError, "PeerConnection is not set in sink_rtcp")
+		self.Error("PeerConnection is not set", errors.New("peerconnection is nil"))
 		return
 	}
-	s.probeID.Store(probeID)
 }
 
 func (s *SinkRtcp) SetCaps(self *base.GstBaseSink, caps *gst.Caps) bool {
@@ -92,12 +93,6 @@ func (s *SinkRtcp) Stop(self *base.GstBaseSink) bool {
 }
 
 func (s *SinkRtcp) Render(self *base.GstBaseSink, buffer *gst.Buffer) gst.FlowReturn {
-	if s.pc == nil {
-		self.Log(CAT, gst.LevelError, "PeerConnection is not set in sink_rtcp")
-		self.Error("PeerConnection is not set", errors.New("peerconnection is nil"))
-		return gst.FlowError
-	}
-
 	if state := s.pc.ConnectionState(); state != webrtc.PeerConnectionStateConnected {
 		self.Log(CAT, gst.LevelTrace, fmt.Sprintf("PeerConnection is not connected (state: %s), dropping RTCP packet", state.String()))
 		return gst.FlowOK
@@ -119,4 +114,41 @@ func (s *SinkRtcp) Render(self *base.GstBaseSink, buffer *gst.Buffer) gst.FlowRe
 	}
 
 	return gst.FlowOK
+}
+
+func (s *SinkRtcp) Finalize(instance *glib.Object) {
+	s.pc = nil
+}
+
+func (s *SinkRtcp) SetProperty(instance *glib.Object, id uint, value *glib.Value) {
+	self := base.ToGstBaseSink(instance)
+	param := sinkRtcpProperties[id]
+	switch param.Name() {
+	case "pc":
+		gv, err := value.GoValue()
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get Go value for property 'pc': %v", err))
+			self.Error("Failed to get Go value for property 'pc'", err)
+			return
+		}
+		if gv == nil {
+			return
+		}
+		data, ok := gv.(glib.ArbitraryValue)
+		if !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid type for pub property: %T", gv))
+			self.Error("Invalid type for pub property", fmt.Errorf("expected glib.ArbitraryValue, got %T", gv))
+			return
+		}
+		pc, ok := data.Data.(*webrtc.PeerConnection)
+		if !ok {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Invalid data type for property 'pc': %T", data.Data))
+			self.Error("Invalid data type for property 'pc'", fmt.Errorf("expected *webrtc.PeerConnection, got %T", data.Data))
+			return
+		}
+		s.pc = pc
+	default:
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Unknown property ID %d", id))
+		self.Error("Unknown property ID", fmt.Errorf("unknown property ID %d", id))
+	}
 }

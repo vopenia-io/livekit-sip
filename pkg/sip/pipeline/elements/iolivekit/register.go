@@ -7,7 +7,7 @@ import (
 func Register() bool {
 	return gst.RegisterElement(
 		nil,
-		"io_manager_livekit",
+		"iolivekit",
 		gst.RankNone,
 		&IoManagerLivekit{},
 		gst.ExtendsBin,

@@ -1,10 +1,13 @@
 package bfcpserver
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strconv"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
@@ -17,13 +20,26 @@ var CAT = gst.NewDebugCategory(
 	"bfcpserver Element",
 )
 
+var (
+	signalOnFloorRequested uint
+	signalOnFloorGranted   uint
+	signalOnFloorReleased  uint
+	signalStartScreenshare uint
+	signalStopScreenshare  uint
+)
+
 type BFCPServer struct {
 	props
-	bfcpServer  *bfcp.Server
-	bfcpConfig  *bfcp.ServerConfig
-	started     bool
-	constructed bool
-	requestID   atomic.Int64
+	bfcpServer       *bfcp.Server
+	bfcpConfig       *bfcp.ServerConfig
+	started          bool
+	constructed      bool
+	requestID        atomic.Int64
+	lastFloorRelease time.Time
+
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 func (e *BFCPServer) New() glib.GoObjectSubclass {
@@ -39,7 +55,17 @@ func (e *BFCPServer) ClassInit(klass *glib.ObjectClass) {
 		"Roomkit <roomkit-visio@numerique.gouv.fr>",
 	)
 
-	gst.SignalNew(
+	signalOnFloorRequested = gst.SignalNew(
+		class.Type(),
+		"on-floor-requested",
+		gst.SignalRunLast,
+		glib.TYPE_BOOLEAN,
+		glib.TYPE_INT,
+		glib.TYPE_INT,
+		glib.TYPE_INT,
+	)
+
+	signalOnFloorGranted = gst.SignalNew(
 		class.Type(),
 		"on-floor-granted",
 		gst.SignalRunLast,
@@ -49,7 +75,7 @@ func (e *BFCPServer) ClassInit(klass *glib.ObjectClass) {
 		glib.TYPE_INT,
 	)
 
-	gst.SignalNew(
+	signalOnFloorReleased = gst.SignalNew(
 		class.Type(),
 		"on-floor-released",
 		gst.SignalRunLast,
@@ -58,7 +84,7 @@ func (e *BFCPServer) ClassInit(klass *glib.ObjectClass) {
 		glib.TYPE_INT,
 	)
 
-	gst.SignalNew(
+	signalStartScreenshare = gst.SignalNew(
 		class.Type(),
 		"start-screenshare",
 		gst.SignalRunLast,
@@ -66,7 +92,7 @@ func (e *BFCPServer) ClassInit(klass *glib.ObjectClass) {
 		glib.TYPE_INT, // floor ID
 	)
 
-	gst.SignalNew(
+	signalStopScreenshare = gst.SignalNew(
 		class.Type(),
 		"stop-screenshare",
 		gst.SignalRunLast,
@@ -88,6 +114,7 @@ func (e *BFCPServer) InstanceInit(instance *glib.Object) {
 	self := gst.ToElement(instance)
 
 	e.props.floorID = 1
+	e.ctx, e.cancel = context.WithCancel(context.Background())
 
 	class := gst.ToElementClass(self.Class())
 
@@ -103,7 +130,6 @@ func (e *BFCPServer) Constructed(instance *glib.Object) {
 	}
 
 	config := bfcp.DefaultServerConfig(addr, 1)
-	config.AutoGrant = true
 	if e.portStart != 0 {
 		config.PortMin = int(e.portStart)
 	}
@@ -119,9 +145,18 @@ func (e *BFCPServer) Constructed(instance *glib.Object) {
 	e.bfcpServer = bfcp.NewServer(config)
 
 	if err := e.bfcpServer.Listen(); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to start BFCP server: %v", err))
-		self.Error("Failed to start BFCP server", err)
-		return
+		fallbackConfig := config
+		fallbackConfig.Address = ":0"
+		fallbackServer := bfcp.NewServer(fallbackConfig)
+		if fallbackServer.Listen() == nil {
+			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to bind BFCP server to %s, but successfully bound to %s. Using fallback address.", addr, fallbackConfig.Address))
+			e.bfcpConfig = fallbackConfig
+			e.bfcpServer = fallbackServer
+		} else {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to start BFCP server: %v", err))
+			self.Error("Failed to start BFCP server", err)
+			return
+		}
 	}
 
 	host, portStr, err := net.SplitHostPort(e.bfcpServer.Addr().String())
@@ -152,9 +187,29 @@ func (e *BFCPServer) Constructed(instance *glib.Object) {
 	e.constructed = true
 }
 
+func (e *BFCPServer) broadcast() {
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		t := time.NewTicker(5 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-e.ctx.Done():
+				return
+			case <-t.C:
+				for _, f := range e.bfcpServer.ListFloors() {
+					e.bfcpServer.BroadcastFloorState(f.FloorID, f.GetOwner(), f.GetState())
+				}
+			}
+		}
+	}()
+}
+
 func (e *BFCPServer) ChangeState(self *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
 	if transition == gst.StateChangeReadyToPaused && !e.started {
 		e.bfcpServer.Serve()
+		// e.broadcast()
 		e.started = true
 	}
 
@@ -168,9 +223,11 @@ func (e *BFCPServer) ChangeState(self *gst.Element, transition gst.StateChange) 
 	}
 
 	if transition == gst.StateChangeReadyToNull {
+		e.cancel()
 		if err := e.bfcpServer.Close(); err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to close BFCP server: %v", err))
 		}
+		e.wg.Wait()
 	}
 	return ret
 }

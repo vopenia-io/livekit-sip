@@ -9,23 +9,47 @@ import (
 	"time"
 
 	"github.com/frostbyte73/core"
+	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
+	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
+	"github.com/livekit/sip/pkg/config"
 	"github.com/livekit/sip/pkg/sip/pipeline/debug"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/sipbin"
 )
 
+type CallStats struct {
+	Microphone        *sipbin.RTPSessionStats
+	MicrophonePtCaps  map[int]string
+	Camera            *sipbin.RTPSessionStats
+	CameraPtCaps      map[int]string
+	ScreenShare       *sipbin.RTPSessionStats
+	ScreenSharePtCaps map[int]string
+}
+
 type Pipeline struct {
-	Log      logger.Logger
-	pipeline *gst.Pipeline
-	ctx      context.Context
-	cancel   context.CancelFunc
-	closed   core.Fuse
-	cleanup  func() error
-	bus      *gst.Bus
-	dtmfCh   chan int
+	Log       logger.Logger
+	pipeline  *gst.Pipeline
+	ctx       context.Context
+	cancel    context.CancelFunc
+	sipCallID string
+	closed    core.Fuse
+	cleanup   func() error
+	bus       *gst.Bus
+	dtmfCh    chan int
+
+	onStats func(stats *CallStats)
 
 	dumpCH   chan bool
 	debugSrv *debug.Server
+
+	videoWidth            uint
+	videoHeight           uint
+	nvidia                bool
+	maxActiveParticipants int
+	dumpDot               bool
+	dumpDir               string
+	publishCoders         config.PublishCodecConfig
 
 	*SipIo
 	*WebrtcIo
@@ -43,6 +67,10 @@ type GstChain interface {
 
 func (p *Pipeline) Pipeline() *gst.Pipeline {
 	return p.pipeline
+}
+
+func (p *Pipeline) OnStats(fn func(stats *CallStats)) {
+	p.onStats = fn
 }
 
 func (p *Pipeline) SetState(state gst.State) error {
@@ -85,6 +113,78 @@ func (p *Pipeline) SetStateWait(state gst.State) error {
 	return nil
 }
 
+func (p *Pipeline) GetStats() {
+	structureVal, err := p.SipIo.SipBin.Emit("stats")
+	if err != nil {
+		p.Log.Warnw("Failed to emit stats signal", err)
+		return
+	}
+	if structureVal == nil {
+		return
+	}
+
+	structure, ok := structureVal.(*gst.Structure)
+	if !ok {
+		p.Log.Warnw("Failed to convert stats signal result to GstStructure", nil, "value", fmt.Sprintf("%T=%v", structureVal, structureVal))
+		return
+	}
+
+	stats := &CallStats{}
+	for _, stats := range []struct {
+		kind   livekit.TrackSource
+		stats  **sipbin.RTPSessionStats
+		ptCaps *map[int]string
+	}{
+		{livekit.TrackSource_MICROPHONE, &stats.Microphone, &stats.MicrophonePtCaps},
+		{livekit.TrackSource_CAMERA, &stats.Camera, &stats.CameraPtCaps},
+		{livekit.TrackSource_SCREEN_SHARE, &stats.ScreenShare, &stats.ScreenSharePtCaps},
+	} {
+		statsVal, err := structure.GetValue(stats.kind.String())
+		if err != nil || statsVal == nil {
+			continue
+		}
+		av, ok := statsVal.(glib.ArbitraryValue)
+		if !ok {
+			p.Log.Warnw("Expected ArbitraryValue", nil, stats.kind.String(), fmt.Sprintf("%T=%v", statsVal, statsVal))
+			continue
+		}
+		sessionStats, ok := av.Data.(*sipbin.RTPSessionStats)
+		if !ok {
+			p.Log.Warnw("Wrong inner type", nil, stats.kind.String(), fmt.Sprintf("%T", av.Data))
+			continue
+		}
+		if sessionStats != nil {
+			*stats.stats = sessionStats
+		}
+		*stats.ptCaps = make(map[int]string)
+		capsVal, err := structure.GetValue(fmt.Sprintf("%s-caps", stats.kind.String()))
+		if err != nil || capsVal == nil {
+			continue
+		}
+		caps, ok := capsVal.(*gst.Caps)
+		if !ok {
+			p.Log.Warnw("Expected GstCaps", nil, stats.kind.String(), fmt.Sprintf("%T=%v", capsVal, capsVal))
+			continue
+		}
+		for i := range caps.GetSize() {
+			st := caps.GetStructureAt(i)
+			pt, err := st.GetInt("payload")
+			if err != nil {
+				p.Log.Warnw("Failed to get payload type from caps structure", err, stats.kind.String(), "structure_index", i)
+				continue
+			}
+			(*stats.ptCaps)[pt] = st.String()
+			st = nil
+		}
+		caps = nil
+	}
+
+	p.Log.Debugw("Received call stats update", "stats", stats)
+	if p.onStats != nil {
+		p.onStats(stats)
+	}
+}
+
 var pid = os.Getpid()
 
 func (p *Pipeline) Close() error {
@@ -94,6 +194,8 @@ func (p *Pipeline) Close() error {
 	}
 	p.closed.Break()
 	p.Log.Debugw("Closing pipeline")
+
+	p.GetStats()
 
 	p.cancel()
 
@@ -132,9 +234,7 @@ func (p *Pipeline) Close() error {
 		p.IOManager.SipController.SetLockedState(false)
 		p.IOManager.LivekitController.SetLockedState(false)
 
-		err = errors.Join(err, p.Pipeline().SetState(gst.StateNull))
-
-		p.Log.Infow("Pipeline set to null state complete", "pid", pid, "err", err)
+		p.Log.Debugw("Pipeline set to null state complete", "pid", pid, "err", err)
 	}()
 
 	closed := false
@@ -211,7 +311,7 @@ func (p *Pipeline) Close() error {
 	}
 
 	p.CloseBus()
-	p.Log.Infow("Pipeline bus closed")
+	p.Log.Debugw("Pipeline bus closed")
 
 	time.Sleep(100 * time.Millisecond) // give some time to settle
 	p.Log.Infow("Pipeline closed")
@@ -225,7 +325,7 @@ func (p *Pipeline) Closed() bool {
 	return p.closed.IsBroken()
 }
 
-func New(ctx context.Context, log logger.Logger, sipOpt SipOpt) (*Pipeline, error) {
+func New(ctx context.Context, log logger.Logger, sipOpt SipOpt, sipCallID string) (*Pipeline, error) {
 	log.Debugw("Creating pipeline")
 	pipeline, err := gst.NewPipeline("")
 	if err != nil {
@@ -235,18 +335,27 @@ func New(ctx context.Context, log logger.Logger, sipOpt SipOpt) (*Pipeline, erro
 	ctx, cancel := context.WithCancel(ctx)
 
 	p := &Pipeline{
-		Log:      log.WithComponent("pipeline"),
-		pipeline: pipeline,
-		ctx:      ctx,
-		cancel:   cancel,
-		dtmfCh:   make(chan int, 10),
-		dumpCH:   make(chan bool, 1024),
+		Log:                   log.WithComponent("pipeline"),
+		pipeline:              pipeline,
+		ctx:                   ctx,
+		cancel:                cancel,
+		dtmfCh:                make(chan int, 10),
+		dumpCH:                make(chan bool, 1024),
+		videoWidth:            sipOpt.VideoWidth,
+		videoHeight:           sipOpt.VideoHeight,
+		nvidia:                sipOpt.Nvidia,
+		maxActiveParticipants: sipOpt.MaxActiveParticipants,
+		sipCallID:             sipCallID,
+		dumpDot:               sipOpt.Gst.DumpDot,
+		dumpDir:               sipOpt.Gst.DumpDir,
+		publishCoders:         sipOpt.PublishCodecs,
 	}
 	p.cleanup = p.cleanupChains
 
+	p.SetLogHandler()
+
 	p.Log.Debugw("Setting up bus")
 	p.SetupBus()
-	p.Log.Debugw("Bus set up complete")
 
 	p.debugSrv = debug.NewServer(":8888", p.dumpCH)
 	if err := p.debugSrv.Start(); err != nil {

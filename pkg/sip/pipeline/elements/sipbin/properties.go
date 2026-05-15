@@ -56,11 +56,13 @@ var properties = []*glib.ParamSpec{
 		nil,
 		glib.ParameterReadable,
 	),
-	glib.NewBoolParam(
+	glib.NewIntParam(
 		"transaction-pending",
 		"Transaction Pending",
 		"Whether a SIP transaction is currently pending",
-		false,
+		int(TransactionPendingKindNone),
+		int(TransactionPendingKindAnswer),
+		int(TransactionPendingKindNone),
 		glib.ParameterReadable,
 	),
 }
@@ -240,9 +242,9 @@ func (e *SipBin) GetProperty(instance *glib.Object, id uint) *glib.Value {
 		}
 		return value
 	case "transaction-pending":
-		pending, unlock := e.transaction.IsPending()
+		pending, unlock := e.transaction.GetPending()
 		defer unlock()
-		value, err := glib.GValue(pending)
+		value, err := glib.GValue(int(pending))
 		if err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting transaction-pending property value: %v", err))
 			return nil

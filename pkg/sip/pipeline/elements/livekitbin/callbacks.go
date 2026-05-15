@@ -6,6 +6,7 @@ import (
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
+	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/webrtc/v4"
 )
@@ -85,24 +86,44 @@ func (e *LivekitBin) callabcks() *lksdk.RoomCallback {
 				}
 			},
 			OnTrackPublished: e.OnTrackPublished,
-			OnTrackMuted: func(pub lksdk.TrackPublication, p lksdk.Participant) {
-				e.livekitMu.Lock()
-				if _, err := glib.IdleAdd(func() {
-					defer e.livekitMu.Unlock()
-					e.OnTrackMuted(pub, p)
-				}); err != nil {
-					e.livekitMu.Unlock()
-					CAT.Log(gst.LevelError, fmt.Sprintf("Failed to add track muted to main loop: %v", err))
+			// OnTrackMuted: func(pub lksdk.TrackPublication, p lksdk.Participant) {
+			// 	e.livekitMu.Lock()
+			// 	if _, err := glib.IdleAdd(func() {
+			// 		defer e.livekitMu.Unlock()
+			// 		e.OnTrackMuted(pub, p)
+			// 	}); err != nil {
+			// 		e.livekitMu.Unlock()
+			// 		CAT.Log(gst.LevelError, fmt.Sprintf("Failed to add track muted to main loop: %v", err))
+			// 	}
+			// },
+			// OnTrackUnmuted: func(pub lksdk.TrackPublication, p lksdk.Participant) {
+			// 	e.livekitMu.Lock()
+			// 	if _, err := glib.IdleAdd(func() {
+			// 		defer e.livekitMu.Unlock()
+			// 		e.OnTrackUnmuted(pub, p)
+			// 	}); err != nil {
+			// 		e.livekitMu.Unlock()
+			// 		CAT.Log(gst.LevelError, fmt.Sprintf("Failed to add track unmuted to main loop: %v", err))
+			// 	}
+			// },
+			OnLocalTrackPublished: func(pub *lksdk.LocalTrackPublication, _ *lksdk.LocalParticipant) {
+				kind := pub.Source()
+				switch kind {
+				case livekit.TrackSource_CAMERA, livekit.TrackSource_MICROPHONE, livekit.TrackSource_SCREEN_SHARE, livekit.TrackSource_SCREEN_SHARE_AUDIO:
+				default:
+					return
 				}
-			},
-			OnTrackUnmuted: func(pub lksdk.TrackPublication, p lksdk.Participant) {
-				e.livekitMu.Lock()
-				if _, err := glib.IdleAdd(func() {
-					defer e.livekitMu.Unlock()
-					e.OnTrackUnmuted(pub, p)
-				}); err != nil {
-					e.livekitMu.Unlock()
-					CAT.Log(gst.LevelError, fmt.Sprintf("Failed to add track unmuted to main loop: %v", err))
+
+				if e.publications[kind] == nil || !e.publications[kind].initialized {
+					return
+				}
+
+				if err := e.publications[kind].TrackSink.SetProperty("pub", glib.ArbitraryValue{Data: pub}); err != nil {
+					self := gst.ToGstBin(e.self.Get())
+					if self != nil && self.Instance() != nil {
+						self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set pub property on sink track for publication %s: %v", pub.SID(), err))
+						self.Error(fmt.Sprintf("Failed to set pub property on sink track for publication %s", pub.SID()), err)
+					}
 				}
 			},
 		},

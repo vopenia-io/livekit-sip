@@ -15,7 +15,6 @@ import (
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/sip/pkg/sip/pipeline"
 	"github.com/livekit/sipgo/sip"
-	"github.com/vopenia-io/go-pjmedia/pj"
 )
 
 var (
@@ -77,10 +76,9 @@ type MediaOrchestrator struct {
 	dispatchOK atomic.Bool
 	wg         sync.WaitGroup
 
-	pjpool *pj.PjPool
-
 	pipeline *pipeline.Pipeline
-	// bfcp     *BFCPManager
+
+	stats atomic.Pointer[pipeline.CallStats]
 
 	state MediaState
 }
@@ -117,15 +115,24 @@ func (o *MediaOrchestrator) init() error {
 		return err
 	}
 
-	pipeline, err := pipeline.New(o.ctx, o.log, pipeline.SipOpt{
-		IP:        o.opts.IP.String(),
-		PortStart: uint16(o.opts.Ports.Start),
-		PortEnd:   uint16(o.opts.Ports.End),
-	})
+	p, err := pipeline.New(o.ctx, o.log, pipeline.SipOpt{
+		IP:                    o.opts.IP.String(),
+		PortStart:             uint16(o.opts.Ports.Start),
+		PortEnd:               uint16(o.opts.Ports.End),
+		VideoWidth:            o.opts.VideoWidth,
+		VideoHeight:           o.opts.VideoHeight,
+		Nvidia:                o.opts.Nvidia,
+		MaxActiveParticipants: o.opts.MaxActiveParticipants,
+		Gst:                   o.opts.Gst,
+		PublishCodecs:         o.opts.PublishCodecs,
+	}, o.inbound.sipCallID)
 	if err != nil {
 		return fmt.Errorf("could not create pipeline: %w", err)
 	}
-	o.pipeline = pipeline
+	o.pipeline = p
+	o.pipeline.OnStats(func(stats *pipeline.CallStats) {
+		o.stats.Store(stats)
+	})
 
 	o.wg.Add(1)
 	go o.sendOfferLoop()
@@ -139,6 +146,16 @@ func (o *MediaOrchestrator) init() error {
 	return nil
 }
 
+func (o *MediaOrchestrator) UpdateStats() {
+	if o.pipeline != nil && o.pipeline.Pipeline().GetCurrentState() == gst.StatePlaying {
+		o.pipeline.GetStats()
+	}
+}
+
+func (o *MediaOrchestrator) Stats() *pipeline.CallStats {
+	return o.stats.Load()
+}
+
 func (o *MediaOrchestrator) okStates(allowed ...MediaState) error {
 	for _, state := range allowed {
 		if o.state == state {
@@ -148,7 +165,7 @@ func (o *MediaOrchestrator) okStates(allowed ...MediaState) error {
 	return fmt.Errorf("invalid state: %s, expected one of %v: %w", o.state, allowed, ErrWrongState)
 }
 
-const DispatchTimeout = 20 * time.Second
+const DispatchTimeout = 200 * time.Second
 
 func (o *MediaOrchestrator) dispatch(fn func() error) error {
 	if !o.dispatchOK.Load() {
@@ -233,7 +250,8 @@ func (o *MediaOrchestrator) Close() error {
 	o.wg.Wait()
 
 	log := o.log
-	*o = MediaOrchestrator{}
+	o.pipeline = nil
+	// *o = MediaOrchestrator{}
 	pipeline.ForceMemoryRelease()
 	log.Debugw("media orchestrator closed")
 
@@ -325,13 +343,6 @@ func (o *MediaOrchestrator) sendOfferLoop() {
 }
 
 func (o *MediaOrchestrator) handleSendOffer(offer string) error {
-	// Release the pending SipTransaction from earlyReinvite
-	if err := o.pipeline.EmitAckSDP(""); err != nil {
-		o.log.Errorw("failed to emit ack-sdp before re-INVITE", err)
-		return err
-	}
-
-	// Send SIP re-INVITE with the offer, get 200 OK with answer
 	resp, err := o.inbound.sendReInvite(o.ctx, []byte(offer))
 	if err != nil {
 		o.log.Errorw("re-INVITE failed", err)
@@ -349,15 +360,8 @@ func (o *MediaOrchestrator) handleSendOffer(offer string) error {
 		return fmt.Errorf("re-INVITE 200 OK has no SDP body")
 	}
 
-	// Feed answer back to sipbin
 	if err := o.pipeline.EmitAnswerSDP(answerSDP); err != nil {
 		o.log.Errorw("failed to emit answer-sdp after re-INVITE", err)
-		return err
-	}
-
-	// Finalize the transaction
-	if err := o.pipeline.EmitAckSDP(""); err != nil {
-		o.log.Errorw("failed to emit final ack-sdp after re-INVITE", err)
 		return err
 	}
 
@@ -385,6 +389,20 @@ func (o *MediaOrchestrator) Start() (err error) {
 	}); err != nil {
 		return err
 	}
+
+	// o.wg.Add(1)
+	// go func() {
+	// 	defer o.wg.Done()
+	// 	for {
+	// 		select {
+	// 		case <-o.ctx.Done():
+	// 			return
+	// 		case <-time.After(10 * time.Second):
+	// 			o.pipeline.GetStats()
+	// 		}
+	// 	}
+	// }()
+
 	return nil
 }
 
@@ -423,7 +441,6 @@ func (o *MediaOrchestrator) DtmfHandler(h func(ev dtmf.Event)) {
 					Code:  byte(nb),
 					Digit: digit,
 				})
-				o.log.Infow("Handled DTMF event", "number", nb, "digit", digit)
 			}
 		}
 	}()

@@ -2,10 +2,9 @@ package sip
 
 import (
 	"context"
-	"time"
+	"fmt"
 
 	"github.com/go-gst/go-gst/gst"
-	msdk "github.com/livekit/media-sdk"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/sip"
 	"github.com/livekit/sip/pkg/config"
@@ -90,6 +89,9 @@ func (o *MediaOrchestrator) SetAttributes(attributes map[string]string) error {
 		}
 	}
 
+	if o.pipeline.WebrtcIo == nil || o.pipeline.WebrtcIo.LivekitBin == nil {
+		return fmt.Errorf("livekit bin is not initialized")
+	}
 	if err := o.pipeline.WebrtcIo.LivekitBin.SetProperty("participant-attributes", attr); err != nil {
 		return err
 	}
@@ -124,6 +126,6 @@ func (o *MediaOrchestrator) RoomName() string {
 	return roomName
 }
 
-func (o *MediaOrchestrator) PlayAudio(ctx context.Context, sampleDur time.Duration, rate int, frames []msdk.PCM16Sample) error {
-	return o.pipeline.PlayAudio(ctx, sampleDur, rate, frames)
+func (o *MediaOrchestrator) PlayAudio(ctx context.Context, fd int) error {
+	return o.pipeline.PlayAudio(ctx, fd)
 }
