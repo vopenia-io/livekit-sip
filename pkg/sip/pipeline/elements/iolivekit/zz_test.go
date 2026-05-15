@@ -22,7 +22,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	glib.SetEnv("GST_DEBUG", glib.GetEnv("GST_DEBUG")+",io_manager_livekit:5,flacsource:5", true)
+	glib.SetEnv("GST_DEBUG", glib.GetEnv("GST_DEBUG")+",iolivekit:5,flacsource:5", true)
 	gst.Init(nil)
 
 	if !trackfallback.Register() {
@@ -107,7 +107,7 @@ func TestIoLivekit_TwoPlayAudio(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	iol, err := gst.NewElement("io_manager_livekit")
+	iol, err := gst.NewElement("iolivekit")
 	if err != nil {
 		t.Fatal(err)
 	}

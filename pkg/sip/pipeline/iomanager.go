@@ -31,7 +31,7 @@ var _ GstChain = (*IOManager)(nil)
 func (c *IOManager) Create() error {
 	var err error
 
-	c.SipController, err = gst.NewElementWithProperties("io_manager_sip", map[string]interface{}{
+	c.SipController, err = gst.NewElementWithProperties("iosip", map[string]interface{}{
 		"video-width":  c.pipeline.videoWidth,
 		"video-height": c.pipeline.videoHeight,
 		"nvidia":       c.pipeline.nvidia,
@@ -40,7 +40,7 @@ func (c *IOManager) Create() error {
 		return fmt.Errorf("failed to create IO Manager SIP element: %w", err)
 	}
 
-	c.LivekitController, err = gst.NewElementWithProperties("io_manager_livekit", map[string]interface{}{
+	c.LivekitController, err = gst.NewElementWithProperties("iolivekit", map[string]interface{}{
 		"video-width":  c.pipeline.videoWidth,
 		"video-height": c.pipeline.videoHeight,
 		"nvidia":       c.pipeline.nvidia,
