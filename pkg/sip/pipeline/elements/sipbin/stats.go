@@ -166,12 +166,12 @@ func toStats(stats *gst.Structure) RTPSessionStats {
 		return RTPSessionStats{}
 	}
 	out := RTPSessionStats{
-		RtxDropCount:    structU32(stats, "rtx-drop-count"),
-		SentNackCount:   structU32(stats, "sent-nack-count"),
-		RecvNackCount:   structU32(stats, "recv-nack-count"),
-		RtxCount:        structU32(stats, "rtx-count"),
-		RecvRtxReqCount: structU32(stats, "recv-rtx-req-count"),
-		SentRtxReqCount: structU32(stats, "sent-rtx-req-count"),
+		RtxDropCount:    uint32(orDefault(uint(0))(stats.GetUint("rtx-drop-count"))),
+		SentNackCount:   uint32(orDefault(uint(0))(stats.GetUint("sent-nack-count"))),
+		RecvNackCount:   uint32(orDefault(uint(0))(stats.GetUint("recv-nack-count"))),
+		RtxCount:        uint32(orDefault(uint(0))(stats.GetUint("rtx-count"))),
+		RecvRtxReqCount: uint32(orDefault(uint(0))(stats.GetUint("recv-rtx-req-count"))),
+		SentRtxReqCount: uint32(orDefault(uint(0))(stats.GetUint("sent-rtx-req-count"))),
 	}
 
 	v, err := stats.GetValue("source-stats")
@@ -200,42 +200,42 @@ func toStats(stats *gst.Structure) RTPSessionStats {
 
 func toSourceStats(s *gst.Structure) RTPSourceStats {
 	out := RTPSourceStats{
-		SSRC:            structU32(s, "ssrc"),
-		Internal:        structBool(s, "internal"),
-		Validated:       structBool(s, "validated"),
-		ReceivedBye:     structBool(s, "received-bye"),
-		IsCSRC:          structBool(s, "is-csrc"),
-		IsSender:        structBool(s, "is-sender"),
-		SeqnumBase:      structI32(s, "seqnum-base"),
-		ClockRate:       structI32(s, "clock-rate"),
-		RTPFrom:         structString(s, "rtp-from"),
-		RTCPFrom:        structString(s, "rtcp-from"),
-		OctetsSent:      structU64(s, "octets-sent"),
-		PacketsSent:     structU64(s, "packets-sent"),
-		OctetsReceived:  structU64(s, "octets-received"),
-		PacketsReceived: structU64(s, "packets-received"),
-		BytesReceived:   structU64(s, "bytes-received"),
-		Bitrate:         structU64(s, "bitrate"),
-		PacketsLost:     structI32(s, "packets-lost"),
-		Jitter:          structU32(s, "jitter"),
-		SentPLICount:    structU32(s, "sent-pli-count"),
-		RecvPLICount:    structU32(s, "recv-pli-count"),
-		SentFIRCount:    structU32(s, "sent-fir-count"),
-		RecvFIRCount:    structU32(s, "recv-fir-count"),
-		SentNACKCount:   structU32(s, "sent-nack-count"),
-		RecvNACKCount:   structU32(s, "recv-nack-count"),
-		RecvPacketRate:  structU32(s, "recv-packet-rate"),
-		HaveSR:          structBool(s, "have-sr"),
-		SRNTPTime:       structU64(s, "sr-ntptime"),
-		SRRTPTime:       structU32(s, "sr-rtptime"),
-		SROctetCount:    structU32(s, "sr-octet-count"),
-		SRPacketCount:   structU32(s, "sr-packet-count"),
+		SSRC:            uint32(orDefault(uint(0))(s.GetUint("ssrc"))),
+		Internal:        orDefault(false)(s.GetBool("internal")),
+		Validated:       orDefault(false)(s.GetBool("validated")),
+		ReceivedBye:     orDefault(false)(s.GetBool("received-bye")),
+		IsCSRC:          orDefault(false)(s.GetBool("is-csrc")),
+		IsSender:        orDefault(false)(s.GetBool("is-sender")),
+		SeqnumBase:      int32(orDefault(int(0))(s.GetInt("seqnum-base"))),
+		ClockRate:       int32(orDefault(int(0))(s.GetInt("clock-rate"))),
+		RTPFrom:         orDefault("")(s.GetString("rtp-from")),
+		RTCPFrom:        orDefault("")(s.GetString("rtcp-from")),
+		OctetsSent:      orDefault(uint64(0))(s.GetUint64("octets-sent")),
+		PacketsSent:     orDefault(uint64(0))(s.GetUint64("packets-sent")),
+		OctetsReceived:  orDefault(uint64(0))(s.GetUint64("octets-received")),
+		PacketsReceived: orDefault(uint64(0))(s.GetUint64("packets-received")),
+		BytesReceived:   orDefault(uint64(0))(s.GetUint64("bytes-received")),
+		Bitrate:         orDefault(uint64(0))(s.GetUint64("bitrate")),
+		PacketsLost:     int32(orDefault(int(0))(s.GetInt("packets-lost"))),
+		Jitter:          uint32(orDefault(uint(0))(s.GetUint("jitter"))),
+		SentPLICount:    uint32(orDefault(uint(0))(s.GetUint("sent-pli-count"))),
+		RecvPLICount:    uint32(orDefault(uint(0))(s.GetUint("recv-pli-count"))),
+		SentFIRCount:    uint32(orDefault(uint(0))(s.GetUint("sent-fir-count"))),
+		RecvFIRCount:    uint32(orDefault(uint(0))(s.GetUint("recv-fir-count"))),
+		SentNACKCount:   uint32(orDefault(uint(0))(s.GetUint("sent-nack-count"))),
+		RecvNACKCount:   uint32(orDefault(uint(0))(s.GetUint("recv-nack-count"))),
+		RecvPacketRate:  uint32(orDefault(uint(0))(s.GetUint("recv-packet-rate"))),
+		HaveSR:          orDefault(false)(s.GetBool("have-sr")),
+		SRNTPTime:       orDefault(uint64(0))(s.GetUint64("sr-ntptime")),
+		SRRTPTime:       uint32(orDefault(uint(0))(s.GetUint("sr-rtptime"))),
+		SROctetCount:    uint32(orDefault(uint(0))(s.GetUint("sr-octet-count"))),
+		SRPacketCount:   uint32(orDefault(uint(0))(s.GetUint("sr-packet-count"))),
 	}
-	out.SentRB = structBool(s, "sent-rb")
+	out.SentRB = orDefault(false)(s.GetBool("sent-rb"))
 	if out.SentRB {
 		out.LastSentRB = readReportBlock(s, "sent-rb-")
 	}
-	out.HaveRB = structBool(s, "have-rb")
+	out.HaveRB = orDefault(false)(s.GetBool("have-rb"))
 	if out.HaveRB {
 		out.LastRB = readReportBlock(s, "rb-")
 	}
@@ -247,14 +247,23 @@ func toSourceStats(s *gst.Structure) RTPSourceStats {
 // "sent-rb-" lacks a round-trip field, so RoundTrip will be zero in that case.
 func readReportBlock(s *gst.Structure, prefix string) *ReportBlock {
 	return &ReportBlock{
-		SSRC:          structU32(s, prefix+"ssrc"),
-		FractionLost:  uint8(structU32(s, prefix+"fractionlost")),
-		PacketsLost:   structI32(s, prefix+"packetslost"),
-		ExtHighestSeq: structU32(s, prefix+"exthighestseq"),
-		Jitter:        structU32(s, prefix+"jitter"),
-		LSR:           structU32(s, prefix+"lsr"),
-		DLSR:          structU32(s, prefix+"dlsr"),
-		RoundTrip:     structU32(s, prefix+"round-trip"),
+		SSRC:          uint32(orDefault(uint(0))(s.GetUint(prefix + "ssrc"))),
+		FractionLost:  uint8(orDefault(uint(0))(s.GetUint(prefix + "fractionlost"))),
+		PacketsLost:   int32(orDefault(int(0))(s.GetInt(prefix + "packetslost"))),
+		ExtHighestSeq: uint32(orDefault(uint(0))(s.GetUint(prefix + "exthighestseq"))),
+		Jitter:        uint32(orDefault(uint(0))(s.GetUint(prefix + "jitter"))),
+		LSR:           uint32(orDefault(uint(0))(s.GetUint(prefix + "lsr"))),
+		DLSR:          uint32(orDefault(uint(0))(s.GetUint(prefix + "dlsr"))),
+		RoundTrip:     uint32(orDefault(uint(0))(s.GetUint(prefix + "round-trip"))),
+	}
+}
+
+func orDefault[T any](defaultValue T) func(value T, err error) T {
+	return func(value T, err error) T {
+		if err != nil {
+			return defaultValue
+		}
+		return value
 	}
 }
 
@@ -278,61 +287,17 @@ func readReceivedRR(s *gst.Structure) []ReceiverReport {
 			continue
 		}
 		out = append(out, ReceiverReport{
-			SSRC:          structU32(rr, "rb-ssrc"),
-			SenderSSRC:    structU32(rr, "rb-sender-ssrc"),
-			FractionLost:  uint8(structU32(rr, "rb-fractionlost")),
-			PacketsLost:   structI32(rr, "rb-packetslost"),
-			ExtHighestSeq: structU32(rr, "rb-exthighestseq"),
-			Jitter:        structU32(rr, "rb-jitter"),
-			LSR:           structU32(rr, "rb-lsr"),
-			DLSR:          structU32(rr, "rb-dlsr"),
-			RoundTrip:     structU32(rr, "rb-round-trip"),
+			SSRC:          uint32(orDefault(uint(0))(rr.GetUint("rb-ssrc"))),
+			SenderSSRC:    uint32(orDefault(uint(0))(rr.GetUint("rb-sender-ssrc"))),
+			FractionLost:  uint8(orDefault(uint(0))(rr.GetUint("rb-fractionlost"))),
+			PacketsLost:   int32(orDefault(int(0))(rr.GetInt("rb-packetslost"))),
+			ExtHighestSeq: uint32(orDefault(uint(0))(rr.GetUint("rb-exthighestseq"))),
+			Jitter:        uint32(orDefault(uint(0))(rr.GetUint("rb-jitter"))),
+			LSR:           uint32(orDefault(uint(0))(rr.GetUint("rb-lsr"))),
+			DLSR:          uint32(orDefault(uint(0))(rr.GetUint("rb-dlsr"))),
+			RoundTrip:     uint32(orDefault(uint(0))(rr.GetUint("rb-round-trip"))),
 		})
 	}
 	return out
 }
 
-func structU32(s *gst.Structure, key string) uint32 {
-	v, err := s.GetValue(key)
-	if err != nil {
-		return 0
-	}
-	u, _ := v.(uint)
-	return uint32(u)
-}
-
-func structI32(s *gst.Structure, key string) int32 {
-	v, err := s.GetValue(key)
-	if err != nil {
-		return 0
-	}
-	i, _ := v.(int)
-	return int32(i)
-}
-
-func structU64(s *gst.Structure, key string) uint64 {
-	v, err := s.GetValue(key)
-	if err != nil {
-		return 0
-	}
-	u, _ := v.(uint64)
-	return u
-}
-
-func structBool(s *gst.Structure, key string) bool {
-	v, err := s.GetValue(key)
-	if err != nil {
-		return false
-	}
-	b, _ := v.(bool)
-	return b
-}
-
-func structString(s *gst.Structure, key string) string {
-	v, err := s.GetValue(key)
-	if err != nil {
-		return ""
-	}
-	str, _ := v.(string)
-	return str
-}
