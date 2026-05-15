@@ -238,6 +238,7 @@ func (e *SipBin) mediaAddBfcpLabel(bfcpMedia *gstsdp.Media, media *gstsdp.Media,
 
 func (e *SipBin) bfcpStartScreenshare(self *gst.Bin) {
 	if e.Bfcp == nil {
+		self.Log(CAT, gst.LevelWarning, "Attempted to start screenshare via BFCP but BFCP track is not initialized")
 		return
 	}
 
@@ -251,6 +252,7 @@ func (e *SipBin) bfcpStartScreenshare(self *gst.Bin) {
 
 func (e *SipBin) bfcpStopScreenshare(self *gst.Bin) {
 	if e.Bfcp == nil {
+		self.Log(CAT, gst.LevelWarning, "Attempted to stop screenshare via BFCP but BFCP track is not initialized")
 		return
 	}
 

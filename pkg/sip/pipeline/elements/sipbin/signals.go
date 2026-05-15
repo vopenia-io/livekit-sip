@@ -87,7 +87,7 @@ func (e *SipBin) onRtpBinSenderTimeout(self *gst.Bin, session, ssrc uint) {
 		return
 	}
 
-	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Sender timeout for track source %d, ssrc %d", kind, ssrc))
+	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Sender timeout for track source %d, ssrc %d", kind, ssrc))
 
 	if _, err := e.RtpBin.Emit("clear-ssrc", session, ssrc); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to emit clear-ssrc signal on rtpbin for session %d and ssrc %d: %v", session, ssrc, err))
@@ -258,7 +258,7 @@ func (e *SipBin) onRtpBinPadRemovedRecvRtpSrc(self *gst.Bin, pad *gst.Pad) {
 		return
 	}
 
-	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Pad %s removed from rtpbin for track source %d, ssrc %d, and payload type %d", pad.GetName(), kind, ssrc, pt))
+	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Pad %s removed from rtpbin for track source %d, ssrc %d, and payload type %d", pad.GetName(), kind, ssrc, pt))
 
 	gpad := self.GetStaticPad(fmt.Sprintf("recv_rtp_src_%d_%d_%d", session, ssrc, pt))
 	if gpad == nil {

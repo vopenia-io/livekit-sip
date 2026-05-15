@@ -359,7 +359,7 @@ func (e *SipBin) makeTrackMedia(self *gst.Bin, track *SipTrack, caps *gst.Caps) 
 
 	caps = e.normalizeEncodingName(self, track.Kind, caps)
 
-	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Creating media for track %d with caps: %s", track.Idx, caps.String()))
+	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Creating media for track %d with caps: %s", track.Idx, caps.String()))
 
 	media, err := gstsdp.NewMedia()
 	if err != nil {
