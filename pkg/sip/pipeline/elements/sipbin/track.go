@@ -70,11 +70,16 @@ func (e *SipBin) NewTrack(self *gst.Bin, idx int, kind livekit.TrackSource, prot
 		bufferSize = 8 * 1024 * 1024 // 8MB for camera and screen share tracks
 	}
 
+	rtpSrcCaps := fmt.Sprintf("application/x-rtp, media=(string)%s", kindToMediaType(kind))
+	switch kind {
+	case livekit.TrackSource_CAMERA, livekit.TrackSource_SCREEN_SHARE:
+		rtpSrcCaps += ", rtcp-fb-nack-pli=(boolean)true, rtcp-fb-ccm-fir=(boolean)true"
+	}
 	rtpSrc, err := gst.NewElementWithProperties("udpsrc", map[string]interface{}{
 		"socket":       grtpSocket,
 		"close-socket": false,
 		"buffer-size":  int(bufferSize),
-		"caps":         gst.NewCapsFromString(fmt.Sprintf("application/x-rtp, media=(string)%s, rtcp-fb-nack-pli=(boolean)true, rtcp-fb-ccm-fir=(boolean)true", kindToMediaType(kind))),
+		"caps":         gst.NewCapsFromString(rtpSrcCaps),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create RTP source element: %w", err)

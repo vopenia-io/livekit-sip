@@ -21,15 +21,23 @@ var CAT = gst.NewDebugCategory(
 
 const NbTracks = int(livekit.TrackSource_SCREEN_SHARE_AUDIO) + 1
 
+type EncodingCase int
+
+const (
+	EncodingCaseLower EncodingCase = iota
+	EncodingCaseUpper
+)
+
 type SipBin struct {
 	config
 	mu sync.Mutex
 
 	RtpBin *gst.Element
 
-	PtMap  [NbTracks]map[uint8]*gst.Caps // indexed by livekit.TrackSource
-	Tracks [NbTracks]*SipTrack           // indexed by livekit.TrackSource
-	Medias []*gstsdp.Media
+	encodingCase [NbTracks]map[uint8]EncodingCase // indexed by livekit.TrackSource
+	PtMap        [NbTracks]map[uint8]*gst.Caps    // indexed by livekit.TrackSource
+	Tracks       [NbTracks]*SipTrack              // indexed by livekit.TrackSource
+	Medias       []*gstsdp.Media
 
 	Bfcp *BfcpTrack
 
@@ -147,6 +155,10 @@ func (e *SipBin) InstanceInit(instance *glib.Object) {
 
 	for i := range e.PtMap {
 		e.PtMap[i] = make(map[uint8]*gst.Caps)
+	}
+
+	for i := range e.encodingCase {
+		e.encodingCase[i] = make(map[uint8]EncodingCase)
 	}
 
 	e.sessionID = randID()
@@ -375,6 +387,9 @@ func (e *SipBin) Finalize(instance *glib.Object) {
 	e.PtMap = [NbTracks]map[uint8]*gst.Caps{}
 	for i := range e.PtMap {
 		e.PtMap[i] = make(map[uint8]*gst.Caps)
+	}
+	for i := range e.encodingCase {
+		e.encodingCase[i] = make(map[uint8]EncodingCase)
 	}
 	e.RtpBin = nil
 	e.Medias = nil

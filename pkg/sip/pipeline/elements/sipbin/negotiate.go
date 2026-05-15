@@ -53,6 +53,7 @@ func (e *SipBin) handleOfferSdp(self *gst.Bin, offerData []byte) ([]byte, error)
 		}
 		switch kind := getMediaKind(media); kind {
 		case livekit.TrackSource_CAMERA, livekit.TrackSource_MICROPHONE, livekit.TrackSource_SCREEN_SHARE, livekit.TrackSource_SCREEN_SHARE_AUDIO:
+			e.extractMediaCases(self, media, kind)
 			if e.Tracks[kind] != nil {
 				if e.Tracks[kind].Idx != i {
 					self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Received multiple media for track source %d, existing media index %d, new media index %d: disabling new media", kind, e.Tracks[kind].Idx, i))
@@ -248,6 +249,7 @@ func (e *SipBin) handleAnswerSdp(self *gst.Bin, answerData []byte) error {
 		}
 		switch kind := getMediaKind(media); kind {
 		case livekit.TrackSource_CAMERA, livekit.TrackSource_MICROPHONE, livekit.TrackSource_SCREEN_SHARE, livekit.TrackSource_SCREEN_SHARE_AUDIO:
+			e.extractMediaCases(self, media, kind)
 			if e.Tracks[kind] == nil {
 				self.Log(CAT, gst.LevelWarning, fmt.Sprintf("No existing track for media %d with track source %d, disabling media", i, kind))
 				continue
