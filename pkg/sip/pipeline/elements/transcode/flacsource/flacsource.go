@@ -2,6 +2,7 @@ package flacsource
 
 import (
 	"fmt"
+	"weak"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
@@ -36,6 +37,7 @@ type FlacSource struct {
 	AudioConvert  *gst.Element
 	AudioResample *gst.Element
 	AudioRate     *gst.Element
+	ClockSync     *gst.Element
 }
 
 func (e *FlacSource) New() glib.GoObjectSubclass {
@@ -126,6 +128,26 @@ func (e *FlacSource) Constructed(instance *glib.Object) {
 		return
 	}
 
+	e.ClockSync, err = gst.NewElement("clocksync")
+	if err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create clocksync element: %v", err))
+		self.Error("Failed to create clocksync element", err)
+		return
+	}
+
+	eweak := weak.Make(e)
+	wself := glib.WeakRefInit(self)
+	e.ClockSync.GetStaticPad("src").AddProbe(gst.PadProbeTypeBuffer, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+		e := eweak.Value()
+		self := gst.ToGstBin(wself.Get())
+		if e == nil || self == nil || self.Instance() == nil {
+			return gst.PadProbeRemove
+		}
+		runningTime := self.GetCurrentRunningTime()
+		pad.SetOffset(runningTime.Nanoseconds())
+		return gst.PadProbeRemove
+	})
+
 	if err := self.AddMany(
 		e.FdSrc,
 		e.Queue,
@@ -134,6 +156,7 @@ func (e *FlacSource) Constructed(instance *glib.Object) {
 		e.AudioConvert,
 		e.AudioResample,
 		e.AudioRate,
+		e.ClockSync,
 	); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add elements to bin: %v", err))
 		self.Error("Failed to add elements to bin", err)
@@ -148,6 +171,7 @@ func (e *FlacSource) Constructed(instance *glib.Object) {
 		e.AudioConvert,
 		e.AudioResample,
 		e.AudioRate,
+		e.ClockSync,
 	); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link elements: %v", err))
 		self.Error("Failed to link elements", err)
@@ -155,7 +179,7 @@ func (e *FlacSource) Constructed(instance *glib.Object) {
 	}
 
 	elemClass := gst.ToElementClass(self.Class())
-	ghostSrc := gst.NewGhostPadFromTemplate("src", e.AudioRate.GetStaticPad("src"), elemClass.GetPadTemplate("src"))
+	ghostSrc := gst.NewGhostPadFromTemplate("src", e.ClockSync.GetStaticPad("src"), elemClass.GetPadTemplate("src"))
 	self.AddPad(ghostSrc.Pad)
 }
 
@@ -210,4 +234,5 @@ func (e *FlacSource) Finalize(instance *glib.Object) {
 	e.AudioConvert = nil
 	e.AudioResample = nil
 	e.AudioRate = nil
+	e.ClockSync = nil
 }
