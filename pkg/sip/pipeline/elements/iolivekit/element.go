@@ -23,7 +23,6 @@ type IoManagerLivekit struct {
 	outMu sync.Mutex
 
 	Compositor *gst.Element
-	Fallback   *gst.Element
 
 	videoWidth     uint
 	videoHeight    uint
@@ -108,34 +107,6 @@ var properties = []*glib.ParamSpec{
 		500,
 		24,
 		glib.ParameterWritable|glib.ParameterConstructOnly,
-	),
-	glib.NewBoolParam(
-		"microphone",
-		"Microphone",
-		"Whether to subscribe to microphone tracks",
-		false,
-		glib.ParameterWritable,
-	),
-	glib.NewBoolParam(
-		"camera",
-		"Camera",
-		"Whether to subscribe to camera tracks",
-		false,
-		glib.ParameterWritable,
-	),
-	glib.NewBoolParam(
-		"screenshare",
-		"Screen Share",
-		"Whether to subscribe to screenshare tracks",
-		false,
-		glib.ParameterWritable,
-	),
-	glib.NewBoolParam(
-		"screenshare-audio",
-		"Screen Share Audio",
-		"Whether to subscribe to screenshare audio tracks",
-		false,
-		glib.ParameterWritable,
 	),
 }
 
@@ -242,40 +213,7 @@ func (e *IoManagerLivekit) Constructed(instance *glib.Object) {
 		return
 	}
 
-	e.Fallback, err = gst.NewElementWithProperties("trackfallback", map[string]interface{}{
-		"video-width":  e.videoWidth,
-		"video-height": e.videoHeight,
-		"framerate":    e.videoFramerate,
-	})
-	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create trackfallback element: %v", err))
-		self.Error("Failed to create trackfallback element", err)
-		return
-	}
-	if _, err := e.Fallback.Connect("pad-added", func(instance *gst.Element, pad *gst.Pad) {
-		e := eweak.Value()
-		self := gst.ToGstBin(wself.Get())
-		if e != nil && self != nil && self.Instance() != nil {
-			e.fallbackPadAdded(self, pad)
-		}
-	}); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to connect to pad-added signal of track_fallback: %v", err))
-		self.Error("Failed to connect to pad-added signal of track_fallback", err)
-		return
-	}
-	if _, err := e.Fallback.Connect("pad-removed", func(instance *gst.Element, pad *gst.Pad) {
-		e := eweak.Value()
-		self := gst.ToGstBin(wself.Get())
-		if e != nil && self != nil && self.Instance() != nil {
-			e.fallbackPadRemoved(self, pad)
-		}
-	}); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to connect to pad-removed signal of track_fallback: %v", err))
-		self.Error("Failed to connect to pad-removed signal of track_fallback", err)
-		return
-	}
-
-	if err := self.AddMany(e.Compositor, e.Fallback); err != nil {
+	if err := self.AddMany(e.Compositor); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add livekit_compositor element to SIP IO element: %v", err))
 		self.Error("Failed to add livekit_compositor element to SIP IO element", err)
 		return
@@ -374,30 +312,6 @@ func (e *IoManagerLivekit) SetProperty(instance *glib.Object, id uint, value *gl
 			return
 		}
 		e.videoFramerate = val
-	case "microphone":
-		self.Log(CAT, gst.LevelDebug, "Setting microphone property")
-		if err := e.Fallback.SetPropertyValue("microphone", value); err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error setting microphone property on fallback element: %v", err))
-		}
-		self.Log(CAT, gst.LevelDebug, "Finished setting microphone property")
-	case "camera":
-		self.Log(CAT, gst.LevelDebug, "Setting camera property")
-		if err := e.Fallback.SetPropertyValue("camera", value); err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error setting camera property on fallback element: %v", err))
-		}
-		self.Log(CAT, gst.LevelDebug, "Finished setting camera property")
-	case "screenshare":
-		self.Log(CAT, gst.LevelDebug, "Setting screenshare property")
-		if err := e.Fallback.SetPropertyValue("screenshare", value); err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error setting screenshare property on fallback element: %v", err))
-		}
-		self.Log(CAT, gst.LevelDebug, "Finished setting screenshare property")
-	case "screenshare-audio":
-		self.Log(CAT, gst.LevelDebug, "Setting screenshare-audio property")
-		if err := e.Fallback.SetPropertyValue("screenshare-audio", value); err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error setting screenshare-audio property on fallback element: %v", err))
-		}
-		self.Log(CAT, gst.LevelDebug, "Finished setting screenshare-audio property")
 	default:
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown property ID %d", id))
 	}
