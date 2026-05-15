@@ -38,10 +38,10 @@ type IoManagerLivekit struct {
 }
 
 type AudioInTranscode struct {
-	gpad      *gst.GhostPad
-	OpusAudio *gst.Element
-	Filter    *gst.Element
-	pad       *gst.Pad
+	gpad     *gst.GhostPad
+	RtpAudio *gst.Element
+	Filter   *gst.Element
+	pad      *gst.Pad
 }
 
 type AudioOutTranscode struct {
@@ -316,10 +316,16 @@ func (e *IoManagerLivekit) requestNewPadAudioIn(self *gst.Bin, templ *gst.PadTem
 	audioIn := &AudioInTranscode{}
 
 	var err error
-	audioIn.OpusAudio, err = gst.NewElementWithProperties("opus-audio", map[string]interface{}{})
+	audioIn.RtpAudio, err = gst.NewElementWithProperties("factorybin", map[string]interface{}{
+		"factories": glib.NewStrv([]string{
+			"opus-audio",
+			"pcmu-audio",
+			"pcma-audio",
+		}),
+	})
 	if err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create opus-audio element for pad %s: %v", name, err))
-		self.Error(fmt.Sprintf("Failed to create opus-audio element for pad %s", name), err)
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create factorybin element for pad %s: %v", name, err))
+		self.Error(fmt.Sprintf("Failed to create factorybin element for pad %s", name), err)
 		return nil
 	}
 	audioIn.Filter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
@@ -331,15 +337,15 @@ func (e *IoManagerLivekit) requestNewPadAudioIn(self *gst.Bin, templ *gst.PadTem
 		return nil
 	}
 
-	if err := self.AddMany(audioIn.OpusAudio, audioIn.Filter); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add opus-audio element to SIP IO element for pad %s: %v", name, err))
-		self.Error(fmt.Sprintf("Failed to add opus-audio element to SIP IO element for pad %s", name), err)
+	if err := self.AddMany(audioIn.RtpAudio, audioIn.Filter); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add factorybin element to SIP IO element for pad %s: %v", name, err))
+		self.Error(fmt.Sprintf("Failed to add factorybin element to SIP IO element for pad %s", name), err)
 		return nil
 	}
 
-	if err := audioIn.OpusAudio.Link(audioIn.Filter); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link opus-audio element to capsfilter for pad %s: %v", name, err))
-		self.Error(fmt.Sprintf("Failed to link opus-audio element to capsfilter for pad %s", name), err)
+	if err := audioIn.RtpAudio.Link(audioIn.Filter); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link factorybin element to capsfilter for pad %s: %v", name, err))
+		self.Error(fmt.Sprintf("Failed to link factorybin element to capsfilter for pad %s", name), err)
 		return nil
 	}
 
@@ -351,12 +357,12 @@ func (e *IoManagerLivekit) requestNewPadAudioIn(self *gst.Bin, templ *gst.PadTem
 	}
 
 	if ret := audioIn.Filter.GetStaticPad("src").Link(audioIn.pad); ret != gst.PadLinkOK {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link opus-audio src pad to compositor pad for pad %s: %v", name, ret))
-		self.Error(fmt.Sprintf("Failed to link opus-audio src pad to compositor pad for pad %s", name), fmt.Errorf("failed to link pads"))
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to link capsfilter src pad to compositor pad for pad %s: %v", name, ret))
+		self.Error(fmt.Sprintf("Failed to link capsfilter src pad to compositor pad for pad %s", name), fmt.Errorf("failed to link pads"))
 		return nil
 	}
 
-	audioIn.gpad = gst.NewGhostPadFromTemplate(name, audioIn.OpusAudio.GetStaticPad("sink"), templ)
+	audioIn.gpad = gst.NewGhostPadFromTemplate(name, audioIn.RtpAudio.GetStaticPad("sink"), templ)
 	if audioIn.gpad == nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create ghost pad for pad %s", name))
 		self.Error(fmt.Sprintf("Failed to create ghost pad for pad %s", name), fmt.Errorf("gst.NewGhostPadFromTemplate returned nil"))
@@ -371,8 +377,8 @@ func (e *IoManagerLivekit) requestNewPadAudioIn(self *gst.Bin, templ *gst.PadTem
 		return nil
 	}
 
-	if !audioIn.OpusAudio.SyncStateWithParent() {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state of opus-audio element with parent for pad %s", name))
+	if !audioIn.RtpAudio.SyncStateWithParent() {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state of factorybin element with parent for pad %s", name))
 	}
 	if !audioIn.Filter.SyncStateWithParent() {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to sync state of capsfilter element with parent for pad %s", name))
@@ -411,6 +417,8 @@ func (e *IoManagerLivekit) requestNewPadCameraIn(self *gst.Bin, templ *gst.PadTe
 			"vp9-video",
 			"nv-vp8-video",
 			"vp8-video",
+			"nv-h264-video",
+			"h264-video",
 		}),
 		"child-properties": properties,
 	})
@@ -511,6 +519,8 @@ func (e *IoManagerLivekit) requestNewPadScreenShareIn(self *gst.Bin, templ *gst.
 			"vp9-video",
 			"nv-vp8-video",
 			"vp8-video",
+			"nv-h264-video",
+			"h264-video",
 		}),
 		"child-properties": properties,
 	})
@@ -647,8 +657,8 @@ func (e *IoManagerLivekit) releasePadAudioIn(self *gst.Bin, _ *gst.GhostPad, pna
 		return
 	}
 
-	if err := audioIn.OpusAudio.SetState(gst.StateNull); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set opus-audio element to NULL state for pad %s: %v", pname, err))
+	if err := audioIn.RtpAudio.SetState(gst.StateNull); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set factorybin element to NULL state for pad %s: %v", pname, err))
 	}
 	if err := audioIn.Filter.SetState(gst.StateNull); err != nil {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set capsfilter element to NULL state for pad %s: %v", pname, err))
@@ -656,8 +666,8 @@ func (e *IoManagerLivekit) releasePadAudioIn(self *gst.Bin, _ *gst.GhostPad, pna
 
 	e.Compositor.ReleaseRequestPad(audioIn.pad)
 
-	if err := self.RemoveMany(audioIn.OpusAudio, audioIn.Filter); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove opus-audio element from SIP IO element for pad %s: %v", pname, err))
+	if err := self.RemoveMany(audioIn.RtpAudio, audioIn.Filter); err != nil {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to remove factorybin element from SIP IO element for pad %s: %v", pname, err))
 	}
 
 	delete(e.AudioIn, pname)
@@ -843,6 +853,7 @@ func (e *IoManagerLivekit) padAddedAudioOut(self *gst.Bin, pad *gst.Pad, name st
 
 	audioOut.AudioRtp, err = gst.NewElementWithProperties("factorybin", map[string]interface{}{
 		"factories": glib.NewStrv([]string{
+			"audio-opus",
 			"audio-pcmu",
 			"audio-pcma",
 		}),
@@ -937,6 +948,10 @@ func (e *IoManagerLivekit) padAddedCameraOut(self *gst.Bin, pad *gst.Pad, name s
 	}
 	cameraOut.VideoRTP, err = gst.NewElementWithProperties("factorybin", map[string]interface{}{
 		"factories": glib.NewStrv([]string{
+			"nv-video-vp9",
+			"video-vp9",
+			"nv-video-vp8",
+			"video-vp8",
 			"nv-video-h264",
 			"video-h264",
 		}),
@@ -1032,6 +1047,10 @@ func (e *IoManagerLivekit) padAddedScreenShareOut(self *gst.Bin, pad *gst.Pad, n
 	}
 	screenShareOut.VideoRTP, err = gst.NewElementWithProperties("factorybin", map[string]interface{}{
 		"factories": glib.NewStrv([]string{
+			"nv-video-vp9",
+			"video-vp9",
+			"nv-video-vp8",
+			"video-vp8",
 			"nv-video-h264",
 			"video-h264",
 		}),
