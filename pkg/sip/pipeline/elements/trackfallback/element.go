@@ -3,6 +3,7 @@ package trackfallback
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
@@ -233,7 +234,9 @@ func (e *TrackFallback) initTrack(self *gst.Bin, kind livekit.TrackSource) error
 		return nil
 	}
 
-	element, err := gst.NewElementWithProperties("fallbackswitch", map[string]interface{}{})
+	element, err := gst.NewElementWithProperties("fallbackswitch", map[string]interface{}{
+		"timeout": uint64(20 * time.Second.Nanoseconds()),
+	})
 	if err != nil {
 		return fmt.Errorf("failed to create %s fallback switch element: %w", kind.String(), err)
 	}
