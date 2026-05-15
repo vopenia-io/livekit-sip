@@ -19,10 +19,10 @@ type IoManagerSip struct {
 	inMu  sync.Mutex
 	outMu sync.Mutex
 
-	Compositor  *gst.Element
-	videoWidth  uint
-	videoHeight uint
-	nvidia      bool
+	Compositor     *gst.Element
+	videoWidth     uint
+	videoHeight    uint
+	videoFramerate uint
 
 	AudioIn  map[string]*SipAudioInTranscode
 	AudioOut *SipAudioOutTranscode
@@ -102,11 +102,13 @@ var properties = []*glib.ParamSpec{
 		720,
 		glib.ParameterWritable|glib.ParameterConstructOnly,
 	),
-	glib.NewBoolParam(
-		"nvidia",
-		"NVIDIA Hardware Acceleration",
-		"Whether to use NVIDIA hardware acceleration for video processing (crash if enabled but not available)",
-		false,
+	glib.NewUintParam(
+		"framerate",
+		"Video Framerate",
+		"The framerate of the video frames",
+		1,
+		500,
+		24,
 		glib.ParameterWritable|glib.ParameterConstructOnly,
 	),
 }
@@ -148,7 +150,7 @@ func (e *IoManagerSip) InstanceInit(instance *glib.Object) {
 	e.ScreenshareIn = make(map[string]*SipScreenshareInTranscode)
 	e.videoWidth = 1280
 	e.videoHeight = 720
-	e.nvidia = false
+	e.videoFramerate = 24
 }
 
 func (e *IoManagerSip) Constructed(instance *glib.Object) {
@@ -160,7 +162,7 @@ func (e *IoManagerSip) Constructed(instance *glib.Object) {
 	e.Compositor, err = gst.NewElementWithProperties("sip_compositor", map[string]interface{}{
 		"video-width":  e.videoWidth,
 		"video-height": e.videoHeight,
-		"nvidia":       e.nvidia,
+		"framerate":    e.videoFramerate,
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create sip_compositor element: %v", err))
@@ -249,17 +251,17 @@ func (e *IoManagerSip) SetProperty(instance *glib.Object, id uint, value *glib.V
 			return
 		}
 		e.videoHeight = val
-	case "nvidia":
+	case "framerate":
 		gv, err := value.GoValue()
 		if err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting nvidia property value: %v", err))
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting framerate property value: %v", err))
 			return
 		}
-		val, ok := gv.(bool)
+		val, ok := gv.(uint)
 		if !ok {
-			self.Log(CAT, gst.LevelError, "Invalid type for nvidia property")
+			self.Log(CAT, gst.LevelError, "Invalid type for framerate property")
 			return
 		}
-		e.nvidia = val
+		e.videoFramerate = val
 	}
 }

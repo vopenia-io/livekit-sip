@@ -10,7 +10,6 @@ import (
 )
 
 type LivekitCompositorScreenshare struct {
-	Format         string
 	FallbackSwitch *gst.Element
 	Filter         *gst.Element
 	priority       atomic.Int64
@@ -24,11 +23,6 @@ func (e *LivekitCompositor) initScreenshare(self *gst.Bin) error {
 
 	self.Log(CAT, gst.LevelInfo, "Initializing screenshare compositor")
 	e.LivekitCompositorScreenshare = &LivekitCompositorScreenshare{}
-	if e.nvidia {
-		e.LivekitCompositorScreenshare.Format = "video/x-raw(memory:CUDAMemory)"
-	} else {
-		e.LivekitCompositorScreenshare.Format = "video/x-raw"
-	}
 
 	e.LivekitCompositorScreenshare.priority.Store(math.MaxInt64)
 
@@ -39,7 +33,7 @@ func (e *LivekitCompositor) initScreenshare(self *gst.Bin) error {
 	}
 
 	e.LivekitCompositorScreenshare.Filter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-		"caps": gst.NewCapsFromString(fmt.Sprintf("%s, width=(int)%d, height=(int)%d, framerate=24/1", e.LivekitCompositorScreenshare.Format, e.videoWidth, e.videoHeight)),
+		"caps": gst.NewCapsFromString(fmt.Sprintf("video/x-raw, width=(int)%d, height=(int)%d, framerate=%d/1", e.videoWidth, e.videoHeight, e.videoFramerate)),
 	})
 	if err != nil {
 		return err
@@ -58,7 +52,7 @@ func (e *LivekitCompositor) initScreenshare(self *gst.Bin) error {
 	if gpad == nil {
 		return fmt.Errorf("failed to create ghost pad for screenshare source")
 	}
-	e.gpad = gpad
+	e.LivekitCompositorScreenshare.gpad = gpad
 	if !gpad.SetActive(true) {
 		return fmt.Errorf("failed to activate ghost pad for screenshare source")
 	}

@@ -92,16 +92,12 @@ func (f *AudioFallback) Remove(e *TrackFallback, self *gst.Bin) error {
 }
 
 type VideoFallback struct {
-	Fallback
-}
-
-type VideoFallbackCPU struct {
 	initialized    bool
 	FakeVideoSrc   *gst.Element
 	FallbackFilter *gst.Element
 }
 
-func (f *VideoFallbackCPU) Create(e *TrackFallback, self *gst.Bin) (*gst.Pad, error) {
+func (f *VideoFallback) Create(e *TrackFallback, self *gst.Bin) (*gst.Pad, error) {
 	if f.initialized {
 		return nil, fmt.Errorf("video fallback already initialized")
 	}
@@ -115,7 +111,7 @@ func (f *VideoFallbackCPU) Create(e *TrackFallback, self *gst.Bin) (*gst.Pad, er
 		return nil, fmt.Errorf("failed to create fake video src: %w", err)
 	}
 	f.FallbackFilter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-		"caps": gst.NewCapsFromString(fmt.Sprintf("video/x-raw,format=I420,width=[1,%d],height=[1,%d]", e.videoWidth, e.videoHeight)),
+		"caps": gst.NewCapsFromString(fmt.Sprintf("video/x-raw,format=I420,width=[1,%d],height=[1,%d],framerate=%d/1", e.videoWidth, e.videoHeight, e.videoFramerate)),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create fallback filter: %w", err)
@@ -137,7 +133,7 @@ func (f *VideoFallbackCPU) Create(e *TrackFallback, self *gst.Bin) (*gst.Pad, er
 	return f.FallbackFilter.GetStaticPad("src"), nil
 }
 
-func (f *VideoFallbackCPU) Sync() error {
+func (f *VideoFallback) Sync() error {
 	var errs []error
 	if !f.FakeVideoSrc.SyncStateWithParent() {
 		errs = append(errs, fmt.Errorf("failed to sync state of fake video source with parent"))
@@ -152,7 +148,7 @@ func (f *VideoFallbackCPU) Sync() error {
 	return nil
 }
 
-func (f *VideoFallbackCPU) Remove(e *TrackFallback, self *gst.Bin) error {
+func (f *VideoFallback) Remove(e *TrackFallback, self *gst.Bin) error {
 	if !f.initialized {
 		return fmt.Errorf("video fallback not initialized")
 	}
@@ -173,127 +169,5 @@ func (f *VideoFallbackCPU) Remove(e *TrackFallback, self *gst.Bin) error {
 		return fmt.Errorf("encountered errors during fallback removal: %v", errs)
 	}
 
-	return nil
-}
-
-type VideoFallbackNVidia struct {
-	initialized        bool
-	FakeVideoSrc       *gst.Element
-	FallbackCudaUpload *gst.Element
-	FallbackFilter     *gst.Element
-}
-
-func (f *VideoFallbackNVidia) Create(e *TrackFallback, self *gst.Bin) (*gst.Pad, error) {
-	if f.initialized {
-		return nil, fmt.Errorf("video fallback already initialized")
-	}
-
-	var err error
-	f.FakeVideoSrc, err = gst.NewElementWithProperties("videotestsrc", map[string]interface{}{
-		"pattern": int(2), // black
-		"is-live": true,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	f.FallbackCudaUpload, err = gst.NewElementWithProperties("cudaupload", map[string]interface{}{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create CUDA upload element: %w", err)
-	}
-
-	f.FallbackFilter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-		"caps": gst.NewCapsFromString(fmt.Sprintf("video/x-raw(memory:CUDAMemory),width=[1,%d],height=[1,%d],format=NV12", e.videoWidth, e.videoHeight)),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create fallback filter: %w", err)
-	}
-
-	if err := self.AddMany(
-		f.FakeVideoSrc,
-		f.FallbackCudaUpload,
-		f.FallbackFilter,
-	); err != nil {
-		return nil, fmt.Errorf("failed to add elements to bin: %w", err)
-	}
-
-	if err := gst.ElementLinkMany(f.FakeVideoSrc, f.FallbackCudaUpload, f.FallbackFilter); err != nil {
-		return nil, fmt.Errorf("failed to link elements: %w", err)
-	}
-
-	f.initialized = true
-
-	return f.FallbackFilter.GetStaticPad("src"), nil
-}
-
-func (f *VideoFallbackNVidia) Sync() error {
-	var errs []error
-	if !f.FakeVideoSrc.SyncStateWithParent() {
-		errs = append(errs, fmt.Errorf("failed to sync state of fake video source with parent"))
-	}
-	if !f.FallbackCudaUpload.SyncStateWithParent() {
-		errs = append(errs, fmt.Errorf("failed to sync state of fallback CUDA upload with parent"))
-	}
-	if !f.FallbackFilter.SyncStateWithParent() {
-		errs = append(errs, fmt.Errorf("failed to sync state of fallback filter with parent"))
-	}
-
-	if len(errs) > 0 {
-		return fmt.Errorf("encountered errors during fallback sync: %v", errs)
-	}
-	return nil
-}
-
-func (f *VideoFallbackNVidia) Remove(e *TrackFallback, self *gst.Bin) error {
-	if !f.initialized {
-		return fmt.Errorf("video fallback not initialized")
-	}
-
-	var errs []error
-	if err := f.FakeVideoSrc.SetState(gst.StateNull); err != nil {
-		errs = append(errs, fmt.Errorf("failed to set fake video source state to null: %w", err))
-	}
-	if err := f.FallbackCudaUpload.SetState(gst.StateNull); err != nil {
-		errs = append(errs, fmt.Errorf("failed to set fallback CUDA upload state to null: %w", err))
-	}
-	if err := f.FallbackFilter.SetState(gst.StateNull); err != nil {
-		errs = append(errs, fmt.Errorf("failed to set fallback filter state to null: %w", err))
-	}
-
-	if err := self.RemoveMany(f.FakeVideoSrc, f.FallbackCudaUpload, f.FallbackFilter); err != nil {
-		errs = append(errs, fmt.Errorf("failed to remove elements from bin: %w", err))
-	}
-
-	if len(errs) > 0 {
-		return fmt.Errorf("encountered errors during fallback removal: %v", errs)
-	}
-
-	return nil
-}
-
-func (f *VideoFallback) Create(e *TrackFallback, self *gst.Bin) (*gst.Pad, error) {
-	if f.Fallback != nil {
-		return f.Fallback.Create(e, self)
-	}
-
-	if e.nvidia {
-		f.Fallback = &VideoFallbackNVidia{}
-	} else {
-		f.Fallback = &VideoFallbackCPU{}
-	}
-	return f.Fallback.Create(e, self)
-}
-
-func (f *VideoFallback) Sync() error {
-	if f.Fallback != nil {
-		return f.Fallback.Sync()
-	}
-	return nil
-}
-
-func (f *VideoFallback) Remove(e *TrackFallback, self *gst.Bin) error {
-	if f.Fallback != nil {
-		return f.Fallback.Remove(e, self)
-	}
 	return nil
 }

@@ -58,9 +58,9 @@ type TLSConfig struct {
 }
 
 type VideoConfig struct {
-	Width  int  `yaml:"width"`
-	Height int  `yaml:"height"`
-	Nvidia bool `yaml:"nvidia"`
+	Width     int `yaml:"width"`
+	Height    int `yaml:"height"`
+	Framerate int `yaml:"framerate"`
 }
 
 type GstConfig struct {
@@ -193,8 +193,12 @@ func (c *Config) Init() error {
 		c.Video.Height = 720
 	}
 
+	if c.Video.Framerate <= 0 {
+		c.Video.Framerate = 24
+	}
+
 	if c.Gst.Debug == "" {
-		c.Gst.Debug = "*:3,sipbin:4"
+		c.Gst.Debug = "*:3,sipbin:4" // sipbin log sdp as info and we want them to be visible by default
 	}
 
 	if err := c.InitLogger(); err != nil {

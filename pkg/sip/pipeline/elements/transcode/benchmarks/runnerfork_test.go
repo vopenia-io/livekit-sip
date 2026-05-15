@@ -183,10 +183,6 @@ func runRunnerImpl(elem Element, cfg Config, env *runnerEnv) (Result, error) {
 	cpuP.start()
 	defer cpuP.stop()
 
-	gpuP := newGPUProbe(cpuProbeInterval, mp.firstExitCh)
-	gpuP.start()
-	defer gpuP.stop()
-
 	if err := mp.pipeline.SetState(gst.StatePlaying); err != nil {
 		dumpPipeline(mp.pipeline, env.dotDir, dotBase+"_playing_fail")
 		return Result{}, bailOut("SetState PLAYING: %v", err)
@@ -252,9 +248,7 @@ func runRunnerImpl(elem Element, cfg Config, env *runnerEnv) (Result, error) {
 	time.Sleep(100 * time.Millisecond)
 
 	// ---- 10. Compose result ----
-	gpuP.stop()
-	smStats, encStats, decStats := gpuP.loadStats(eosTime)
-	result, err := composeResult(elem, cfg, env.cprobePath, env.tracePath, child.eutChildren, cpuP.loadStats(eosTime), smStats, encStats, decStats)
+	result, err := composeResult(elem, cfg, env.cprobePath, env.tracePath, child.eutChildren, cpuP.loadStats(eosTime))
 	if err != nil {
 		return Result{}, fmt.Errorf("composeResult: %v", err)
 	}

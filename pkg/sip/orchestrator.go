@@ -121,7 +121,7 @@ func (o *MediaOrchestrator) init() error {
 		PortEnd:               uint16(o.opts.Ports.End),
 		VideoWidth:            o.opts.VideoWidth,
 		VideoHeight:           o.opts.VideoHeight,
-		Nvidia:                o.opts.Nvidia,
+		Framerate:             o.opts.Framerate,
 		MaxActiveParticipants: o.opts.MaxActiveParticipants,
 		Gst:                   o.opts.Gst,
 		PublishCodecs:         o.opts.PublishCodecs,

@@ -10,8 +10,6 @@ import (
 )
 
 type SipCompositorCamera struct {
-	Format         string
-	FallbackSrc    SipCompositorVideoFallback
 	FallbackSwitch *gst.Element
 	Filter         *gst.Element
 	priority       atomic.Int64
@@ -25,13 +23,6 @@ func (e *SipCompositor) initCamera(self *gst.Bin) error {
 
 	self.Log(CAT, gst.LevelInfo, "Initializing camera compositor")
 	e.SipCompositorCamera = &SipCompositorCamera{}
-	if e.nvidia {
-		e.SipCompositorCamera.Format = "video/x-raw(memory:CUDAMemory)"
-		e.SipCompositorCamera.FallbackSrc = &SipCompositorVideoFallbackNVidia{}
-	} else {
-		e.SipCompositorCamera.Format = "video/x-raw"
-		e.SipCompositorCamera.FallbackSrc = &SipCompositorVideoFallbackCpu{}
-	}
 
 	e.SipCompositorCamera.priority.Store(math.MaxInt64)
 
@@ -42,7 +33,7 @@ func (e *SipCompositor) initCamera(self *gst.Bin) error {
 	}
 
 	e.SipCompositorCamera.Filter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-		"caps": gst.NewCapsFromString(fmt.Sprintf("%s, width=(int)%d, height=(int)%d", e.SipCompositorCamera.Format, e.videoWidth, e.videoHeight)),
+		"caps": gst.NewCapsFromString(fmt.Sprintf("video/x-raw, width=(int)%d, height=(int)%d, framerate=%d/1", e.videoWidth, e.videoHeight, e.videoFramerate)),
 	})
 	if err != nil {
 		return err
@@ -74,21 +65,6 @@ func (e *SipCompositor) initCamera(self *gst.Bin) error {
 	}
 	if !e.SipCompositorCamera.Filter.SyncStateWithParent() {
 		self.Log(CAT, gst.LevelWarning, "Failed to sync state of capsfilter with parent")
-	}
-
-	fallbackSrc, err := e.SipCompositorCamera.FallbackSrc.Create(self)
-	if err != nil {
-		return fmt.Errorf("failed to create fallback source for camera: %w", err)
-	}
-	sink := e.SipCompositorCamera.FallbackSwitch.GetRequestPad("sink_%u")
-	if sink == nil {
-		return fmt.Errorf("failed to request sink pad from fallbackswitch for camera: %w", err)
-	}
-	if err := sink.SetProperty("priority", uint(e.SipCompositorCamera.priority.Add(-1))); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set priority property on fallback sink pad for camera: %v", err))
-	}
-	if ret := fallbackSrc.Link(sink); ret != gst.PadLinkOK {
-		return fmt.Errorf("failed to link fallback source to fallbackswitch for camera: %v", ret)
 	}
 
 	return nil
@@ -152,23 +128,15 @@ func (e *SipCompositor) releaseCameraSinkPad(self *gst.Bin, gpad *gst.GhostPad) 
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get sink pads from fallbackswitch: %v", err))
 		return
 	}
-	if len(sinks) <= 1 {
+	if len(sinks) == 0 {
 		self.Log(CAT, gst.LevelInfo, "No more active camera sink pads, disabling camera")
 		e.cleanupCamera(self)
 	}
 }
 
-func (e *SipCompositor) applyCameraLayout(self *gst.Bin, layout []string) {
-	return
-}
-
 func (e *SipCompositor) cleanupCamera(self *gst.Bin) {
 	if e.SipCompositorCamera == nil {
 		return
-	}
-
-	if err := e.SipCompositorCamera.FallbackSrc.Cleanup(self); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to clean up fallback source after releasing last camera sink pad: %v", err))
 	}
 
 	if err := e.SipCompositorCamera.FallbackSwitch.SetState(gst.StateNull); err != nil {

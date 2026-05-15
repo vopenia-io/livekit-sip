@@ -34,7 +34,7 @@ func (c *IOManager) Create() error {
 	c.SipController, err = gst.NewElementWithProperties("iosip", map[string]interface{}{
 		"video-width":  c.pipeline.videoWidth,
 		"video-height": c.pipeline.videoHeight,
-		"nvidia":       c.pipeline.nvidia,
+		"framerate":    c.pipeline.videoFramerate,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create IO Manager SIP element: %w", err)
@@ -43,7 +43,7 @@ func (c *IOManager) Create() error {
 	c.LivekitController, err = gst.NewElementWithProperties("iolivekit", map[string]interface{}{
 		"video-width":  c.pipeline.videoWidth,
 		"video-height": c.pipeline.videoHeight,
-		"nvidia":       c.pipeline.nvidia,
+		"framerate":    c.pipeline.videoFramerate,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create IO Manager LiveKit element: %w", err)

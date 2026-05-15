@@ -31,7 +31,7 @@ type SipOpt struct {
 	PortEnd               uint16
 	VideoWidth            uint
 	VideoHeight           uint
-	Nvidia                bool
+	Framerate             uint
 	MaxActiveParticipants int
 	Gst                   config.GstConfig
 	PublishCodecs         config.PublishCodecConfig

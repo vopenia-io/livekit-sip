@@ -225,7 +225,7 @@ type MediaOptions struct {
 	NoInputResample       bool
 	VideoWidth            uint
 	VideoHeight           uint
-	Nvidia                bool
+	Framerate             uint
 	MaxActiveParticipants int
 	Gst                   config.GstConfig
 	PublishCodecs         config.PublishCodecConfig

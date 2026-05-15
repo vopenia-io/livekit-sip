@@ -874,7 +874,7 @@ func (c *inboundCall) handleInvite(ctx context.Context, tid traceid.ID, req *sip
 		NoInputResample:       !RoomResample,
 		VideoWidth:            uint(c.s.conf.Video.Width),
 		VideoHeight:           uint(c.s.conf.Video.Height),
-		Nvidia:                c.s.conf.Video.Nvidia,
+		Framerate:             uint(c.s.conf.Video.Framerate),
 		MaxActiveParticipants: c.s.conf.MaxActiveParticipants,
 		Gst:                   c.s.conf.Gst,
 		PublishCodecs:         c.s.conf.PublishCodecs,

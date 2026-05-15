@@ -45,7 +45,7 @@ type Pipeline struct {
 
 	videoWidth            uint
 	videoHeight           uint
-	nvidia                bool
+	videoFramerate        uint
 	maxActiveParticipants int
 	dumpDot               bool
 	dumpDir               string
@@ -343,7 +343,7 @@ func New(ctx context.Context, log logger.Logger, sipOpt SipOpt, sipCallID string
 		dumpCH:                make(chan bool, 1024),
 		videoWidth:            sipOpt.VideoWidth,
 		videoHeight:           sipOpt.VideoHeight,
-		nvidia:                sipOpt.Nvidia,
+		videoFramerate:        sipOpt.Framerate,
 		maxActiveParticipants: sipOpt.MaxActiveParticipants,
 		sipCallID:             sipCallID,
 		dumpDot:               sipOpt.Gst.DumpDot,

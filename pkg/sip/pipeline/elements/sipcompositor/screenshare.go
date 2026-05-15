@@ -10,8 +10,6 @@ import (
 )
 
 type SipCompositorScreenshare struct {
-	Format         string
-	FallbackSrc    SipCompositorVideoFallback
 	FallbackSwitch *gst.Element
 	Filter         *gst.Element
 	priority       atomic.Int64
@@ -25,26 +23,17 @@ func (e *SipCompositor) initScreenshare(self *gst.Bin) error {
 
 	self.Log(CAT, gst.LevelInfo, "Initializing screenshare compositor")
 	e.SipCompositorScreenshare = &SipCompositorScreenshare{}
-	if e.nvidia {
-		e.SipCompositorScreenshare.Format = "video/x-raw(memory:CUDAMemory)"
-		e.SipCompositorScreenshare.FallbackSrc = &SipCompositorVideoFallbackNVidia{}
-	} else {
-		e.SipCompositorScreenshare.Format = "video/x-raw"
-		e.SipCompositorScreenshare.FallbackSrc = &SipCompositorVideoFallbackCpu{}
-	}
 
 	e.SipCompositorScreenshare.priority.Store(math.MaxInt64)
 
 	var err error
-	e.SipCompositorScreenshare.FallbackSwitch, err = gst.NewElementWithProperties("fallbackswitch", map[string]interface{}{
-		"timeout": uint64(1_500_000_000),
-	})
+	e.SipCompositorScreenshare.FallbackSwitch, err = gst.NewElementWithProperties("fallbackswitch", map[string]interface{}{})
 	if err != nil {
 		return err
 	}
 
 	e.SipCompositorScreenshare.Filter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-		"caps": gst.NewCapsFromString(fmt.Sprintf("%s", e.SipCompositorScreenshare.Format)),
+		"caps": gst.NewCapsFromString(fmt.Sprintf("video/x-raw, width=(int)%d, height=(int)%d, framerate=%d/1", e.videoWidth, e.videoHeight, e.videoFramerate)),
 	})
 	if err != nil {
 		return err
@@ -76,21 +65,6 @@ func (e *SipCompositor) initScreenshare(self *gst.Bin) error {
 	}
 	if !e.SipCompositorScreenshare.Filter.SyncStateWithParent() {
 		self.Log(CAT, gst.LevelWarning, "Failed to sync state of capsfilter with parent")
-	}
-
-	fallbackSrc, err := e.SipCompositorScreenshare.FallbackSrc.Create(self)
-	if err != nil {
-		return fmt.Errorf("failed to create fallback source for screenshare: %w", err)
-	}
-	sink := e.SipCompositorScreenshare.FallbackSwitch.GetRequestPad("sink_%u")
-	if sink == nil {
-		return fmt.Errorf("failed to request sink pad from fallbackswitch for screenshare: %w", err)
-	}
-	if err := sink.SetProperty("priority", uint(e.SipCompositorScreenshare.priority.Add(-1))); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to set priority property on fallback sink pad for screenshare: %v", err))
-	}
-	if ret := fallbackSrc.Link(sink); ret != gst.PadLinkOK {
-		return fmt.Errorf("failed to link fallback source to fallbackswitch for screenshare: %v", ret)
 	}
 
 	return nil
@@ -154,23 +128,15 @@ func (e *SipCompositor) releaseScreenshareSinkPad(self *gst.Bin, gpad *gst.Ghost
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get sink pads from fallbackswitch: %v", err))
 		return
 	}
-	if len(sinks) <= 1 {
+	if len(sinks) == 0 {
 		self.Log(CAT, gst.LevelInfo, "No more active screenshare sink pads, disabling screenshare")
 		e.cleanupScreenshare(self)
 	}
 }
 
-func (e *SipCompositor) applyScreenshareLayout(self *gst.Bin, layout []string) {
-	return
-}
-
 func (e *SipCompositor) cleanupScreenshare(self *gst.Bin) {
 	if e.SipCompositorScreenshare == nil {
 		return
-	}
-
-	if err := e.SipCompositorScreenshare.FallbackSrc.Cleanup(self); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to clean up fallback source after releasing last screenshare sink pad: %v", err))
 	}
 
 	if err := e.SipCompositorScreenshare.FallbackSwitch.SetState(gst.StateNull); err != nil {

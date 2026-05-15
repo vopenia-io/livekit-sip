@@ -33,12 +33,12 @@ type ParticipantInfo struct {
 type LivekitCompositor struct {
 	mu sync.Mutex
 
-	videoWidth  uint
-	videoHeight uint
-	nvidia      bool
-	microphone  bool
-	camera      bool
-	screenshare bool
+	videoWidth     uint
+	videoHeight    uint
+	videoFramerate uint
+	microphone     bool
+	camera         bool
+	screenshare    bool
 
 	*LivekitCompositorMicrophone
 	*LivekitCompositorCamera
@@ -102,7 +102,7 @@ func (e *LivekitCompositor) InstanceInit(instance *glib.Object) {
 	}
 	e.videoWidth = 1280
 	e.videoHeight = 720
-	e.nvidia = false
+	e.videoFramerate = 24
 }
 
 func (e *LivekitCompositor) Constructed(instance *glib.Object) {

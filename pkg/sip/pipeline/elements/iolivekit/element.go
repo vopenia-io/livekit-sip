@@ -25,9 +25,9 @@ type IoManagerLivekit struct {
 	Compositor *gst.Element
 	Fallback   *gst.Element
 
-	videoWidth  uint
-	videoHeight uint
-	nvidia      bool
+	videoWidth     uint
+	videoHeight    uint
+	videoFramerate uint
 
 	AudioIn  map[string]*AudioInTranscode
 	AudioOut *AudioOutTranscode
@@ -100,11 +100,13 @@ var properties = []*glib.ParamSpec{
 		720,
 		glib.ParameterWritable|glib.ParameterConstructOnly,
 	),
-	glib.NewBoolParam(
-		"nvidia",
-		"NVIDIA Hardware Acceleration",
-		"Whether to use NVIDIA hardware acceleration for video processing (crash if enabled but not available)",
-		false,
+	glib.NewUintParam(
+		"framerate",
+		"Video Framerate",
+		"The framerate of the video frames",
+		1,
+		500,
+		24,
 		glib.ParameterWritable|glib.ParameterConstructOnly,
 	),
 	glib.NewBoolParam(
@@ -198,7 +200,7 @@ func (e *IoManagerLivekit) InstanceInit(instance *glib.Object) {
 	e.ScreenShareIn = make(map[string]*ScreenShareInTranscode)
 	e.videoWidth = 1280
 	e.videoHeight = 720
-	e.nvidia = false
+	e.videoFramerate = 24
 }
 
 func (e *IoManagerLivekit) Constructed(instance *glib.Object) {
@@ -210,7 +212,7 @@ func (e *IoManagerLivekit) Constructed(instance *glib.Object) {
 	e.Compositor, err = gst.NewElementWithProperties("livekit_compositor", map[string]interface{}{
 		"video-width":  e.videoWidth,
 		"video-height": e.videoHeight,
-		"nvidia":       e.nvidia,
+		"framerate":    e.videoFramerate,
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create livekit_compositor element: %v", err))
@@ -243,7 +245,7 @@ func (e *IoManagerLivekit) Constructed(instance *glib.Object) {
 	e.Fallback, err = gst.NewElementWithProperties("trackfallback", map[string]interface{}{
 		"video-width":  e.videoWidth,
 		"video-height": e.videoHeight,
-		"nvidia":       e.nvidia,
+		"framerate":    e.videoFramerate,
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create trackfallback element: %v", err))
@@ -360,18 +362,18 @@ func (e *IoManagerLivekit) SetProperty(instance *glib.Object, id uint, value *gl
 			return
 		}
 		e.videoHeight = val
-	case "nvidia":
+	case "framerate":
 		gv, err := value.GoValue()
 		if err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting nvidia property value: %v", err))
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting framerate property value: %v", err))
 			return
 		}
-		val, ok := gv.(bool)
+		val, ok := gv.(uint)
 		if !ok {
-			self.Log(CAT, gst.LevelError, "Invalid type for nvidia property")
+			self.Log(CAT, gst.LevelError, "Invalid type for framerate property")
 			return
 		}
-		e.nvidia = val
+		e.videoFramerate = val
 	case "microphone":
 		self.Log(CAT, gst.LevelDebug, "Setting microphone property")
 		if err := e.Fallback.SetPropertyValue("microphone", value); err != nil {

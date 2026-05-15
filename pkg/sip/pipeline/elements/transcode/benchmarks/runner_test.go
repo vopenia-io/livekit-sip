@@ -201,7 +201,7 @@ func Run(t *testing.T, elem Element, cfg Config) Result {
 // composeResult assembles a Result from the C probe latency file
 // (written by the child), the CPU sampler stats, and the child's
 // latency-tracer log.
-func composeResult(elem Element, cfg Config, cprobePath, tracePath string, eutChildren []string, cpuStats cpuLoadStats, gpuSM, gpuEnc, gpuDec gpuLoadStats) (Result, error) {
+func composeResult(elem Element, cfg Config, cprobePath, tracePath string, eutChildren []string, cpuStats cpuLoadStats) (Result, error) {
 	resCopy, err := readCProbeFile(cprobePath)
 	if err != nil {
 		return Result{}, fmt.Errorf("%s %dx%d->%dx%d: read cprobe: %w",
@@ -265,27 +265,6 @@ func composeResult(elem Element, cfg Config, cprobePath, tracePath string, eutCh
 	result.CPULoadMean = cpuStats.Mean
 	result.CPULoadP50 = cpuStats.P50
 	result.CPULoadP90 = cpuStats.P90
-
-	result.GPUSMSamples = gpuSM.Samples
-	result.GPUSMMin = gpuSM.Min
-	result.GPUSMMax = gpuSM.Max
-	result.GPUSMMean = gpuSM.Mean
-	result.GPUSMP50 = gpuSM.P50
-	result.GPUSMP90 = gpuSM.P90
-
-	result.GPUEncSamples = gpuEnc.Samples
-	result.GPUEncMin = gpuEnc.Min
-	result.GPUEncMax = gpuEnc.Max
-	result.GPUEncMean = gpuEnc.Mean
-	result.GPUEncP50 = gpuEnc.P50
-	result.GPUEncP90 = gpuEnc.P90
-
-	result.GPUDecSamples = gpuDec.Samples
-	result.GPUDecMin = gpuDec.Min
-	result.GPUDecMax = gpuDec.Max
-	result.GPUDecMean = gpuDec.Mean
-	result.GPUDecP50 = gpuDec.P50
-	result.GPUDecP90 = gpuDec.P90
 
 	return result, nil
 }

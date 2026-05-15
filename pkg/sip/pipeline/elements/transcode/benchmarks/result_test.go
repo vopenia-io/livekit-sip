@@ -109,27 +109,6 @@ type Result struct {
 	CPULoadMean    float64 `json:"cpu_load_mean"`
 	CPULoadP50     float64 `json:"cpu_load_p50"`
 	CPULoadP90     float64 `json:"cpu_load_p90"`
-
-	GPUSMSamples int     `json:"gpu_sm_samples"`
-	GPUSMMin     float64 `json:"gpu_sm_min"`
-	GPUSMMax     float64 `json:"gpu_sm_max"`
-	GPUSMMean    float64 `json:"gpu_sm_mean"`
-	GPUSMP50     float64 `json:"gpu_sm_p50"`
-	GPUSMP90     float64 `json:"gpu_sm_p90"`
-
-	GPUEncSamples int     `json:"gpu_enc_samples"`
-	GPUEncMin     float64 `json:"gpu_enc_min"`
-	GPUEncMax     float64 `json:"gpu_enc_max"`
-	GPUEncMean    float64 `json:"gpu_enc_mean"`
-	GPUEncP50     float64 `json:"gpu_enc_p50"`
-	GPUEncP90     float64 `json:"gpu_enc_p90"`
-
-	GPUDecSamples int     `json:"gpu_dec_samples"`
-	GPUDecMin     float64 `json:"gpu_dec_min"`
-	GPUDecMax     float64 `json:"gpu_dec_max"`
-	GPUDecMean    float64 `json:"gpu_dec_mean"`
-	GPUDecP50     float64 `json:"gpu_dec_p50"`
-	GPUDecP90     float64 `json:"gpu_dec_p90"`
 }
 
 // dominantChild returns the child with the highest mean latency, or
@@ -159,8 +138,8 @@ func FormatMarkdown(results []Result) string {
 				fmt.Fprintln(&b)
 			}
 			fmt.Fprintf(&b, "# %s\n\n", r.ElementName)
-			fmt.Fprintln(&b, "| source | target | res_mean | res_p50 | res_p90 | res_max | sum_mean | cross | cpu_mean | cpu_p50 | cpu_p90 | cpu_max | gpu_sm_mean | gpu_sm_p90 | gpu_enc_mean | gpu_enc_p90 | gpu_dec_mean | gpu_dec_p90 | dominant_child |")
-			fmt.Fprintln(&b, "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+			fmt.Fprintln(&b, "| source | target | res_mean | res_p50 | res_p90 | res_max | sum_mean | cross | cpu_mean | cpu_p50 | cpu_p90 | cpu_max | dominant_child |")
+			fmt.Fprintln(&b, "|---|---|---|---|---|---|---|---|---|---|---|---|---|")
 			prev = r.ElementName
 		}
 		src := fmt.Sprintf("%dx%d", r.Config.SourceWidth, r.Config.SourceHeight)
@@ -170,21 +149,11 @@ func FormatMarkdown(results []Result) string {
 		if dom.Name != "" {
 			domStr = fmt.Sprintf("%s %v", dom.Name, dom.Mean)
 		}
-		gpuFmt := func(samples int, mean, p90 float64) (string, string) {
-			if samples == 0 {
-				return "-", "-"
-			}
-			return fmt.Sprintf("%.1f%%", mean), fmt.Sprintf("%.1f%%", p90)
-		}
-		smMean, smP90 := gpuFmt(r.GPUSMSamples, r.GPUSMMean, r.GPUSMP90)
-		encMean, encP90 := gpuFmt(r.GPUEncSamples, r.GPUEncMean, r.GPUEncP90)
-		decMean, decP90 := gpuFmt(r.GPUDecSamples, r.GPUDecMean, r.GPUDecP90)
-		fmt.Fprintf(&b, "| %s | %s | %v | %v | %v | %v | %v | %.2f | %.1f%% | %.1f%% | %.1f%% | %.1f%% | %s | %s | %s | %s | %s | %s | %s |\n",
+		fmt.Fprintf(&b, "| %s | %s | %v | %v | %v | %v | %v | %.2f | %.1f%% | %.1f%% | %.1f%% | %.1f%% | %s |\n",
 			src, dst,
 			r.ResidencyMean, r.ResidencyP50, r.ResidencyP90, r.ResidencyMax,
 			r.SumMean, r.CrossRatio,
 			r.CPULoadMean, r.CPULoadP50, r.CPULoadP90, r.CPULoadMax,
-			smMean, smP90, encMean, encP90, decMean, decP90,
 			domStr)
 	}
 	return b.String()
@@ -199,18 +168,12 @@ func FormatCSV(results []Result) string {
 		"res_min_ns,res_max_ns,res_mean_ns,res_p50_ns,res_p90_ns,res_samples,"+
 		"sum_mean_ns,cross_ratio,"+
 		"cpu_min,cpu_max,cpu_mean,cpu_p50,cpu_p90,cpu_samples,"+
-		"gpu_sm_min,gpu_sm_max,gpu_sm_mean,gpu_sm_p50,gpu_sm_p90,gpu_sm_samples,"+
-		"gpu_enc_min,gpu_enc_max,gpu_enc_mean,gpu_enc_p50,gpu_enc_p90,gpu_enc_samples,"+
-		"gpu_dec_min,gpu_dec_max,gpu_dec_mean,gpu_dec_p50,gpu_dec_p90,gpu_dec_samples,"+
 		"dominant_child,dominant_child_mean_ns")
 	for _, r := range results {
 		dom := dominantChild(r)
 		fmt.Fprintf(&b, "%s,%d,%d,%d,%d,%d,%d,"+
 			"%d,%d,%d,%d,%d,%d,"+
 			"%d,%.4f,"+
-			"%.3f,%.3f,%.3f,%.3f,%.3f,%d,"+
-			"%.3f,%.3f,%.3f,%.3f,%.3f,%d,"+
-			"%.3f,%.3f,%.3f,%.3f,%.3f,%d,"+
 			"%.3f,%.3f,%.3f,%.3f,%.3f,%d,"+
 			"%s,%d\n",
 			r.ElementName,
@@ -224,12 +187,6 @@ func FormatCSV(results []Result) string {
 			r.SumMean.Nanoseconds(), r.CrossRatio,
 			r.CPULoadMin, r.CPULoadMax, r.CPULoadMean, r.CPULoadP50, r.CPULoadP90,
 			r.CPULoadSamples,
-			r.GPUSMMin, r.GPUSMMax, r.GPUSMMean, r.GPUSMP50, r.GPUSMP90,
-			r.GPUSMSamples,
-			r.GPUEncMin, r.GPUEncMax, r.GPUEncMean, r.GPUEncP50, r.GPUEncP90,
-			r.GPUEncSamples,
-			r.GPUDecMin, r.GPUDecMax, r.GPUDecMean, r.GPUDecP50, r.GPUDecP90,
-			r.GPUDecSamples,
 			dom.Name, dom.Mean.Nanoseconds(),
 		)
 	}

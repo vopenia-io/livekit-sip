@@ -13,14 +13,6 @@ import (
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/av1video"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/factorybin"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/h264video"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvav1video"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvh264video"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvvideoav1"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvvideoh264"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvvideovp8"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvvideovp9"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvvp8video"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/nvvp9video"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videoav1"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videoh264"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/transcode/videovp8"
@@ -41,20 +33,12 @@ func initGStreamer() {
 	factorybin.Register()
 	vp9video.Register()
 	videovp9.Register()
-	nvvp9video.Register()
-	nvvideovp9.Register()
 	h264video.Register()
 	videoh264.Register()
-	nvh264video.Register()
-	nvvideoh264.Register()
 	vp8video.Register()
 	videovp8.Register()
-	nvvp8video.Register()
-	nvvideovp8.Register()
 	av1video.Register()
 	videoav1.Register()
-	nvav1video.Register()
-	nvvideoav1.Register()
 }
 
 func TestMain(m *testing.M) {
@@ -98,20 +82,12 @@ var resolutionPairs = []struct {
 var elementsUnderTest = []Element{
 	vp9video.Test(),
 	videovp9.Test(),
-	nvvp9video.Test(),
-	nvvideovp9.Test(),
 	h264video.Test(),
 	videoh264.Test(),
-	nvh264video.Test(),
-	nvvideoh264.Test(),
 	vp8video.Test(),
 	videovp8.Test(),
-	nvvp8video.Test(),
-	nvvideovp8.Test(),
 	av1video.Test(),
 	videoav1.Test(),
-	nvav1video.Test(),
-	nvvideoav1.Test(),
 }
 
 func TestAllElements(t *testing.T) {

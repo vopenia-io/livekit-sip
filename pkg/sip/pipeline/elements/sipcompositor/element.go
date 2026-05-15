@@ -18,9 +18,9 @@ var CAT = gst.NewDebugCategory(
 type SipCompositor struct {
 	mu sync.Mutex
 
-	videoWidth  uint
-	videoHeight uint
-	nvidia      bool
+	videoWidth     uint
+	videoHeight    uint
+	videoFramerate uint
 
 	*SipCompositorMicrophone
 	*SipCompositorCamera
@@ -60,31 +60,8 @@ func (e *SipCompositor) ClassInit(klass *glib.ObjectClass) {
 func (e *SipCompositor) InstanceInit(instance *glib.Object) {
 	e.videoWidth = 1280
 	e.videoHeight = 720
-	e.nvidia = false
+	e.videoFramerate = 24
 }
-
-// func (e *SipCompositor) ChangeState(instance *gst.Element, transition gst.StateChange) gst.StateChangeReturn {
-// 	self := gst.ToGstBin(instance)
-
-// 	if transition == gst.StateChangeReadyToNull {
-// 		sinks, err := self.GetSinkPads()
-// 		if err != nil {
-// 			self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to get sink pads: %v", err))
-// 		} else {
-// 			for _, sink := range sinks {
-// 				e.ReleasePad(instance, sink)
-// 			}
-// 		}
-
-// 		e.mu.Lock()
-// 		e.cleanupMicrophone(self)
-// 		e.cleanupCamera(self)
-// 		e.cleanupScreenshare(self)
-// 		e.mu.Unlock()
-// 	}
-
-// 	return self.ParentChangeState(transition)
-// }
 
 func (e *SipCompositor) Finalize(instance *glib.Object) {
 	self := gst.ToGstBin(instance)

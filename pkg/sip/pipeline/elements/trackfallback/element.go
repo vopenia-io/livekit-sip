@@ -20,9 +20,9 @@ const NbTracks = int(livekit.TrackSource_SCREEN_SHARE_AUDIO) + 1
 type TrackFallback struct {
 	mu sync.Mutex
 
-	videoWidth  uint
-	videoHeight uint
-	nvidia      bool
+	videoWidth     uint
+	videoHeight    uint
+	videoFramerate uint
 
 	Tracks [NbTracks]struct {
 		initialized bool
@@ -67,7 +67,7 @@ func (e *TrackFallback) ClassInit(klass *glib.ObjectClass) {
 func (e *TrackFallback) InstanceInit(instance *glib.Object) {
 	e.videoWidth = 1280
 	e.videoHeight = 720
-	e.nvidia = false
+	e.videoFramerate = 24
 }
 
 func (e *TrackFallback) Finalize(instance *glib.Object) {
@@ -241,7 +241,6 @@ func (e *TrackFallback) initTrack(self *gst.Bin, kind livekit.TrackSource) error
 	if err := self.Add(element); err != nil {
 		return fmt.Errorf("failed to add %s fallback switch to bin: %w", kind.String(), err)
 	}
-
 
 	class := gst.ToElementClass(self.Class())
 	gpad := gst.NewGhostPadFromTemplate(fmt.Sprintf("src_%d", kind), element.GetStaticPad("src"), class.GetPadTemplate("src_%u"))

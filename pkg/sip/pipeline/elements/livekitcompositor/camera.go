@@ -14,8 +14,6 @@ import (
 type LivekitCompositorCamera struct {
 	Compositor *gst.Element
 	Filter     *gst.Element
-
-	Format string
 }
 
 func (e *LivekitCompositor) initCamera(self *gst.Bin) error {
@@ -23,33 +21,21 @@ func (e *LivekitCompositor) initCamera(self *gst.Bin) error {
 		return nil
 	}
 
-	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Initializing camera compositor with driver %s", lo.Ternary(e.nvidia, "nvidia", "cpu")))
 	e.LivekitCompositorCamera = &LivekitCompositorCamera{}
-	if e.nvidia {
-		e.LivekitCompositorCamera.Format = "video/x-raw(memory:CUDAMemory)"
-	} else {
-		e.LivekitCompositorCamera.Format = "video/x-raw"
-	}
 
 	var err error
-	if e.nvidia {
-		e.LivekitCompositorCamera.Compositor, err = gst.NewElementWithProperties("cudacompositor", map[string]interface{}{
-			"force-live":           true,
-			"ignore-inactive-pads": true,
-		})
-	} else {
-		e.LivekitCompositorCamera.Compositor, err = gst.NewElementWithProperties("compositor", map[string]interface{}{
-			"force-live":           true,
-			"ignore-inactive-pads": true,
-			"background": int(1), // black
-		})
-	}
+
+	e.LivekitCompositorCamera.Compositor, err = gst.NewElementWithProperties("compositor", map[string]interface{}{
+		"force-live":           true,
+		"ignore-inactive-pads": true,
+		"background":           int(1), // black
+	})
 	if err != nil {
 		return err
 	}
 
 	e.LivekitCompositorCamera.Filter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-		"caps": gst.NewCapsFromString(fmt.Sprintf("%s,width=%d,height=%d,framerate=24/1", e.LivekitCompositorCamera.Format, e.videoWidth, e.videoHeight)),
+		"caps": gst.NewCapsFromString(fmt.Sprintf("video/x-raw, width=%d, height=%d, framerate=%d/1", e.videoWidth, e.videoHeight, e.videoFramerate)),
 	})
 	if err != nil {
 		return err
@@ -64,21 +50,6 @@ func (e *LivekitCompositor) initCamera(self *gst.Bin) error {
 	if err := gst.ElementLinkMany(e.LivekitCompositorCamera.Compositor, e.LivekitCompositorCamera.Filter); err != nil {
 		return err
 	}
-
-	// sink0 := e.LivekitCompositorCamera.Compositor.GetRequestPad("sink_0")
-	// if sink0 == nil {
-	// 	return fmt.Errorf("failed to request new sink pad from compositor")
-	// }
-	// if err := errors.Join(
-	// 	sink0.SetProperty("xpos", 0),
-	// 	sink0.SetProperty("ypos", 0),
-	// 	sink0.SetProperty("width", int(e.videoWidth)),
-	// 	sink0.SetProperty("height", int(e.videoHeight)),
-	// 	sink0.SetProperty("max-last-buffer-repeat", uint64(math.MaxUint64)),
-	// 	sink0.SetProperty("repeat-after-eos", true),
-	// ); err != nil {
-	// 	return fmt.Errorf("failed to set position and size for compositor sink pad for fallback video: %w", err)
-	// }
 
 	class := gst.ToElementClass(self.Class())
 	gpad := gst.NewGhostPadFromTemplate(fmt.Sprintf("src_%d", livekit.TrackSource_CAMERA), e.LivekitCompositorCamera.Filter.GetStaticPad("src"), class.GetPadTemplate("src_%u"))

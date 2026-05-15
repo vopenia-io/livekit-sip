@@ -159,11 +159,8 @@ func (e *IoManagerLivekit) requestNewPadCameraIn(self *gst.Bin, templ *gst.PadTe
 	}
 	cameraIn.RTPVideo, err = gst.NewElementWithProperties("factorybin", map[string]interface{}{
 		"factories": glib.NewStrv([]string{
-			"nv-vp9-video",
 			"vp9-video",
-			"nv-vp8-video",
 			"vp8-video",
-			"nv-h264-video",
 			"h264-video",
 		}),
 		"child-properties": properties,
@@ -261,11 +258,8 @@ func (e *IoManagerLivekit) requestNewPadScreenShareIn(self *gst.Bin, templ *gst.
 	}
 	screenShareIn.RTPVideo, err = gst.NewElementWithProperties("factorybin", map[string]interface{}{
 		"factories": glib.NewStrv([]string{
-			"nv-vp9-video",
 			"vp9-video",
-			"nv-vp8-video",
 			"vp8-video",
-			"nv-h264-video",
 			"h264-video",
 		}),
 		"child-properties": properties,
@@ -694,11 +688,8 @@ func (e *IoManagerLivekit) padAddedCameraOut(self *gst.Bin, pad *gst.Pad, name s
 	}
 	cameraOut.VideoRTP, err = gst.NewElementWithProperties("factorybin", map[string]interface{}{
 		"factories": glib.NewStrv([]string{
-			"nv-video-vp9",
 			"video-vp9",
-			"nv-video-vp8",
 			"video-vp8",
-			"nv-video-h264",
 			"video-h264",
 		}),
 		"child-properties": properties,
@@ -793,11 +784,8 @@ func (e *IoManagerLivekit) padAddedScreenShareOut(self *gst.Bin, pad *gst.Pad, n
 	}
 	screenShareOut.VideoRTP, err = gst.NewElementWithProperties("factorybin", map[string]interface{}{
 		"factories": glib.NewStrv([]string{
-			"nv-video-vp9",
 			"video-vp9",
-			"nv-video-vp8",
 			"video-vp8",
-			"nv-video-h264",
 			"video-h264",
 		}),
 		"child-properties": properties,
