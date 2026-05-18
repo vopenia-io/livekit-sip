@@ -267,7 +267,7 @@ func (e *LivekitBin) OnTrackMuted(publication lksdk.TrackPublication, participan
 		return
 	}
 
-	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Muted track %s(%s) of participant %s", pub.Source(), pub.SID(), participant.SID()))
+	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Muted track %s(%s:%d) of participant %s", pub.Source(), pub.SID(), ssrc, participant.SID()))
 }
 
 func (e *LivekitBin) OnTrackUnmuted(publication lksdk.TrackPublication, participant lksdk.Participant) {
@@ -282,7 +282,9 @@ func (e *LivekitBin) OnTrackUnmuted(publication lksdk.TrackPublication, particip
 		return
 	}
 
-	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Unmuted track %s(%s) of participant %s", pub.Source(), pub.SID(), participant.SID()))
+	ssrc := pub.TrackRemote().SSRC()
+
+	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Unmuted track %s(%s:%d) of participant %s", pub.Source(), pub.SID(), ssrc, participant.SID()))
 }
 
 func (e *LivekitBin) getCurrentActiveSpeakers() []lksdk.Participant {
