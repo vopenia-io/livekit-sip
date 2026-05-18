@@ -108,6 +108,14 @@ func (e *LivekitCompositor) initMicrophone(self *gst.Bin) error {
 }
 
 func (e *LivekitCompositor) cleanupMicrophone(self *gst.Bin) {
+	if e.LivekitCompositorMicrophone == nil {
+		return
+	}
+
+	if self.GetCurrentState() == gst.StatePlaying {
+		return
+	}
+
 	sinks, err := e.LivekitCompositorMicrophone.AudioMixer.GetSinkPads()
 	if err != nil {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to get sink pads while handling pad-removed signal: %v", err))

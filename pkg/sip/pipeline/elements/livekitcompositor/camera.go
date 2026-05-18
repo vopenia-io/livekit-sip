@@ -277,6 +277,10 @@ func (e *LivekitCompositor) cleanupCamera(self *gst.Bin) {
 		return
 	}
 
+	if self.GetCurrentState() == gst.StatePlaying {
+		return
+	}
+
 	sinks, err := e.LivekitCompositorCamera.Compositor.GetSinkPads()
 	if err != nil {
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to get sink pads while handling pad-removed signal: %v", err))
