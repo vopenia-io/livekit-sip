@@ -1302,7 +1302,7 @@ func (c *inboundCall) pinPrompt(ctx context.Context, trunkID string) (disp CallD
 				// End of the pin
 				noPin = pin == ""
 
-				c.log().Infow("Checking Pin for SIP call", "pin", pin, "noPin", noPin)
+				c.log().Debugw("Checking Pin for SIP call", "pin", pin, "noPin", noPin)
 				disp = c.s.handler.DispatchCall(ctx, &CallInfo{
 					TrunkID: trunkID,
 					Call:    c.call,
@@ -1601,7 +1601,6 @@ func (c *inboundCall) handleDTMF(tone dtmf.Event) {
 	// 	}, lksdk.WithDataPublishReliable(true))
 	// 	return
 	// }
-	c.log().Infow("Received DTMF tone", "digit", string(tone.Digit), "code", tone.Code)
 	// We should have enough buffer here.
 	select {
 	case c.dtmf <- tone:
