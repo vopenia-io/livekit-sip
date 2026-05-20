@@ -3,6 +3,7 @@ package livekitbin
 import (
 	"fmt"
 	"runtime"
+	"time"
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/livekit"
@@ -260,13 +261,26 @@ func (e *LivekitBin) OnTrackMuted(publication lksdk.TrackPublication, participan
 
 	ssrc := pub.TrackRemote().SSRC()
 
-	if _, err := e.RtpBin.Emit("clear-ssrc", uint32(pub.Source()), uint(ssrc)); err != nil {
-		self.Log(CAT, gst.LevelError, fmt.Sprintf("Error emitting clear-ssrc signal for track %s of participant %s: %v", pub.SID(), participant.SID(), err))
-		self.Error(fmt.Sprintf("Error emitting clear-ssrc signal for track %s of participant %s", pub.SID(), participant.SID()), err)
-		return
-	}
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		time.Sleep(2 * time.Second)
 
-	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Muted track %s(%s:%d) of participant %s", pub.Source(), pub.SID(), ssrc, participant.SID()))
+		e.mu.Lock()
+		defer e.mu.Unlock()
+
+		if !publication.IsMuted() {
+			return
+		}
+
+		if _, err := e.RtpBin.Emit("clear-ssrc", uint32(pub.Source()), uint(ssrc)); err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error emitting clear-ssrc signal for track %s of participant %s: %v", pub.SID(), participant.SID(), err))
+			self.Error(fmt.Sprintf("Error emitting clear-ssrc signal for track %s of participant %s", pub.SID(), participant.SID()), err)
+			return
+		}
+
+		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Muted track %s(%s:%d) of participant %s", pub.Source(), pub.SID(), ssrc, participant.SID()))
+	}()
 }
 
 func (e *LivekitBin) OnTrackUnmuted(publication lksdk.TrackPublication, participant lksdk.Participant) {
