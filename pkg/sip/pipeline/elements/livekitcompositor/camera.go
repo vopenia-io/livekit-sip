@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync/atomic"
+	"time"
 	"weak"
 
 	"github.com/go-gst/go-glib/glib"
@@ -19,6 +21,8 @@ import (
 var muteIconPNG []byte
 
 type LivekitCompositorCamera struct {
+	ticker *time.Ticker
+
 	Background       *gst.Element
 	BackgroundFilter *gst.Element
 
@@ -27,7 +31,8 @@ type LivekitCompositorCamera struct {
 	Filter     *gst.Element
 
 	// PNG mute icon loaded once at init; composited each frame.
-	muteIcon *cairo.Surface
+	muteIcon     *cairo.Surface
+	overlayCache atomic.Pointer[overlayCache]
 }
 
 func (e *LivekitCompositor) initCamera(self *gst.Bin) error {
@@ -142,6 +147,23 @@ func (e *LivekitCompositor) initCamera(self *gst.Bin) error {
 	if !e.LivekitCompositorCamera.Filter.SyncStateWithParent() {
 		self.Log(CAT, gst.LevelWarning, "Failed to sync state of filter with parent")
 	}
+
+	e.LivekitCompositorCamera.ticker = time.NewTicker(100 * time.Millisecond)
+	ticker := e.LivekitCompositorCamera.ticker
+	go func() {
+		for {
+			select {
+			case <-e.ctx.Done():
+				return
+			case <-ticker.C:
+				e := eweak.Value()
+				if e == nil {
+					return
+				}
+				e.refreshOverlayCache()
+			}
+		}
+	}()
 
 	return nil
 }
@@ -400,6 +422,8 @@ func (e *LivekitCompositor) cleanupCamera(self *gst.Bin) {
 			self.Log(CAT, gst.LevelWarning, "Failed to remove ghost pad for camera source from bin during cleanup")
 		}
 	}
+
+	e.LivekitCompositorCamera.ticker.Stop()
 
 	e.LivekitCompositorCamera = nil
 	self.Log(CAT, gst.LevelInfo, "Cleaned up camera compositor")

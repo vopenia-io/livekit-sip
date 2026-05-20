@@ -5,12 +5,43 @@ import (
 	"hash/fnv"
 	"math"
 	"os"
+	"time"
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/livekit"
 	"github.com/vopenia-io/go-pangocairo/cairo"
 	"github.com/vopenia-io/go-pangocairo/pango"
 )
+
+type overlayCache struct {
+	infos    []participantOverlayInfo
+	vW       int
+	vH       int
+	nTracks  int
+	muteIcon *cairo.Surface
+}
+
+type participantOverlayInfo struct {
+	name       string
+	muted      bool
+	noCamera   bool
+	audioLevel float64
+}
+
+func (e *LivekitCompositor) refreshOverlayCache() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	cache := &overlayCache{
+		infos:    e.collectParticipantOverlayInfo(),
+		vW:       int(e.videoWidth),
+		vH:       int(e.videoHeight),
+		nTracks:  len(e.currentLayout),
+		muteIcon: e.LivekitCompositorCamera.muteIcon,
+	}
+
+	e.LivekitCompositorCamera.overlayCache.Store(cache)
+}
 
 // AvatarColor returns a deterministic #RRGGBB hex color for the given name.
 // Saturation and lightness are fixed so the result always looks decent.
@@ -66,15 +97,6 @@ func loadEmbeddedPNG(data []byte) (*cairo.Surface, error) {
 	return cairo.NewSurfaceFromPNG(f.Name())
 }
 
-// participantOverlayInfo is the per-tile state the draw callback needs.
-// All fields are derived from e.participants / e.tracks under e.mu.
-type participantOverlayInfo struct {
-	name       string
-	muted      bool
-	noCamera   bool
-	audioLevel float64
-}
-
 func (e *LivekitCompositor) collectParticipantOverlayInfo() []participantOverlayInfo {
 	out := make([]participantOverlayInfo, len(e.currentLayout))
 	for i, sid := range e.currentLayout {
@@ -101,13 +123,21 @@ func (e *LivekitCompositor) collectParticipantOverlayInfo() []participantOverlay
 }
 
 func (e *LivekitCompositor) cameraOverlayDrawCallback(self *gst.Bin, overlay *gst.Element, cr *cairo.Context, timestamp gst.ClockTime) {
-	e.mu.Lock()
-	infos := e.collectParticipantOverlayInfo()
-	vW := int(e.videoWidth)
-	vH := int(e.videoHeight)
-	nTracks := len(e.currentLayout)
-	muteIcon := e.LivekitCompositorCamera.muteIcon
-	e.mu.Unlock()
+	now := time.Now()
+	defer func() {
+		elapsed := time.Since(now)
+		fmt.Printf("Overlay draw callback took %v\n", elapsed)
+	}()
+
+	cache := e.LivekitCompositorCamera.overlayCache.Load()
+	if cache == nil {
+		return
+	}
+	infos := cache.infos
+	vW := cache.vW
+	vH := cache.vH
+	nTracks := cache.nTracks
+	muteIcon := cache.muteIcon
 
 	if nTracks == 0 {
 		return

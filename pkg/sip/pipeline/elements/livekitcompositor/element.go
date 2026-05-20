@@ -1,6 +1,7 @@
 package livekitcompositor
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"weak"
@@ -26,7 +27,9 @@ func init() {
 }
 
 type LivekitCompositor struct {
-	mu sync.Mutex
+	mu     sync.Mutex
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	videoWidth     uint
 	videoHeight    uint
@@ -107,6 +110,8 @@ func (e *LivekitCompositor) ClassInit(klass *glib.ObjectClass) {
 }
 
 func (e *LivekitCompositor) InstanceInit(instance *glib.Object) {
+	e.ctx, e.cancel = context.WithCancel(context.Background())
+
 	e.participants = make(map[string]livekittracks.ParticipantInfo)
 	for i := 0; i < NbTracks; i++ {
 		e.tracks[i] = make(map[string]livekittracks.TrackSourceInfo)
@@ -321,6 +326,8 @@ func (e *LivekitCompositor) releaseSinkPad(self *gst.Bin, gpad *gst.GhostPad) {
 func (e *LivekitCompositor) Finalize(instance *glib.Object) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+
+	e.cancel()
 
 	e.participants = nil
 	for i := 0; i < NbTracks; i++ {
