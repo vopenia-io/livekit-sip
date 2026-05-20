@@ -5,7 +5,6 @@ import (
 	"hash/fnv"
 	"math"
 	"os"
-	"time"
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/livekit"
@@ -123,12 +122,6 @@ func (e *LivekitCompositor) collectParticipantOverlayInfo() []participantOverlay
 }
 
 func (e *LivekitCompositor) cameraOverlayDrawCallback(self *gst.Bin, overlay *gst.Element, cr *cairo.Context, timestamp gst.ClockTime) {
-	now := time.Now()
-	defer func() {
-		elapsed := time.Since(now)
-		fmt.Printf("Overlay draw callback took %v\n", elapsed)
-	}()
-
 	cache := e.LivekitCompositorCamera.overlayCache.Load()
 	if cache == nil {
 		return
