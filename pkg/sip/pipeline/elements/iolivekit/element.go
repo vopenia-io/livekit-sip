@@ -142,6 +142,22 @@ func (e *IoManagerLivekit) ClassInit(klass *glib.ObjectClass) {
 
 	gst.SignalNew(
 		class.Type(),
+		"participant-join",
+		gst.SignalRunLast,
+		glib.TYPE_NONE,
+		gst.TypeStructure, // livekittracks.ParticipantInfo
+	)
+
+	gst.SignalNew(
+		class.Type(),
+		"participant-left",
+		gst.SignalRunLast,
+		glib.TYPE_NONE,
+		gst.TypeStructure, // livekittracks.ParticipantInfo
+	)
+
+	gst.SignalNew(
+		class.Type(),
 		"has-screenshare",
 		gst.SignalRunLast,
 		glib.TYPE_NONE,
@@ -241,6 +257,36 @@ func (e *IoManagerLivekit) Constructed(instance *glib.Object) {
 	}); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to connect to active-speakers-changed signal: %v", err))
 		self.Error("Failed to connect to active-speakers-changed signal", err)
+		return
+	}
+
+	if _, err := self.Connect("participant-join", func(instance *gst.Element, structure *gst.Structure) {
+		e := eweak.Value()
+		if e != nil && e.Compositor != nil {
+			if _, err := e.Compositor.Emit("participant-join", structure); err != nil {
+				self := gst.ToGstBin(instance)
+				self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to forward participant-join signal from SIP IO element to compositor: %v", err))
+				self.Error("Failed to forward participant-join signal from SIP IO element to compositor", err)
+			}
+		}
+	}); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to connect to participant-join signal: %v", err))
+		self.Error("Failed to connect to participant-join signal", err)
+		return
+	}
+
+	if _, err := self.Connect("participant-left", func(instance *gst.Element, structure *gst.Structure) {
+		e := eweak.Value()
+		if e != nil && e.Compositor != nil {
+			if _, err := e.Compositor.Emit("participant-left", structure); err != nil {
+				self := gst.ToGstBin(instance)
+				self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to forward participant-left signal from SIP IO element to compositor: %v", err))
+				self.Error("Failed to forward participant-left signal from SIP IO element to compositor", err)
+			}
+		}
+	}); err != nil {
+		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to connect to participant-left signal: %v", err))
+		self.Error("Failed to connect to participant-left signal", err)
 		return
 	}
 
