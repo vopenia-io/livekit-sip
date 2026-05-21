@@ -157,7 +157,6 @@ func (e *LivekitCompositor) cameraOverlayDrawCallback(self *gst.Bin, overlay *gs
 	vW := cache.vW
 	vH := cache.vH
 	nTracks := cache.nTracks
-	muteIcon := muteIconSurface
 
 	if nTracks == 0 {
 		return
@@ -264,16 +263,13 @@ func (e *LivekitCompositor) cameraOverlayDrawCallback(self *gst.Bin, overlay *gs
 
 	drawMuteIcon := func(cx, cy float64) {
 		const borderRadius = 4.0
-		if muteIcon == nil {
-			return
-		}
-		iw := float64(muteIcon.GetWidth())
-		ih := float64(muteIcon.GetHeight())
+		iw := float64(muteIconSurface.GetWidth())
+		ih := float64(muteIconSurface.GetHeight())
 		cr.Save()
 		cr.SetSourceRGBA(0.84082, 0.13257, 0.13586, 1.0)
 		pathRoundedRect(cx-iw/2-muteIconBgPad, cy-ih/2-muteIconBgPad, iw+2*muteIconBgPad, ih+2*muteIconBgPad, borderRadius)
 		cr.Fill()
-		cr.SetSourceSurface(muteIcon, cx-iw/2, cy-ih/2)
+		cr.SetSourceSurface(muteIconSurface, cx-iw/2, cy-ih/2)
 		cr.Paint()
 		cr.Restore()
 	}

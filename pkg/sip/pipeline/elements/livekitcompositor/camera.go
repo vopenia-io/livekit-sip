@@ -27,8 +27,6 @@ type LivekitCompositorCamera struct {
 	Overlay    *gst.Element
 	Filter     *gst.Element
 
-	// PNG mute icon loaded once at init; composited each frame.
-	muteIcon     *cairo.Surface
 	overlayCache atomic.Pointer[overlayCache]
 }
 
