@@ -191,17 +191,15 @@ func (e *LivekitCompositor) cameraOverlayDrawCallback(self *gst.Bin, overlay *gs
 	// 1. Mask everything outside the rounded tile interiors with black,
 	// so the underlying compositor video is only visible inside the rounded
 	// rects. One even-odd fill: outer frame rect XOR'd against N tile holes.
-	func() {
-		cr.Save()
-		defer cr.Restore()
-		cr.SetFillRule(cairo.FILL_RULE_EVEN_ODD)
-		cr.SetSourceRGBA(0.17603, 0.17468, 0.26758, 1.0)
-		cr.Rectangle(0, 0, videoW, videoH)
-		for idx := range infos {
-			pathParticipantRect(idx)
-		}
-		cr.Fill()
-	}()
+	cr.Save()
+	cr.SetFillRule(cairo.FILL_RULE_EVEN_ODD)
+	cr.SetSourceRGBA(0.085327, 0.084778, 0.11987, 1.0)
+	cr.Rectangle(0, 0, videoW, videoH)
+	for idx := range infos {
+		pathParticipantRect(idx)
+	}
+	cr.Fill()
+	cr.Restore()
 
 	// 2. Per-tile decoration.
 	drawAvatar := func(cx, cy, radius float64, name, initial string) {
