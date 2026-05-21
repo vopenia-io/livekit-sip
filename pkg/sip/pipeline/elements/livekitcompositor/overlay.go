@@ -1,23 +1,70 @@
 package livekitcompositor
 
 import (
+	"embed"
 	"fmt"
 	"hash/fnv"
 	"math"
-	"os"
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/livekit"
+	"github.com/livekit/sip/res"
 	"github.com/vopenia-io/go-pangocairo/cairo"
 	"github.com/vopenia-io/go-pangocairo/pango"
+	"golang.org/x/sys/unix"
 )
 
+//go:embed assets/mute-icon.png
+var assets embed.FS
+
+const (
+	muteIconSize    = 24.0
+	muteIconBgPad   = 4.0
+	muteIconBoxSize = muteIconSize + 2*muteIconBgPad // outer red rounded-rect size
+)
+
+var muteIconSurface *cairo.Surface
+
+func init() {
+	data, err := assets.ReadFile("assets/mute-icon.png")
+	if err != nil {
+		panic(fmt.Sprintf("Failed to read embedded mute icon: %v", err))
+	}
+
+	fd, err := res.MemfdFromBytes("assets/mute-icon.png", data)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to create memfd for mute icon: %v", err))
+	}
+	defer unix.Close(fd)
+
+	surface, err := cairo.NewSurfaceFromPNG(fmt.Sprintf("/proc/self/fd/%d", fd))
+	if err != nil {
+		panic(fmt.Sprintf("Failed to create cairo surface for mute icon: %v", err))
+	}
+	surface, err = resizeSurface(surface, muteIconSize, muteIconSize)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to resize mute icon surface: %v", err))
+	}
+	muteIconSurface = surface
+}
+
+func resizeSurface(s *cairo.Surface, width, height int) (*cairo.Surface, error) {
+	if s == nil {
+		return nil, fmt.Errorf("cannot resize nil surface")
+	}
+	dst := cairo.CreateImageSurface(cairo.FORMAT_ARGB32, width, height)
+	cr := cairo.Create(dst)
+	cr.Scale(float64(width)/float64(s.GetWidth()), float64(height)/float64(s.GetHeight()))
+	cr.SetSourceSurface(s, 0, 0)
+	cr.Paint()
+	return dst, nil
+}
+
 type overlayCache struct {
-	infos    []participantOverlayInfo
-	vW       int
-	vH       int
-	nTracks  int
-	muteIcon *cairo.Surface
+	infos   []participantOverlayInfo
+	vW      int
+	vH      int
+	nTracks int
 }
 
 type participantOverlayInfo struct {
@@ -32,11 +79,10 @@ func (e *LivekitCompositor) refreshOverlayCache() {
 	defer e.mu.Unlock()
 
 	cache := &overlayCache{
-		infos:    e.collectParticipantOverlayInfo(),
-		vW:       int(e.videoWidth),
-		vH:       int(e.videoHeight),
-		nTracks:  len(e.currentLayout),
-		muteIcon: e.LivekitCompositorCamera.muteIcon,
+		infos:   e.collectParticipantOverlayInfo(),
+		vW:      int(e.videoWidth),
+		vH:      int(e.videoHeight),
+		nTracks: len(e.currentLayout),
 	}
 
 	e.LivekitCompositorCamera.overlayCache.Store(cache)
@@ -44,13 +90,13 @@ func (e *LivekitCompositor) refreshOverlayCache() {
 
 // AvatarColor returns a deterministic #RRGGBB hex color for the given name.
 // Saturation and lightness are fixed so the result always looks decent.
-func AvatarColor(name string) string {
+func AvatarColor(name string) (uint8, uint8, uint8) {
 	h := fnv.New32a()
 	h.Write([]byte(name))
 	hue := float64(h.Sum32() % 360)
 
 	r, g, b := hslToRGB(hue, 0.65, 0.50) // tweak S/L to taste
-	return fmt.Sprintf("#%02X%02X%02X", r, g, b)
+	return r, g, b
 }
 
 // hslToRGB: h in [0,360), s and l in [0,1]. Returns 0–255 RGB.
@@ -75,25 +121,6 @@ func hslToRGB(h, s, l float64) (uint8, uint8, uint8) {
 		r, g, b = c, 0, x
 	}
 	return uint8((r + m) * 255), uint8((g + m) * 255), uint8((b + m) * 255)
-}
-
-// loadEmbeddedPNG decodes an embedded PNG into a cairo image surface by way
-// of a temp file. The temp file is removed after cairo has finished decoding;
-// the surface owns its own pixel buffer.
-func loadEmbeddedPNG(data []byte) (*cairo.Surface, error) {
-	f, err := os.CreateTemp("", "livekit-overlay-*.png")
-	if err != nil {
-		return nil, err
-	}
-	defer os.Remove(f.Name())
-	if _, err := f.Write(data); err != nil {
-		f.Close()
-		return nil, err
-	}
-	if err := f.Close(); err != nil {
-		return nil, err
-	}
-	return cairo.NewSurfaceFromPNG(f.Name())
 }
 
 func (e *LivekitCompositor) collectParticipantOverlayInfo() []participantOverlayInfo {
@@ -130,7 +157,7 @@ func (e *LivekitCompositor) cameraOverlayDrawCallback(self *gst.Bin, overlay *gs
 	vW := cache.vW
 	vH := cache.vH
 	nTracks := cache.nTracks
-	muteIcon := cache.muteIcon
+	muteIcon := muteIconSurface
 
 	if nTracks == 0 {
 		return
@@ -154,7 +181,7 @@ func (e *LivekitCompositor) cameraOverlayDrawCallback(self *gst.Bin, overlay *gs
 	}
 
 	// pathParticipantRect: rounded rect that frames participant idx's tile.
-	const cornerRadius = 24.0
+	const cornerRadius = 8.0
 	pathParticipantRect := func(idx int) {
 		w, h, x, y := cameraComputeSize(vW, vH, idx, nTracks)
 		pathRoundedRect(float64(x), float64(y), float64(w), float64(h), cornerRadius)
@@ -167,7 +194,7 @@ func (e *LivekitCompositor) cameraOverlayDrawCallback(self *gst.Bin, overlay *gs
 		cr.Save()
 		defer cr.Restore()
 		cr.SetFillRule(cairo.FILL_RULE_EVEN_ODD)
-		cr.SetSourceRGBA(0, 0, 0, 1)
+		cr.SetSourceRGBA(0.17603, 0.17468, 0.26758, 1.0)
 		cr.Rectangle(0, 0, videoW, videoH)
 		for idx := range infos {
 			pathParticipantRect(idx)
@@ -178,8 +205,7 @@ func (e *LivekitCompositor) cameraOverlayDrawCallback(self *gst.Bin, overlay *gs
 	// 2. Per-tile decoration.
 	drawAvatar := func(cx, cy, radius float64, name, initial string) {
 		// Flat-filled disc, color derived from the participant name.
-		var rByte, gByte, bByte uint8
-		fmt.Sscanf(AvatarColor(name), "#%02X%02X%02X", &rByte, &gByte, &bByte)
+		rByte, gByte, bByte := AvatarColor(name)
 
 		cr.Save()
 		cr.SetSourceRGBA(float64(rByte)/255, float64(gByte)/255, float64(bByte)/255, 1.0)
@@ -203,36 +229,49 @@ func (e *LivekitCompositor) cameraOverlayDrawCallback(self *gst.Bin, overlay *gs
 		cr.Restore()
 	}
 
-	drawLabelPill := func(text string, x, y float64, fontPx int) {
+	drawLabelPill := func(text string, x, y float64) {
+		const height = muteIconBoxSize
+		const padX, padY = 10.0, 4.0
+		targetTextH := height - 2*padY
+
 		layout := pango.CairoCreateLayout(cr)
-		desc := pango.FontDescriptionFromString(fmt.Sprintf("Sans %d", fontPx))
+		desc := pango.FontDescriptionFromString("Sans")
+		// Measure at a reference size, then rescale so the layout's logical
+		// height equals targetTextH. SetFontDescription copies the desc, so
+		// we have to call it again after mutating the absolute size.
+		const refPx = 16.0
+		desc.SetAbsoluteSize(refPx * float64(pango.SCALE))
 		layout.SetFontDescription(desc)
 		layout.SetText(text, -1)
+		_, ph := layout.GetSize()
+		measuredH := float64(ph) / float64(pango.SCALE)
+		desc.SetAbsoluteSize(refPx * targetTextH / measuredH * float64(pango.SCALE))
+		layout.SetFontDescription(desc)
+
 		pw, ph := layout.GetSize()
 		w := float64(pw) / float64(pango.SCALE)
 		h := float64(ph) / float64(pango.SCALE)
 
-		const padX, padY = 10.0, 4.0
 		cr.Save()
 		cr.SetSourceRGBA(0, 0, 0, 0.55)
-		pathRoundedRect(x, y, w+2*padX, h+2*padY, 6)
+		pathRoundedRect(x, y, w+2*padX, height, 6)
 		cr.Fill()
 		cr.SetSourceRGBA(1, 1, 1, 1)
-		cr.MoveTo(x+padX, y+padY)
+		cr.MoveTo(x+padX, y+(height-h)/2)
 		pango.CairoShowLayout(cr, layout)
 		cr.Restore()
 	}
 
 	drawMuteIcon := func(cx, cy float64) {
+		const borderRadius = 4.0
 		if muteIcon == nil {
 			return
 		}
 		iw := float64(muteIcon.GetWidth())
 		ih := float64(muteIcon.GetHeight())
-		const bgPad = 8.0
 		cr.Save()
-		cr.SetSourceRGBA(0.8, 0.8, 0.8, 0.25)
-		pathRoundedRect(cx-iw/2-bgPad, cy-ih/2-bgPad, iw+2*bgPad, ih+2*bgPad, 8)
+		cr.SetSourceRGBA(0.84082, 0.13257, 0.13586, 1.0)
+		pathRoundedRect(cx-iw/2-muteIconBgPad, cy-ih/2-muteIconBgPad, iw+2*muteIconBgPad, ih+2*muteIconBgPad, borderRadius)
 		cr.Fill()
 		cr.SetSourceSurface(muteIcon, cx-iw/2, cy-ih/2)
 		cr.Paint()
@@ -246,6 +285,21 @@ func (e *LivekitCompositor) cameraOverlayDrawCallback(self *gst.Bin, overlay *gs
 		tw := float64(w)
 		th := float64(h)
 
+		// Camera-off: big avatar disc with bold initial.
+		if info.noCamera {
+			cr.Save()
+			cr.SetSourceRGBA(0.15613, 0.15466, 0.24084, 1.0)
+			pathRoundedRect(x, y, tw, th, cornerRadius)
+			cr.Fill()
+			cr.Restore()
+			r := math.Min(tw, th) * 0.28
+			initial := "?"
+			if len(info.name) > 0 {
+				initial = string([]rune(info.name)[0])
+			}
+			drawAvatar(x+tw/2, y+th/2, r, info.name, initial)
+		}
+
 		// Tile outline (drawn AFTER mask so the stroke straddles the
 		// boundary correctly — half over the black, half over the video).
 		cr.Save()
@@ -257,24 +311,20 @@ func (e *LivekitCompositor) cameraOverlayDrawCallback(self *gst.Bin, overlay *gs
 		cr.Stroke()
 		cr.Restore()
 
-		// Camera-off: big avatar disc with bold initial.
-		if info.noCamera {
-			r := math.Min(tw, th) * 0.28
-			initial := "?"
-			if len(info.name) > 0 {
-				initial = string([]rune(info.name)[0])
-			}
-			drawAvatar(x+tw/2, y+th/2-8, r, info.name, initial)
-		}
+		// Mute icon center; its drawn box spans muteIconBoxSize × muteIconBoxSize
+		// around that center, so its top-left lands at (iconLeft, iconTop).
+		const tileInset = 8.0
+		iconCenterX := x + tileInset + muteIconBoxSize/2
+		iconCenterY := y + th - tileInset - muteIconBoxSize/2
+		iconTop := iconCenterY - muteIconBoxSize/2
+		iconRight := iconCenterX + muteIconBoxSize/2
 
-		// Name pill, bottom-left of tile.
-		drawLabelPill(info.name, x+16, y+th-40, 16)
-
-		// Mute icon, top-right of tile (inset so it doesn't sit on the
-		// rounded corner).
+		pillX := x + tileInset
 		if info.muted {
-			drawMuteIcon(x+tw-40, y+th-40)
+			drawMuteIcon(iconCenterX, iconCenterY)
+			pillX = iconRight + 4 // small gap between icon box and pill
 		}
+		drawLabelPill(info.name, pillX, iconTop)
 	}
 
 	if status := cr.Status(); status != cairo.STATUS_SUCCESS {

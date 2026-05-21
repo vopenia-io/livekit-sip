@@ -17,9 +17,6 @@ import (
 	"github.com/vopenia-io/go-pangocairo/cairo"
 )
 
-//go:embed assets/mic-slash.png
-var muteIconPNG []byte
-
 type LivekitCompositorCamera struct {
 	ticker *time.Ticker
 
@@ -41,12 +38,6 @@ func (e *LivekitCompositor) initCamera(self *gst.Bin) error {
 	}
 
 	e.LivekitCompositorCamera = &LivekitCompositorCamera{}
-
-	if surf, err := loadEmbeddedPNG(muteIconPNG); err != nil {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Failed to load embedded mute icon: %v", err))
-	} else {
-		e.LivekitCompositorCamera.muteIcon = surf
-	}
 
 	eweak := weak.Make(e)
 	wself := glib.WeakRefInit(self)
