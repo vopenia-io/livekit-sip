@@ -18,7 +18,7 @@ import (
 var assets embed.FS
 
 const (
-	muteIconSize    = 24.0
+	muteIconSize    = 20.0
 	muteIconBgPad   = 4.0
 	muteIconBoxSize = muteIconSize + 2*muteIconBgPad // outer red rounded-rect size
 )
@@ -61,10 +61,11 @@ func resizeSurface(s *cairo.Surface, width, height int) (*cairo.Surface, error) 
 }
 
 type overlayCache struct {
-	infos   []participantOverlayInfo
-	vW      int
-	vH      int
-	nTracks int
+	infos            []participantOverlayInfo
+	vW               int
+	vH               int
+	nTracks          int
+	ParticipantCount int
 }
 
 type participantOverlayInfo struct {
@@ -79,10 +80,11 @@ func (e *LivekitCompositor) refreshOverlayCache() {
 	defer e.mu.Unlock()
 
 	cache := &overlayCache{
-		infos:   e.collectParticipantOverlayInfo(),
-		vW:      int(e.videoWidth),
-		vH:      int(e.videoHeight),
-		nTracks: len(e.currentLayout),
+		infos:            e.collectParticipantOverlayInfo(),
+		vW:               int(e.videoWidth),
+		vH:               int(e.videoHeight),
+		nTracks:          len(e.currentLayout),
+		ParticipantCount: len(e.participants),
 	}
 
 	e.LivekitCompositorCamera.overlayCache.Store(cache)
@@ -228,10 +230,14 @@ func (e *LivekitCompositor) cameraOverlayDrawCallback(self *gst.Bin, overlay *gs
 		cr.Restore()
 	}
 
-	drawLabelPill := func(text string, x, y float64) {
+	const labelPadX, labelPadY = 10.0, 4.0
+
+	// buildPillLayout sizes a pango layout so its logical height fits the
+	// pill's inner text area (muteIconBoxSize - 2*labelPadY). Returns the
+	// layout plus its measured text width and height.
+	buildPillLayout := func(text string) (*pango.Layout, float64, float64) {
 		const height = muteIconBoxSize
-		const padX, padY = 10.0, 4.0
-		targetTextH := height - 2*padY
+		targetTextH := height - 2*labelPadY
 
 		layout := pango.CairoCreateLayout(cr)
 		desc := pango.FontDescriptionFromString("Sans")
@@ -248,17 +254,26 @@ func (e *LivekitCompositor) cameraOverlayDrawCallback(self *gst.Bin, overlay *gs
 		layout.SetFontDescription(desc)
 
 		pw, ph := layout.GetSize()
-		w := float64(pw) / float64(pango.SCALE)
-		h := float64(ph) / float64(pango.SCALE)
+		return layout, float64(pw) / float64(pango.SCALE), float64(ph) / float64(pango.SCALE)
+	}
 
+	// drawPillAt renders the pre-measured layout into a dark rounded pill
+	// with top-left at (x, y).
+	drawPillAt := func(layout *pango.Layout, x, y, textW, textH float64) {
+		const height = muteIconBoxSize
 		cr.Save()
 		cr.SetSourceRGBA(0, 0, 0, 0.55)
-		pathRoundedRect(x, y, w+2*padX, height, 6)
+		pathRoundedRect(x, y, textW+2*labelPadX, height, 6)
 		cr.Fill()
 		cr.SetSourceRGBA(1, 1, 1, 1)
-		cr.MoveTo(x+padX, y+(height-h)/2)
+		cr.MoveTo(x+labelPadX, y+(height-textH)/2)
 		pango.CairoShowLayout(cr, layout)
 		cr.Restore()
+	}
+
+	drawLabelPill := func(text string, x, y float64) {
+		layout, w, h := buildPillLayout(text)
+		drawPillAt(layout, x, y, w, h)
 	}
 
 	drawMuteIcon := func(cx, cy float64) {
@@ -323,7 +338,19 @@ func (e *LivekitCompositor) cameraOverlayDrawCallback(self *gst.Bin, overlay *gs
 		drawLabelPill(info.name, pillX, iconTop)
 	}
 
+	// Overflow indicator: when more participants exist than displayed tiles,
+	// show a "+N more" pill in the bottom-right of the frame so users know
+	// there are off-screen participants (active-speaker rotation only shows
+	// up to 6 tiles).
+	if hidden := cache.ParticipantCount - nTracks; hidden > 0 {
+		text := fmt.Sprintf("+%d more", hidden)
+		layout, textW, textH := buildPillLayout(text)
+		const margin = 12.0
+		pillW := textW + 2*labelPadX
+		drawPillAt(layout, videoW-pillW-margin, videoH-muteIconBoxSize-margin, textW, textH)
+	}
+
 	if status := cr.Status(); status != cairo.STATUS_SUCCESS {
-		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("cairo context in error state after camera overlay draw: %v", int(status)))
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("cairo context in error state after camera overlay draw: %d(%v)", int(status), status))
 	}
 }
