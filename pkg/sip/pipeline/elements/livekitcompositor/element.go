@@ -10,7 +10,6 @@ import (
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitbin/livekittracks"
-	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitcompositor/patchbay"
 	"github.com/samber/lo"
 )
 
@@ -21,10 +20,6 @@ var CAT = gst.NewDebugCategory(
 )
 
 const NbTracks = int(livekit.TrackSource_SCREEN_SHARE_AUDIO) + 1
-
-func init() {
-	patchbay.CAT = CAT
-}
 
 type LivekitCompositor struct {
 	mu     sync.Mutex

@@ -304,6 +304,15 @@ func (sio *SipIo) onAvailableMedia(camera, microphone, screenshare, screenshareA
 	); err != nil {
 		sio.log.Errorw("Failed to set available media properties on LiveKit bin", err, "camera", camera, "microphone", microphone, "screenshare", screenshare, "screenshareAudio", screenshareAudio)
 	}
+
+	if err := errors.Join(
+		sio.pipeline.IOManager.LivekitController.SetProperty("microphone", microphone),
+		sio.pipeline.IOManager.LivekitController.SetProperty("camera", camera),
+		sio.pipeline.IOManager.LivekitController.SetProperty("screenshare", screenshare),
+		// sio.pipeline.IOManager.LivekitController.SetProperty("screenshare-audio", screenshareAudio),
+	); err != nil {
+		sio.log.Errorw("Failed to set available media properties on LiveKit controller", err, "camera", camera, "microphone", microphone, "screenshare", screenshare, "screenshareAudio", screenshareAudio)
+	}
 }
 
 // Link implements [GstChain].

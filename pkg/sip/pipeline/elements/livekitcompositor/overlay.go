@@ -2,6 +2,7 @@ package livekitcompositor
 
 import (
 	"embed"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"math"
@@ -18,9 +19,11 @@ import (
 var assets embed.FS
 
 const (
-	muteIconSize    = 20.0
-	muteIconBgPad   = 4.0
-	muteIconBoxSize = muteIconSize + 2*muteIconBgPad // outer red rounded-rect size
+	muteIconSize                 = 20.0
+	muteIconBgPad                = 4.0
+	muteIconBoxSize              = muteIconSize + 2*muteIconBgPad // outer red rounded-rect size
+	bgColorR, bgColorG, bgColorB = 0.085327, 0.084778, 0.11987
+	fgColorR, fgColorG, fgColorB = 0.84082, 0.13257, 0.13586
 )
 
 var muteIconSurface *cairo.Surface
@@ -150,10 +153,41 @@ func (e *LivekitCompositor) collectParticipantOverlayInfo() []participantOverlay
 	return out
 }
 
+func (e *LivekitCompositor) overlayNoTracks(self *gst.Bin, cr *cairo.Context) {
+	cr.Save()
+	cr.SetSourceRGBA(bgColorR, bgColorG, bgColorB, 1.0)
+	cr.Rectangle(0, 0, float64(e.videoWidth), float64(e.videoHeight))
+	cr.Fill()
+	cr.Restore()
+
+	layout := pango.CairoCreateLayout(cr)
+	desc := pango.FontDescriptionFromString("Sans Bold 36")
+	layout.SetFontDescription(desc)
+	layout.SetText("No video track", -1)
+	pw, ph := layout.GetSize()
+	w := float64(pw) / float64(pango.SCALE)
+	h := float64(ph) / float64(pango.SCALE)
+
+	cr.Save()
+	cr.SetSourceRGBA(1, 1, 1, 1)
+	cr.MoveTo(float64(e.videoWidth)/2-w/2, float64(e.videoHeight)/2-h/2)
+	pango.CairoShowLayout(cr, layout)
+	cr.Restore()
+
+	if status := cr.Status(); status != cairo.STATUS_SUCCESS {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("cairo context in error state after drawing no-tracks overlay: %d(%v)", int(status), status))
+	}
+}
+
 func (e *LivekitCompositor) cameraOverlayDrawCallback(self *gst.Bin, overlay *gst.Element, cr *cairo.Context, timestamp gst.ClockTime) {
 	cache := e.LivekitCompositorCamera.overlayCache.Load()
 	if cache == nil {
-		return
+		e.refreshOverlayCache()
+		cache = e.LivekitCompositorCamera.overlayCache.Load()
+		if cache == nil {
+			self.Log(CAT, gst.LevelError, "Overlay cache still nil after refresh")
+			self.Error("Internal error: overlay cache not available", errors.New("overlay cache not available"))
+		}
 	}
 	infos := cache.infos
 	vW := cache.vW
@@ -161,6 +195,7 @@ func (e *LivekitCompositor) cameraOverlayDrawCallback(self *gst.Bin, overlay *gs
 	nTracks := cache.nTracks
 
 	if nTracks == 0 {
+		e.overlayNoTracks(self, cr)
 		return
 	}
 
@@ -193,7 +228,7 @@ func (e *LivekitCompositor) cameraOverlayDrawCallback(self *gst.Bin, overlay *gs
 	// rects. One even-odd fill: outer frame rect XOR'd against N tile holes.
 	cr.Save()
 	cr.SetFillRule(cairo.FILL_RULE_EVEN_ODD)
-	cr.SetSourceRGBA(0.085327, 0.084778, 0.11987, 1.0)
+	cr.SetSourceRGBA(bgColorR, bgColorG, bgColorB, 1.0)
 	cr.Rectangle(0, 0, videoW, videoH)
 	for idx := range infos {
 		pathParticipantRect(idx)
@@ -297,7 +332,7 @@ func (e *LivekitCompositor) cameraOverlayDrawCallback(self *gst.Bin, overlay *gs
 		// Camera-off: big avatar disc with bold initial.
 		if info.noCamera {
 			cr.Save()
-			cr.SetSourceRGBA(0.15613, 0.15466, 0.24084, 1.0)
+			cr.SetSourceRGBA(fgColorR, fgColorG, fgColorB, 1.0)
 			pathRoundedRect(x, y, tw, th, cornerRadius)
 			cr.Fill()
 			cr.Restore()
