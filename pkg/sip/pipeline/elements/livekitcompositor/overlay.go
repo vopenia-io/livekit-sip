@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"math"
+	"strings"
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/livekit"
@@ -339,7 +340,7 @@ func (e *LivekitCompositor) cameraOverlayDrawCallback(self *gst.Bin, overlay *gs
 			r := math.Min(tw, th) * 0.28
 			initial := "?"
 			if len(info.name) > 0 {
-				initial = string([]rune(info.name)[0])
+				initial = strings.ToUpper(string([]rune(info.name)[0]))
 			}
 			drawAvatar(x+tw/2, y+th/2, r, info.name, initial)
 		}
