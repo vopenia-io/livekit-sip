@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"sync/atomic"
 	"time"
 
 	"github.com/frostbyte73/core"
@@ -38,8 +39,6 @@ type Pipeline struct {
 	bus       *gst.Bus
 	dtmfCh    chan int
 
-	onStats func(stats *CallStats)
-
 	dumpCH   chan bool
 	debugSrv *debug.Server
 
@@ -50,6 +49,8 @@ type Pipeline struct {
 	dumpDot               bool
 	dumpDir               string
 	publishCoders         config.PublishCodecConfig
+
+	stats atomic.Pointer[CallStats]
 
 	*SipIo
 	*WebrtcIo
@@ -67,10 +68,6 @@ type GstChain interface {
 
 func (p *Pipeline) Pipeline() *gst.Pipeline {
 	return p.pipeline
-}
-
-func (p *Pipeline) OnStats(fn func(stats *CallStats)) {
-	p.onStats = fn
 }
 
 func (p *Pipeline) SetState(state gst.State) error {
@@ -113,20 +110,31 @@ func (p *Pipeline) SetStateWait(state gst.State) error {
 	return nil
 }
 
-func (p *Pipeline) GetStats() {
+func (p *Pipeline) GetStats() (*CallStats, error) {
+	if p.Closed() {
+		return p.stats.Load(), nil
+	}
+	stats, err := p.getStats()
+	if err != nil {
+		return nil, err
+	}
+	return stats, nil
+}
+
+func (p *Pipeline) getStats() (*CallStats, error) {
 	structureVal, err := p.SipIo.SipBin.Emit("stats")
 	if err != nil {
 		p.Log.Warnw("Failed to emit stats signal", err)
-		return
+		return nil, err
 	}
 	if structureVal == nil {
-		return
+		return nil, fmt.Errorf("received nil stats structure")
 	}
 
 	structure, ok := structureVal.(*gst.Structure)
 	if !ok {
 		p.Log.Warnw("Failed to convert stats signal result to GstStructure", nil, "value", fmt.Sprintf("%T=%v", structureVal, structureVal))
-		return
+		return nil, fmt.Errorf("failed to convert stats signal result to GstStructure")
 	}
 
 	stats := &CallStats{}
@@ -180,9 +188,8 @@ func (p *Pipeline) GetStats() {
 	}
 
 	p.Log.Debugw("Received call stats update", "stats", stats)
-	if p.onStats != nil {
-		p.onStats(stats)
-	}
+	p.stats.Store(stats)
+	return stats, nil
 }
 
 var pid = os.Getpid()
@@ -195,7 +202,7 @@ func (p *Pipeline) Close() error {
 	p.closed.Break()
 	p.Log.Debugw("Closing pipeline")
 
-	p.GetStats()
+	p.getStats()
 
 	p.cancel()
 
