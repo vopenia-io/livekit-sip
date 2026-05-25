@@ -317,7 +317,13 @@ func (e *LivekitBin) updateActiveSpeakers(self *gst.Bin, p []lksdk.Participant) 
 	activeSpeakers := lo.Map(p, func(part lksdk.Participant, i int) string { return part.SID() })
 	activeSpeakers = lo.Uniq(activeSpeakers)
 
-	rp := e.room.GetRemoteParticipants()
+	rp := lo.Map(p, func(part lksdk.Participant, i int) *lksdk.RemoteParticipant {
+		return part.(*lksdk.RemoteParticipant)
+	})
+	rp = append(rp, e.room.GetRemoteParticipants()...)
+	rp = lo.UniqBy(rp, func(part *lksdk.RemoteParticipant) string {
+		return part.SID()
+	})
 	activeSpeakers = lo.Filter(activeSpeakers, func(sid string, i int) bool {
 		if !lo.ContainsBy(rp, func(part *lksdk.RemoteParticipant) bool {
 			return part.SID() == sid
@@ -336,11 +342,25 @@ func (e *LivekitBin) updateActiveSpeakers(self *gst.Bin, p []lksdk.Participant) 
 		activeSpeakers = activeSpeakers[:maxActive]
 	}
 
-	// if slices.Equal(e.activeSpeakers, activeSpeakers) {
-	// 	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Active speakers unchanged: %v", activeSpeakers))
-	// 	return
-	// }
+	if len(activeSpeakers) < maxActive {
+		for _, part := range rp {
+			if len(activeSpeakers) >= maxActive {
+				break
+			}
+			if lo.Contains(activeSpeakers, part.SID()) {
+				continue
+			}
+			activeSpeakers = append(activeSpeakers, part.SID())
+		}
+	}
+
 	e.activeSpeakers = activeSpeakers
+
+	p = lo.Filter(lo.Map(rp, func(part *lksdk.RemoteParticipant, _ int) lksdk.Participant {
+		return part
+	}), func(part lksdk.Participant, i int) bool {
+		return lo.Contains(e.activeSpeakers, part.SID())
+	})
 
 	self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Active speakers updated: %v", activeSpeakers))
 
