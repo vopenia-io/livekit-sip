@@ -75,7 +75,9 @@ type overlayCache struct {
 }
 
 type participantOverlayInfo struct {
+	sid        string
 	name       string
+	identity   string
 	muted      bool
 	noCamera   bool
 	audioLevel float64
@@ -140,8 +142,13 @@ func (e *LivekitCompositor) collectParticipantOverlayInfo() []participantOverlay
 	for i, sid := range e.currentLayout {
 		p := e.participants[sid]
 		name := p.Name
+		identity := p.Identity
 		if name == "" {
-			name = sid
+			if identity != "" {
+				name = identity
+			} else {
+				name = "Unknown"
+			}
 		}
 		_, hasMic := e.tracks[livekit.TrackSource_MICROPHONE][sid]
 		_, hasCam := e.tracks[livekit.TrackSource_CAMERA][sid]
@@ -151,10 +158,12 @@ func (e *LivekitCompositor) collectParticipantOverlayInfo() []participantOverlay
 		}
 		// fmt.Printf("Collecting overlay info for participant %s: name=%s, hasMic=%v, hasCam=%v, level=%.2f\n", sid, name, hasMic, hasCam, level)
 		out[i] = participantOverlayInfo{
+			sid:        sid,
 			name:       name,
 			muted:      !hasMic,
 			noCamera:   !hasCam,
 			audioLevel: level,
+			identity:   identity,
 		}
 	}
 	return out
