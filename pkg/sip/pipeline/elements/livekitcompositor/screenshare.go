@@ -133,10 +133,6 @@ func (e *LivekitCompositor) cleanupScreenshare(self *gst.Bin) {
 		return
 	}
 
-	if self.GetCurrentState() == gst.StatePlaying {
-		return
-	}
-
 	sinks, err := e.LivekitCompositorScreenshare.FallbackSwitch.GetSinkPads()
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to get sink pads from fallbackswitch: %v", err))

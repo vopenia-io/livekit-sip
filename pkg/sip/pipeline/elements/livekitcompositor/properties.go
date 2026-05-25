@@ -156,24 +156,7 @@ func (e *LivekitCompositor) SetProperty(instance *glib.Object, id uint, value *g
 			e.cleanupCamera(self)
 		}
 	case "screenshare":
-		gv, err := value.GoValue()
-		if err != nil {
-			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting screenshare property value: %v", err))
-			return
-		}
-		val, ok := gv.(bool)
-		if !ok {
-			self.Log(CAT, gst.LevelError, "Invalid type for screenshare property")
-			return
-		}
-		if val {
-			if err := e.initScreenshare(self); err != nil {
-				self.Log(CAT, gst.LevelError, fmt.Sprintf("Error initializing screenshare: %v", err))
-				return
-			}
-		} else {
-			e.cleanupScreenshare(self)
-		}
+		// unlike microphone and camera, screenshare is initialized and cleaned up on demand when sink pads are requested, so we don't need to do anything here
 	default:
 		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("Unknown property %s", param.Name()))
 	}
