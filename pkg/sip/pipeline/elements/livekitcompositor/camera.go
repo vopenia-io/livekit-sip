@@ -62,7 +62,7 @@ func (e *LivekitCompositor) initCamera(self *gst.Bin) error {
 	})
 
 	e.LivekitCompositorCamera.Filter, err = gst.NewElementWithProperties("capsfilter", map[string]interface{}{
-		"caps": gst.NewCapsFromString(fmt.Sprintf("video/x-raw, format=BGRx, width=%d, height=%d, framerate=%d/1", e.videoWidth, e.videoHeight, e.videoFramerate)),
+		"caps": gst.NewCapsFromString(fmt.Sprintf("video/x-raw, format=BGRx, colorimetry=sRGB, width=%d, height=%d, framerate=%d/1", e.videoWidth, e.videoHeight, e.videoFramerate)),
 	})
 	if err != nil {
 		return err
@@ -116,7 +116,9 @@ func (e *LivekitCompositor) initCamera(self *gst.Bin) error {
 				if e == nil {
 					return
 				}
+				e.mu.Lock()
 				e.refreshOverlayCache()
+				e.mu.Unlock()
 			}
 		}
 	}()
@@ -179,6 +181,8 @@ func (e *LivekitCompositor) requestNewCameraSinkPad(self *gst.Bin, templ *gst.Pa
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Created new camera sink pad %s", gpad.GetName()))
 
+	e.refreshOverlayCache()
+
 	return gpad.Pad
 }
 
@@ -209,6 +213,8 @@ func (e *LivekitCompositor) releaseCameraSinkPad(self *gst.Bin, gpad *gst.GhostP
 	}
 
 	self.Log(CAT, gst.LevelInfo, fmt.Sprintf("Released camera sink pad %s", gpad.GetName()))
+
+	e.refreshOverlayCache()
 
 	e.cleanupCamera(self)
 }
@@ -265,6 +271,8 @@ func (e *LivekitCompositor) applyCameraLayout(self *gst.Bin, layout []string) {
 		}
 
 		self.Log(CAT, gst.LevelDebug, fmt.Sprintf("Activated camera path for participant SID %s at layout position %d", participantSID, i))
+
+		e.refreshOverlayCache()
 	}
 }
 

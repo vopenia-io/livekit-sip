@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/frostbyte73/core"
+	"github.com/go-gst/go-gst/gst"
 	"github.com/icholy/digest"
 	"github.com/pkg/errors"
 
@@ -1277,10 +1278,14 @@ func (c *inboundCall) pinPrompt(ctx context.Context, trunkID string) (disp CallD
 	defer span.End()
 	c.log().Infow("Requesting Pin for SIP call")
 	const pinLimit = 16
-	c.playAudio(ctx, c.s.res.enterPinFd)
+	const pinCodeMsg = "Please enter your PIN followed by # (use * to delete)"
+
+	defer c.medias.HideMessage()
+	go c.playAudio(ctx, c.s.res.enterPinFd)
 	pin := ""
 	noPin := false
 	for {
+		c.medias.ShowMessage(fmt.Sprintf("%s\nEntered: %s", pinCodeMsg, strings.Repeat("*", len(pin))), gst.LevelInfo)
 		select {
 		case <-c.cc.Cancelled():
 			c.closeWithCancelled()
@@ -1297,6 +1302,12 @@ func (c *inboundCall) pinPrompt(ctx context.Context, trunkID string) (disp CallD
 			}
 			if b.Digit == 0 {
 				continue // unrecognized
+			}
+			if b.Digit == '*' {
+				if len(pin) > 0 {
+					pin = pin[:len(pin)-1]
+				}
+				continue
 			}
 			if b.Digit == '#' {
 				// End of the pin
@@ -1321,16 +1332,19 @@ func (c *inboundCall) pinPrompt(ctx context.Context, trunkID string) (disp CallD
 				}
 				if disp.Result != DispatchAccept || disp.Room.RoomName == "" {
 					c.log().Infow("Rejecting call", "pin", pin, "noPin", noPin)
+					c.medias.ShowMessage("Invalid PIN", gst.LevelError)
 					c.playAudio(ctx, c.s.res.wrongPinFd)
 					c.close(false, callDropped, "wrong-pin")
 					return disp, false, psrpc.NewErrorf(psrpc.PermissionDenied, "wrong pin")
 				}
+				c.medias.ShowMessage("PIN accepted, joining the call...", gst.LevelInfo)
 				c.playAudio(ctx, c.s.res.roomJoinFd)
 				return disp, true, nil
 			}
 			// Gather pin numbers
 			pin += string(b.Digit)
 			if len(pin) > pinLimit {
+				c.medias.ShowMessage("Invalid PIN", gst.LevelError)
 				c.playAudio(ctx, c.s.res.wrongPinFd)
 				c.close(false, callDropped, "wrong-pin")
 				return disp, false, psrpc.NewErrorf(psrpc.PermissionDenied, "wrong pin")

@@ -41,6 +41,8 @@ type LivekitCompositor struct {
 	tracks       [NbTracks]map[string]livekittracks.TrackSourceInfo // key is participant SID, indexed by livekit.TrackSource
 
 	currentLayout []string
+
+	overlayMessage overlayMessage
 }
 
 func (e *LivekitCompositor) New() glib.GoObjectSubclass {

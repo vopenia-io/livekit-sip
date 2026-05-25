@@ -13,6 +13,7 @@ import (
 	"github.com/livekit/media-sdk/dtmf"
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/sip/pkg/sip/pipeline"
+	"github.com/livekit/sip/pkg/sip/pipeline/elements/livekitcompositor"
 	"github.com/livekit/sipgo/sip"
 )
 
@@ -325,4 +326,16 @@ var dtmfMap = map[int]byte{
 
 func (o *MediaOrchestrator) DtmfHandler(h func(ev dtmf.Event)) {
 	o.dtmfHandler = h
+}
+
+func (o *MediaOrchestrator) ShowMessage(message string, level gst.DebugLevel) {
+	if o.pipeline != nil {
+		o.pipeline.SetContext(livekitcompositor.NewContextOverlayMessage(message, level, true))
+	}
+}
+
+func (o *MediaOrchestrator) HideMessage() {
+	if o.pipeline != nil {
+		o.pipeline.SetContext(livekitcompositor.NewContextOverlayMessage("", 0, false))
+	}
 }

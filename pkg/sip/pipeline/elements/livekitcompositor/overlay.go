@@ -7,6 +7,7 @@ import (
 	"hash/fnv"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/livekit"
@@ -70,6 +71,7 @@ type overlayCache struct {
 	vH               int
 	nTracks          int
 	ParticipantCount int
+	message          overlayMessage
 }
 
 type participantOverlayInfo struct {
@@ -79,16 +81,20 @@ type participantOverlayInfo struct {
 	audioLevel float64
 }
 
+// should be called with e.mu held
 func (e *LivekitCompositor) refreshOverlayCache() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
+	if e.LivekitCompositorCamera == nil {
+		return
+	}
+	e.LivekitCompositorCamera.ticker.Stop()
+	defer e.LivekitCompositorCamera.ticker.Reset(100 * time.Millisecond)
 	cache := &overlayCache{
 		infos:            e.collectParticipantOverlayInfo(),
 		vW:               int(e.videoWidth),
 		vH:               int(e.videoHeight),
 		nTracks:          len(e.currentLayout),
 		ParticipantCount: len(e.participants),
+		message:          e.overlayMessage,
 	}
 
 	e.LivekitCompositorCamera.overlayCache.Store(cache)
@@ -154,7 +160,7 @@ func (e *LivekitCompositor) collectParticipantOverlayInfo() []participantOverlay
 	return out
 }
 
-func (e *LivekitCompositor) overlayNoTracks(self *gst.Bin, cr *cairo.Context) {
+func (e *LivekitCompositor) drawOverlayNoTracks(self *gst.Bin, cr *cairo.Context) {
 	cr.Save()
 	cr.SetSourceRGBA(bgColorR, bgColorG, bgColorB, 1.0)
 	cr.Rectangle(0, 0, float64(e.videoWidth), float64(e.videoHeight))
@@ -180,23 +186,57 @@ func (e *LivekitCompositor) overlayNoTracks(self *gst.Bin, cr *cairo.Context) {
 	}
 }
 
+func (e *LivekitCompositor) drawOverlayMessage(self *gst.Bin, cr *cairo.Context, cache *overlayCache) {
+	cr.Save()
+	cr.SetSourceRGBA(bgColorR, bgColorG, bgColorB, 1.0)
+	cr.Rectangle(0, 0, float64(e.videoWidth), float64(e.videoHeight))
+	cr.Fill()
+	cr.Restore()
+
+	layout := pango.CairoCreateLayout(cr)
+	desc := pango.FontDescriptionFromString("Sans Bold 36")
+	layout.SetFontDescription(desc)
+	layout.SetText(cache.message.Message, -1)
+	pw, ph := layout.GetSize()
+	w := float64(pw) / float64(pango.SCALE)
+	h := float64(ph) / float64(pango.SCALE)
+
+	cr.Save()
+	cr.SetSourceRGBA(1, 1, 1, 1)
+	cr.MoveTo(float64(e.videoWidth)/2-w/2, float64(e.videoHeight)/2-h/2)
+	pango.CairoShowLayout(cr, layout)
+	cr.Restore()
+
+	if status := cr.Status(); status != cairo.STATUS_SUCCESS {
+		self.Log(CAT, gst.LevelWarning, fmt.Sprintf("cairo context in error state after drawing no-tracks overlay: %d(%v)", int(status), status))
+	}
+}
+
 func (e *LivekitCompositor) cameraOverlayDrawCallback(self *gst.Bin, overlay *gst.Element, cr *cairo.Context, timestamp gst.ClockTime) {
 	cache := e.LivekitCompositorCamera.overlayCache.Load()
 	if cache == nil {
+		e.mu.Lock()
 		e.refreshOverlayCache()
 		cache = e.LivekitCompositorCamera.overlayCache.Load()
+		e.mu.Unlock()
 		if cache == nil {
 			self.Log(CAT, gst.LevelError, "Overlay cache still nil after refresh")
 			self.Error("Internal error: overlay cache not available", errors.New("overlay cache not available"))
 		}
 	}
+
+	if cache.message.Show {
+		e.drawOverlayMessage(self, cr, cache)
+		return
+	}
+
 	infos := cache.infos
 	vW := cache.vW
 	vH := cache.vH
 	nTracks := cache.nTracks
 
 	if nTracks == 0 {
-		e.overlayNoTracks(self, cr)
+		e.drawOverlayNoTracks(self, cr)
 		return
 	}
 
@@ -333,7 +373,7 @@ func (e *LivekitCompositor) cameraOverlayDrawCallback(self *gst.Bin, overlay *gs
 		// Camera-off: big avatar disc with bold initial.
 		if info.noCamera {
 			cr.Save()
-			cr.SetSourceRGBA(fgColorR, fgColorG, fgColorB, 1.0)
+			cr.SetSourceRGBA(0.15613, 0.15466, 0.24084, 1.0)
 			pathRoundedRect(x, y, tw, th, cornerRadius)
 			cr.Fill()
 			cr.Restore()
