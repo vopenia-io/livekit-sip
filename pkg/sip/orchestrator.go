@@ -105,6 +105,7 @@ func (o *MediaOrchestrator) init() error {
 		VideoWidth:            o.opts.VideoWidth,
 		VideoHeight:           o.opts.VideoHeight,
 		Framerate:             o.opts.Framerate,
+		Lang:                  o.opts.Lang,
 		MaxActiveParticipants: o.opts.MaxActiveParticipants,
 		Gst:                   o.opts.Gst,
 		PublishCodecs:         o.opts.PublishCodecs,

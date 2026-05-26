@@ -29,6 +29,7 @@ type LivekitCompositor struct {
 	videoWidth     uint
 	videoHeight    uint
 	videoFramerate uint
+	lang           string
 	microphone     bool
 	camera         bool
 	screenshare    bool
@@ -116,6 +117,7 @@ func (e *LivekitCompositor) InstanceInit(instance *glib.Object) {
 	e.videoWidth = 1280
 	e.videoHeight = 720
 	e.videoFramerate = 24
+	e.lang = "en"
 }
 
 func (e *LivekitCompositor) Constructed(instance *glib.Object) {

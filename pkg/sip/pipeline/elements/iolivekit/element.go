@@ -27,6 +27,7 @@ type IoManagerLivekit struct {
 	videoWidth     uint
 	videoHeight    uint
 	videoFramerate uint
+	lang           string
 
 	AudioIn  map[string]*AudioInTranscode
 	AudioOut *AudioOutTranscode
@@ -115,6 +116,13 @@ var properties = []*glib.ParamSpec{
 		1,
 		500,
 		24,
+		glib.ParameterWritable|glib.ParameterConstructOnly,
+	),
+	glib.NewStringParam(
+		"lang",
+		"Language",
+		"Language code for localized overlay text (e.g. en, fr)",
+		nil,
 		glib.ParameterWritable|glib.ParameterConstructOnly,
 	),
 	glib.NewBoolParam(
@@ -219,6 +227,7 @@ func (e *IoManagerLivekit) InstanceInit(instance *glib.Object) {
 	e.videoWidth = 1280
 	e.videoHeight = 720
 	e.videoFramerate = 24
+	e.lang = "en"
 }
 
 func (e *IoManagerLivekit) Constructed(instance *glib.Object) {
@@ -231,6 +240,7 @@ func (e *IoManagerLivekit) Constructed(instance *glib.Object) {
 		"video-width":  e.videoWidth,
 		"video-height": e.videoHeight,
 		"framerate":    e.videoFramerate,
+		"lang":         e.lang,
 	})
 	if err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to create livekit_compositor element: %v", err))
@@ -389,6 +399,20 @@ func (e *IoManagerLivekit) SetProperty(instance *glib.Object, id uint, value *gl
 			return
 		}
 		e.videoFramerate = val
+	case "lang":
+		gv, err := value.GoValue()
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting lang property value: %v", err))
+			return
+		}
+		val, ok := gv.(string)
+		if !ok {
+			self.Log(CAT, gst.LevelError, "Invalid type for lang property")
+			return
+		}
+		if val != "" {
+			e.lang = val
+		}
 	case "microphone":
 		if err := e.Compositor.SetProperty("microphone", value); err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to set microphone property on compositor: %v", err))

@@ -42,6 +42,13 @@ var properties = []*glib.ParamSpec{
 		24,
 		glib.ParameterReadable|glib.ParameterWritable|glib.ParameterConstructOnly,
 	),
+	glib.NewStringParam(
+		"lang",
+		"Language",
+		"Language code for localized overlay text (e.g. en, fr)",
+		nil,
+		glib.ParameterReadable|glib.ParameterWritable|glib.ParameterConstructOnly,
+	),
 	glib.NewBoolParam(
 		"microphone",
 		"Microphone",
@@ -117,6 +124,20 @@ func (e *LivekitCompositor) SetProperty(instance *glib.Object, id uint, value *g
 			return
 		}
 		e.videoFramerate = val
+	case "lang":
+		gv, err := value.GoValue()
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting lang property value: %v", err))
+			return
+		}
+		val, ok := gv.(string)
+		if !ok {
+			self.Log(CAT, gst.LevelError, "Invalid type for lang property")
+			return
+		}
+		if val != "" {
+			e.lang = val
+		}
 	case "microphone":
 		gv, err := value.GoValue()
 		if err != nil {
@@ -193,6 +214,13 @@ func (e *LivekitCompositor) GetProperty(instance *glib.Object, id uint) *glib.Va
 		value, err := glib.GValue(e.videoHeight)
 		if err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting video-height property value: %v", err))
+			return nil
+		}
+		return value
+	case "lang":
+		value, err := glib.GValue(e.lang)
+		if err != nil {
+			self.Log(CAT, gst.LevelError, fmt.Sprintf("Error getting lang property value: %v", err))
 			return nil
 		}
 		return value

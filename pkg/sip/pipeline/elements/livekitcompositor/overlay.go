@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/livekit/protocol/livekit"
+	"github.com/livekit/sip/pkg/i18n"
 	"github.com/livekit/sip/res"
 	"github.com/vopenia-io/go-pangocairo/cairo"
 	"github.com/vopenia-io/go-pangocairo/pango"
@@ -179,7 +180,7 @@ func (e *LivekitCompositor) drawOverlayNoTracks(self *gst.Bin, cr *cairo.Context
 	layout := pango.CairoCreateLayout(cr)
 	desc := pango.FontDescriptionFromString("Sans Bold 36")
 	layout.SetFontDescription(desc)
-	layout.SetText("No video track", -1)
+	layout.SetText(i18n.Printer(e.lang).Sprintf("No video track"), -1)
 	pw, ph := layout.GetSize()
 	w := float64(pw) / float64(pango.SCALE)
 	h := float64(ph) / float64(pango.SCALE)

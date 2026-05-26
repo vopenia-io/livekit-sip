@@ -45,6 +45,7 @@ type Pipeline struct {
 	videoWidth            uint
 	videoHeight           uint
 	videoFramerate        uint
+	lang                  string
 	maxActiveParticipants int
 	dumpDot               bool
 	dumpDir               string
@@ -351,6 +352,7 @@ func New(ctx context.Context, log logger.Logger, sipOpt SipOpt, sipCallID string
 		videoWidth:            sipOpt.VideoWidth,
 		videoHeight:           sipOpt.VideoHeight,
 		videoFramerate:        sipOpt.Framerate,
+		lang:                  sipOpt.Lang,
 		maxActiveParticipants: sipOpt.MaxActiveParticipants,
 		sipCallID:             sipCallID,
 		dumpDot:               sipOpt.Gst.DumpDot,
