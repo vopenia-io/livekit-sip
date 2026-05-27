@@ -1398,11 +1398,13 @@ func (c *inboundCall) close(error bool, status CallStatus, reason string) {
 	}
 
 	log.Debugw("Closing media orchestrator")
-	if err := c.medias.Close(); err != nil {
-		log.Errorw("Cannot close media orchestrator", err)
+	if c.medias != nil {
+		if err := c.medias.Close(); err != nil {
+			log.Errorw("Cannot close media orchestrator", err)
+		}
+		c.medias = nil
+		log.Debugw("Media orchestrator closed")
 	}
-	c.medias = nil
-	log.Debugw("Media orchestrator closed")
 	c.cc.CloseWithStatus(sipCode, sipStatus)
 	if c.callDur != nil {
 		c.callDur()
