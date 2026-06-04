@@ -156,9 +156,9 @@ func (t *SipTrack) parseDirection(media *gstsdp.Media) {
 			t.send = false
 		}
 	} else if media.HasAttribute("sendonly") {
-		t.recv = false
-	} else if media.HasAttribute("recvonly") {
 		t.send = false
+	} else if media.HasAttribute("recvonly") {
+		t.recv = false
 	} else if media.HasAttribute("inactive") {
 		t.recv = false
 		t.send = false
