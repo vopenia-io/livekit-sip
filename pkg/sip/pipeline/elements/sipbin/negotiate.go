@@ -146,7 +146,7 @@ func (e *SipBin) handleOfferSdp(self *gst.Bin, offerData []byte) ([]byte, error)
 		medias[i] = nil
 	}
 
-	if err := e.bfcpMediaAddStreams(medias); err != nil {
+	if err := e.bfcpMediaAddStreams(self, medias); err != nil {
 		return nil, fmt.Errorf("failed to add BFCP streams: %w", err)
 	}
 
@@ -390,7 +390,7 @@ func (e *SipBin) buildOfferSdp(self *gst.Bin) ([]byte, error) {
 		e.Medias = append(e.Medias, bfcpMedia)
 	}
 
-	if err := e.bfcpMediaAddStreams(e.Medias); err != nil {
+	if err := e.bfcpMediaAddStreams(self, e.Medias); err != nil {
 		self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add BFCP streams to offer: %v", err))
 		return nil, fmt.Errorf("failed to add BFCP streams to offer: %w", err)
 	}
@@ -441,9 +441,10 @@ func (e *SipBin) makeSdpSession() (*gstsdp.Message, error) {
 	if ret := session.SetVersion("0"); ret != gstsdp.SDPResultOk {
 		return nil, fmt.Errorf("failed to set version on answer: %v", ret)
 	}
-	if ret := session.SetOrigin("-", e.sessionID, "1", "IN", lo.Ternary(e.ip.To4() != nil, "IP4", "IP6"), e.ip.String()); ret != gstsdp.SDPResultOk {
+	if ret := session.SetOrigin("-", e.sessionID, strconv.FormatUint(e.sessionVersion, 10), "IN", lo.Ternary(e.ip.To4() != nil, "IP4", "IP6"), e.ip.String()); ret != gstsdp.SDPResultOk {
 		return nil, fmt.Errorf("failed to set origin on answer: %v", ret)
 	}
+	e.sessionVersion += 1
 	if ret := session.SetSessionName("LiveKit SIP"); ret != gstsdp.SDPResultOk {
 		return nil, fmt.Errorf("failed to set session name on answer: %v", ret)
 	}
@@ -563,7 +564,7 @@ func (e *SipBin) earlyReinvite(self *gst.Bin) {
 
 		e.Medias = append(e.Medias, screenshareMedia)
 
-		if err := e.bfcpMediaAddStreams(e.Medias); err != nil {
+		if err := e.bfcpMediaAddStreams(self, e.Medias); err != nil {
 			self.Log(CAT, gst.LevelError, fmt.Sprintf("Failed to add BFCP streams to offer: %v", err))
 			return
 		}

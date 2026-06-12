@@ -41,8 +41,9 @@ type SipBin struct {
 
 	Bfcp *BfcpTrack
 
-	transaction   *SipTransaction
-	transactionID atomic.Uint64
+	transaction    *SipTransaction
+	transactionID  atomic.Uint64
+	sessionVersion uint64
 
 	wg sync.WaitGroup
 }
@@ -162,6 +163,7 @@ func (e *SipBin) InstanceInit(instance *glib.Object) {
 	}
 
 	e.sessionID = randID()
+	e.sessionVersion = 1
 
 	eweak := weak.Make(e)
 	wself := glib.WeakRefInit(self)
