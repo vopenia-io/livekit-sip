@@ -44,6 +44,7 @@ type SipBin struct {
 	transaction    *SipTransaction
 	transactionID  atomic.Uint64
 	sessionVersion uint64
+	onHold         bool
 
 	wg sync.WaitGroup
 }
